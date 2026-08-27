@@ -1,0 +1,205 @@
+"""Adapter configuration: the one place environment enters the system.
+
+The core (`src/ambassador/`) reads no environment at all - that is what makes
+its behaviour provable from its inputs (AGENTS.md, coding conventions). Every
+vendor credential and every demo toggle is resolved here, once, at process
+start, and handed to the adapter as a frozen value.
+
+Secrets are never printed. `Settings.__repr__` and `Settings.redacted()` mask
+every credential-bearing field, so a settings object can be logged or dropped
+into a traceback without leaking a key.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, fields
+from pathlib import Path
+from typing import Literal
+
+from ambassador.schemas import Language
+
+AGENT_DIR = Path(__file__).resolve().parents[2]
+ENV_PATH = AGENT_DIR / ".env"
+
+GuardrailMode = Literal["enforce", "warn"]
+PromptMode = Literal["ambassador", "naive"]
+
+# Fields whose values must never reach a log, a console, or a traceback.
+_SECRET_FIELDS = frozenset(
+    {
+        "livekit_api_key",
+        "livekit_api_secret",
+        "openrouter_api_key",
+        "fish_api_key",
+    }
+)
+
+_MASK = "<set>"
+_UNSET = "<unset>"
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    """Minimal KEY=VALUE parser for agent/.env.
+
+    Deliberately not python-dotenv: this reads one flat file with no
+    interpolation, and AGENTS.md asks for a stated reason behind every
+    dependency. Trailing ` # comment` is stripped, matching the format the
+    day-1 smoke spike already established for this same file.
+    """
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.split("#")[0].strip()
+    return values
+
+
+def _resolve(file_values: dict[str, str], key: str, default: str = "") -> str:
+    """Process environment wins over the file, so a one-off run can override
+    without editing .env (`GUARDRAIL_MODE=warn uv run ...`)."""
+    from_process = os.environ.get(key)
+    if from_process:
+        return from_process.strip()
+    return file_values.get(key, default)
+
+
+def _resolve_bool(file_values: dict[str, str], key: str, default: bool = False) -> bool:
+    raw = _resolve(file_values, key, "").lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+@dataclass(frozen=True)
+class Settings:
+    # LiveKit transport (ADR-005)
+    livekit_url: str
+    livekit_api_key: str
+    livekit_api_secret: str
+
+    # LLM - Qwen 3.7 Flash via OpenRouter (ADR-016)
+    openrouter_api_key: str
+    llm_model: str
+    llm_base_url: str
+    llm_thinking: str
+    brief_model: str
+
+    # STT - Qwen3-ASR via OpenRouter (ADR-015)
+    stt_provider: str
+    stt_model_default: str
+    stt_model_ar: str
+    stt_enabled: bool
+
+    # TTS - Fish Audio (ADR-014)
+    fish_api_key: str
+    fish_tts_model: str
+    tts_voice_id_en: str
+    tts_voice_id_ar: str
+    tts_voice_id_hi: str
+
+    # Demo toggles
+    guardrail_mode: GuardrailMode
+    prompt_mode: PromptMode
+    demo_mode: bool
+    language: Language
+
+    @property
+    def thinking_disabled(self) -> bool:
+        """ADR-016's trap. Anything other than an explicit 'on' keeps thinking
+        off, because the failure mode of guessing wrong is silent seconds of
+        latency before first audio."""
+        return self.llm_thinking.lower() != "on"
+
+    def voice_id(self, language: Language) -> str:
+        return {
+            "en": self.tts_voice_id_en,
+            "ar": self.tts_voice_id_ar,
+            "hi": self.tts_voice_id_hi,
+        }[language]
+
+    def stt_model(self, language: Language) -> str:
+        """Per-language STT routing (ADR-015). The Arabic slot is decided by the
+        day-0 head-to-head; until it is set, Arabic falls back to the default."""
+        if language == "ar" and self.stt_model_ar:
+            return self.stt_model_ar
+        return self.stt_model_default
+
+    def redacted(self) -> dict[str, object]:
+        """Loggable view: secrets collapse to a presence flag, never a value."""
+        out: dict[str, object] = {}
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if field.name in _SECRET_FIELDS:
+                out[field.name] = _MASK if value else _UNSET
+            else:
+                out[field.name] = value
+        return out
+
+    def __repr__(self) -> str:
+        inner = ", ".join(f"{k}={v!r}" for k, v in self.redacted().items())
+        return f"Settings({inner})"
+
+    def missing_for_voice(self) -> list[str]:
+        """Credentials the voice path cannot start without. Reported by name
+        only - the check never echoes a value."""
+        required = {
+            "OPENROUTER_API_KEY": self.openrouter_api_key,
+            "FISH_API_KEY": self.fish_api_key,
+        }
+        return [name for name, value in required.items() if not value]
+
+
+def load_settings(env_path: Path | None = None) -> Settings:
+    file_values = parse_env_file(env_path or ENV_PATH)
+
+    guardrail_mode = _resolve(file_values, "GUARDRAIL_MODE", "enforce")
+    if guardrail_mode not in ("enforce", "warn"):
+        raise ValueError(
+            f"GUARDRAIL_MODE must be 'enforce' or 'warn', got {guardrail_mode!r}"
+        )
+
+    prompt_mode = _resolve(file_values, "PROMPT_MODE", "ambassador")
+    if prompt_mode not in ("ambassador", "naive"):
+        raise ValueError(
+            f"PROMPT_MODE must be 'ambassador' or 'naive', got {prompt_mode!r}"
+        )
+
+    language = _resolve(file_values, "LANGUAGE", "en")
+    if language not in ("en", "ar", "hi"):
+        raise ValueError(f"LANGUAGE must be one of en/ar/hi, got {language!r}")
+
+    return Settings(
+        livekit_url=_resolve(file_values, "LIVEKIT_URL"),
+        livekit_api_key=_resolve(file_values, "LIVEKIT_API_KEY"),
+        livekit_api_secret=_resolve(file_values, "LIVEKIT_API_SECRET"),
+        openrouter_api_key=_resolve(file_values, "OPENROUTER_API_KEY"),
+        llm_model=_resolve(file_values, "LLM_MODEL", "qwen/qwen3.7-flash"),
+        llm_base_url=_resolve(
+            file_values, "LLM_BASE_URL", "https://openrouter.ai/api/v1"
+        ),
+        llm_thinking=_resolve(file_values, "LLM_THINKING", "off"),
+        brief_model=_resolve(file_values, "BRIEF_MODEL", "qwen/qwen3.7-flash"),
+        stt_provider=_resolve(file_values, "STT_PROVIDER", "openrouter"),
+        stt_model_default=_resolve(
+            file_values, "STT_MODEL_DEFAULT", "qwen/qwen3-asr-1.7b"
+        ),
+        stt_model_ar=_resolve(file_values, "STT_MODEL_AR"),
+        # Off by default: OpenRouter rejects audio requests under a $0.50
+        # balance (AGENTS.md project learnings, 2026-08-27), and the agent must
+        # stay runnable in text mode without it.
+        stt_enabled=_resolve_bool(file_values, "STT_ENABLED", default=False),
+        fish_api_key=_resolve(file_values, "FISH_API_KEY"),
+        fish_tts_model=_resolve(file_values, "FISH_TTS_MODEL", "s2.1-pro"),
+        tts_voice_id_en=_resolve(file_values, "TTS_VOICE_ID_EN"),
+        tts_voice_id_ar=_resolve(file_values, "TTS_VOICE_ID_AR"),
+        tts_voice_id_hi=_resolve(file_values, "TTS_VOICE_ID_HI"),
+        guardrail_mode=guardrail_mode,
+        prompt_mode=prompt_mode,
+        demo_mode=_resolve_bool(file_values, "DEMO_MODE"),
+        language=language,
+    )
