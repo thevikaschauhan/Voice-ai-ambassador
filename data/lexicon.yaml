@@ -1,0 +1,38 @@
+# Pronunciation lexicon (docs/04-). Applied before synthesis.
+# TTS is Fish Audio (ADR-014), which supports phoneme control for ENGLISH
+# ONLY among our languages, in CMU Arpabet notation: the `arpabet` field.
+# Arabic and Hindi voices rely on `respell` - alias respelling written into
+# the text before synthesis.
+# VERIFY: every entry BY EAR in every shipped voice during day 5 rehearsal.
+# Mispronouncing "Binghatti" in their own boardroom is unrecoverable.
+
+- term: Binghatti
+  arpabet: null   # VERIFY: with the client - bin-GAT-ti
+  respell: "bin-GAH-tee"
+- term: Bugatti
+  arpabet: null
+  respell: "boo-GAH-tee"
+- term: Jacob & Co
+  arpabet: null
+  respell: "JAY-kob and ko"
+- term: Jumeirah Village Circle
+  arpabet: null
+  respell: "joo-MAY-rah Village Circle"
+- term: Al Jaddaf
+  arpabet: null
+  respell: "al JAD-daf"
+- term: Meydan
+  arpabet: null
+  respell: "may-DAHN"
+- term: Oqood
+  arpabet: null
+  respell: "oh-KOOD"
+- term: Trakheesi
+  arpabet: null
+  respell: "tra-KHEE-see"
+- term: Ejari
+  arpabet: null
+  respell: "eh-JAH-ree"
+- term: AED
+  arpabet: null
+  respell: "dirhams"

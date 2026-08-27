@@ -1,0 +1,74 @@
+[
+  {
+    "id": "binghatti-skyrise",
+    "name": "Binghatti Skyrise",
+    "area": "Business Bay",
+    "status": "selling",
+    "price_from_aed": 985000,
+    "unit_types": ["studio", "1br", "2br"],
+    "size_sqft_min": 420,
+    "size_sqft_max": 1200,
+    "handover": { "quarter": 4, "year": 2026 },
+    "payment_plan": [
+      { "label": "booking", "pct": 20 },
+      { "label": "during construction", "pct": 50 },
+      { "label": "handover", "pct": 30 }
+    ],
+    "amenities": ["infinity pool", "gym", "concierge"],
+    "source_ref": "VERIFY: placeholder figures pending Binghatti price sheet (assumption A3)",
+    "last_verified": null
+  },
+  {
+    "id": "binghatti-aquarise",
+    "name": "Binghatti Aquarise",
+    "area": "Dubai Maritime City",
+    "status": "selling",
+    "price_from_aed": 1200000,
+    "unit_types": ["1br", "2br", "3br"],
+    "size_sqft_min": 700,
+    "size_sqft_max": 2100,
+    "handover": { "quarter": 2, "year": 2027 },
+    "payment_plan": [
+      { "label": "booking", "pct": 20 },
+      { "label": "during construction", "pct": 40 },
+      { "label": "handover", "pct": 40 }
+    ],
+    "amenities": ["sea view", "residents lounge", "gym"],
+    "source_ref": "VERIFY: placeholder figures pending Binghatti price sheet (assumption A3)",
+    "last_verified": null
+  },
+  {
+    "id": "binghatti-circle",
+    "name": "Binghatti Circle",
+    "area": "Jumeirah Village Circle",
+    "status": "selling",
+    "price_from_aed": 650000,
+    "unit_types": ["studio", "1br"],
+    "size_sqft_min": 380,
+    "size_sqft_max": 850,
+    "handover": { "quarter": 3, "year": 2026 },
+    "payment_plan": [
+      { "label": "booking", "pct": 10 },
+      { "label": "during construction", "pct": 60 },
+      { "label": "handover", "pct": 30 }
+    ],
+    "amenities": ["pool", "gym", "retail podium"],
+    "source_ref": "VERIFY: placeholder figures pending Binghatti price sheet (assumption A3)",
+    "last_verified": null
+  },
+  {
+    "id": "bugatti-residences",
+    "name": "Bugatti Residences by Binghatti",
+    "area": "Business Bay",
+    "status": "branded_enquiry",
+    "price_from_aed": null,
+    "unit_types": ["2br", "3br", "penthouse", "sky mansion"],
+    "size_sqft_min": null,
+    "size_sqft_max": null,
+    "handover": null,
+    "payment_plan": null,
+    "amenities": ["private pool", "car lift", "riviera-inspired beach"],
+    "source_ref": "branded collection - price on enquiry by design, never quoted",
+    "last_verified": null
+  }
+]

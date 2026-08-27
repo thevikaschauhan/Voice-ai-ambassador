@@ -1,0 +1,43 @@
+# Closed-set spoken forms (ADR-009).
+# Keyed by (kind, value) or by exact surface (for quarters). Because only
+# allowed figures can reach verbalisation, this table is COMPLETE by
+# construction once it covers every figure in inventory.json (source and
+# computed) plus the whitelist. Regenerate the value list when inventory
+# changes; a missing entry falls back to plain digits, which TTS reads.
+#
+# English entries below are drafted by the build team.
+# VERIFY: Arabic and Hindi entries must be AUTHORED BY A NATIVE SPEAKER
+# (grammatical agreement in Arabic, lakh/crore conventions in Hindi -
+# note AED 2,400,000 is 24 lakh, NOT 2.4 crore). Do not machine-fill them.
+
+en:
+  # amounts (spoken form names the currency; the "AED " prefix is consumed)
+  - { kind: amount, value: 985000, spoken: "nine hundred and eighty-five thousand dirhams" }
+  - { kind: amount, value: 197000, spoken: "one hundred and ninety-seven thousand dirhams" }
+  - { kind: amount, value: 492500, spoken: "four hundred and ninety-two thousand five hundred dirhams" }
+  - { kind: amount, value: 295500, spoken: "two hundred and ninety-five thousand five hundred dirhams" }
+  - { kind: amount, value: 1200000, spoken: "one point two million dirhams" }
+  - { kind: amount, value: 240000, spoken: "two hundred and forty thousand dirhams" }
+  - { kind: amount, value: 480000, spoken: "four hundred and eighty thousand dirhams" }
+  - { kind: amount, value: 650000, spoken: "six hundred and fifty thousand dirhams" }
+  - { kind: amount, value: 65000, spoken: "sixty-five thousand dirhams" }
+  - { kind: amount, value: 390000, spoken: "three hundred and ninety thousand dirhams" }
+  - { kind: amount, value: 195000, spoken: "one hundred and ninety-five thousand dirhams" }
+  - { kind: amount, value: 2000000, spoken: "two million dirhams" }
+  # percents
+  - { kind: percent, value: 10, spoken: "ten per cent" }
+  - { kind: percent, value: 20, spoken: "twenty per cent" }
+  - { kind: percent, value: 30, spoken: "thirty per cent" }
+  - { kind: percent, value: 40, spoken: "forty per cent" }
+  - { kind: percent, value: 50, spoken: "fifty per cent" }
+  - { kind: percent, value: 60, spoken: "sixty per cent" }
+  # quarters (surface-keyed; replaced before the numeric pass)
+  - { surface: "Q4 2026", spoken: "the fourth quarter of 2026" }
+  - { surface: "Q3 2026", spoken: "the third quarter of 2026" }
+  - { surface: "Q2 2027", spoken: "the second quarter of 2027" }
+
+ar: []
+  # VERIFY: native-authored, day 3. Empty list = digit fallback until then.
+
+hi: []
+  # VERIFY: native-authored, day 3. Empty list = digit fallback until then.

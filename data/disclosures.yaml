@@ -1,0 +1,18 @@
+# Call-opening disclosure, spoken by the SYSTEM before the model says
+# anything, in the selected language. Fixed copy: a disclosure the model
+# composes can vary, and one that varies is not a disclosure (ADR-013).
+# The opening ignores barge-in so it always completes (docs/04-).
+# Copy says "transcribed", not "recorded": the POC stores no raw audio and
+# the notice must match what is actually retained.
+
+en: >
+  You are speaking with Binghatti's AI ambassador. This conversation is
+  transcribed so our team can assist you. You can ask for a person at any
+  time.
+
+ar: ""
+  # VERIFY: native-authored Arabic disclosure, day 3. The call must not ship
+  # in Arabic until this exists and has been reviewed.
+
+hi: ""
+  # VERIFY: native-authored Hindi disclosure, day 3. Same rule.

@@ -1,0 +1,13 @@
+# Latency-masking acknowledgments (docs/04-): played only when projected
+# time to first audio exceeds ~800ms. Sparingly - a filler on every turn
+# reads as a tic and undermines the composed voice.
+
+en:
+  - "Let me look at the collection for you."
+  - "One moment while I check that."
+
+ar: []
+  # VERIFY: native-authored, day 3.
+
+hi: []
+  # VERIFY: native-authored, day 3.

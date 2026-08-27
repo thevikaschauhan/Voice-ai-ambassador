@@ -1,0 +1,40 @@
+# Prohibited-language patterns (docs/03- validator 2).
+# English only in the POC, and that is disclosed in the meeting. Non-English
+# patterns must be WRITTEN by a native speaker, never translated by the build
+# agent (AGENTS.md). Reviewable by a non-engineer: each pattern is a regular
+# expression matched case-insensitively against one generated sentence.
+
+- category: return_guarantees
+  language: en
+  patterns:
+    - "\\bguaranteed?\\b.{0,40}\\b(returns?|yields?|income|appreciation|rental|profits?)\\b"
+    - "\\b(returns?|yields?|income|appreciation|rental|profits?)\\b.{0,25}\\bguaranteed\\b"
+    - "\\bassured\\s+(returns?|yields?|income|rental)\\b"
+    - "\\brisk[-\\s]?free\\b"
+    - "\\byou\\s+can'?t\\s+lose\\b"
+
+- category: advice_framing
+  language: en
+  patterns:
+    - "\\byou\\s+should\\s+(buy|invest|purchase)\\b"
+    - "\\bI\\s+recommend\\s+(that\\s+)?you\\s+(buy|invest|purchase)\\b"
+    - "\\bthe\\s+right\\s+investment\\s+for\\s+you\\b"
+
+- category: future_certainty
+  language: en
+  patterns:
+    - "\\bwill\\s+(definitely\\s+|certainly\\s+)?(appreciate|double|rise|increase|go\\s+up)\\b"
+    - "\\b(is|are)\\s+certain\\s+to\\b"
+    - "\\bguaranteed\\s+to\\s+(appreciate|rise|double)\\b"
+
+- category: regulatory_overreach
+  language: en
+  patterns:
+    - "\\b(visa|mortgage)\\s+(approval\\s+)?(is|will\\s+be)\\s+(guaranteed|certain|assured|automatic)\\b"
+    - "\\byou\\s+will\\s+(definitely\\s+)?(get|receive|be\\s+granted)\\s+(the\\s+)?(golden\\s+)?visa\\b"
+
+- category: competitor_disparagement
+  language: en
+  patterns:
+    # VERIFY: competitor list with FFI before the demo; keep names lowercase.
+    - "\\b(emaar|damac|sobha|nakheel|meraas|aldar|omniyat)\\b.{0,60}\\b(worse|inferior|poor|delays?|avoid|unreliable)\\b"

@@ -1,0 +1,15 @@
+# Figures the agent may speak that do not come from inventory.
+# Every entry is a hole a wrong number could pass through: keep this file
+# short, and every entry MUST carry a `why` (enforced by a test).
+
+amounts:
+  - value: 2000000
+    why: "Golden Visa property investment threshold in AED. VERIFY: current rule with a UAE adviser before the demo."
+  - value: 80015
+    why: "Binghatti's toll-free hotline number, spoken when routing to a human."
+
+percents: []
+
+years:
+  - value: 2026
+    why: "The current year; appears in scheduling and small talk."

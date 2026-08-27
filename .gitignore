@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+
+# Node (web/, day 4)
+node_modules/
+.next/
+
+# Env and secrets - keys live in Railway/Vercel env, never in the repo
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+
+# Separate embedded tooling repo, not part of this project
+hive/

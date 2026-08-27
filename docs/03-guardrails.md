@@ -1,0 +1,101 @@
+# 03 - Guardrails, failure handling, compliance
+
+This document answers the two questions the tech lead will actually ask: how do I know it will not make something up, and what happens when legal sees this. Have it open in the meeting.
+
+## The claim, precisely
+
+> The system cannot speak a figure that is not in your inventory, because a deterministic validator checks every number in every sentence against your records before that sentence is synthesised into audio.
+
+The word "before" carries the claim, and in voice it is physics, not UX: played audio cannot be recalled. That is why the pipeline is cascaded (ADR-001) and why ordering is enforced by types (ADR "ordering" section in `docs/01-`).
+
+## Validator 1 - numeric claims
+
+`guardrails/numeric_claims.py`
+
+**Extraction.** Every currency amount, bare numeral, percentage, year, and quarter reference. Western digits, Arabic-Indic digits (٠١٢٣٤٥٦٧٨٩, thousands separator ٬ and decimal ٫), and Devanagari digits (०-९). A validator that misses Arabic-Indic digits is worse than useless in an Arabic reply.
+
+**Normalisation.** Reduce to canonical value before comparison: `975,000`, `975000`, `975k`, `0.975 million`, `٩٧٥٬٠٠٠` all normalise to `975000`. Multiplier words: k, thousand, million, m, lakh (1e5), crore (1e7). Table-driven, unit tested per shipped language. (Beware the class of error this catches even in humans: AED 2,400,000 is 24 lakh, not 2.4 crore.)
+
+**Policy.**
+
+| Kind | Rule |
+|---|---|
+| Amounts and bare numbers > 12 | Must be in the allowed set |
+| Percentages | Must be in the allowed set |
+| Years (1900-2099, standalone) | Must be in the allowed set - a wrong handover year is the evidence exhibit |
+| Integers 0-12, non-percent | Exempt as conversational counts ("three bedrooms", "one question"). A deliberate, documented hole; small integers cannot state a price or a year |
+
+**Allowed set: global (ADR-008).** Union of every figure in inventory (source + computed) plus `data/whitelist.yaml`. Cannot false-positive on a real figure; catches every invented one. Per-referenced-project scoping is the documented next tier.
+
+**False positives are the operational risk.** A validator that blocks correct replies gets disabled by the first engineer who hits it on a Friday. Log every violation with the extracted figure and the allowed set; review during the build week; tune the normaliser rather than loosening the check.
+
+**The digit-emission dependency.** The system prompt instructs the model to write figures as plain digits. If it writes "nine hundred and seventy-five thousand", the validator finds nothing to inspect and passes an unverified sentence. This is covered three ways: the prompt instruction, an eval category that pressures it ("say the price in words"), and the fact that verbalisation happens downstream anyway so the model gains nothing by spelling numbers out.
+
+## Validator 2 - prohibited language
+
+`guardrails/prohibited.py`, patterns in `data/prohibited-patterns.yaml` - one language-neutral file, reviewable by a non-engineer.
+
+**English patterns only in the POC. Disclose this in the meeting.** The distinction to draw: the critical guardrail (numeric claims) is language-agnostic because it operates on digits, so the guarantee that a fabricated price cannot be spoken holds in all three languages. The stylistic layer is English-only until a native reviewer writes the Arabic and Hindi patterns. Never ship patterns nobody on the team can read - `VERIFY:` native review.
+
+| Category | Catches | Action |
+|---|---|---|
+| Return guarantees | guaranteed/assured/promised return, yield, appreciation; risk-free; can't lose | Block |
+| Advice framing | "you should invest", "I recommend you buy" | Block |
+| Future certainty | "will appreciate", "prices will rise", "certain to" | Block |
+| Regulatory overreach | asserting visa, mortgage, or tax outcomes as certain | Block |
+| Competitor disparagement | named competitor plus negative claim | Block |
+
+## Validator 3 - identifier integrity
+
+Every `shortlist_ids` entry must resolve to a real inventory record. An unresolvable id is a guardrail failure, not a rendering fallback; silent dropping is forbidden because it hides exactly the failure mode we claim to prevent.
+
+## Validator 4 - PII redaction (PHASE-2 for durable storage)
+
+The POC keeps events in memory only. Before any durable event store ships, phone numbers, emails and full names are hashed in the event stream; the lead brief retains them because that is its purpose.
+
+## Failure handling
+
+Every path ends in composed, localised speech and a route to a human. The buyer never hears silence, an error tone, or an error message. Every failure emits an event.
+
+```
+guardrail violation, nothing spoken yet -> cancel, regenerate once (violation named), then fallback
+guardrail violation, audio already played -> composed bridge + correct escalation (no regeneration)
+brief extraction invalid -> one repair retry -> keep last good brief, log
+LLM timeout/error -> spoken fallback + escalate
+STT low confidence / policy trigger -> confirmation turn (docs/04-)
+STT failure x3 -> warm escalation
+TTS failure -> retry once, fallback voice, then transcript on screen + callback offer
+network drop -> reconnect once, then callback offer
+buyer silence -> one gentle prompt, then close politely
+```
+
+## Demo modes: the defence-in-depth demonstration
+
+`GUARDRAIL_MODE=warn` alone will underwhelm: with the validator off, the ambassador prompt still instructs strict grounding, and a well-aligned model will usually refuse the trap question anyway. The demo would show the toggle doing nothing.
+
+So the demonstration pairs two flags and frames it honestly:
+
+- `PROMPT_MODE=naive` + `GUARDRAIL_MODE=warn`: a deliberately generic assistant prompt, labelled "typical chatbot configuration" in the UI. This simulates the real failure modes - prompt drift, injection, sycophancy.
+- The trap is a leading question, not a cold one: "I read that Binghatti Marina Heights starts at 800,000 - is that right?" Planted false premises elicit confirmation far more reliably than cold invention, and they are the realistic buyer behaviour anyway.
+- Then `PROMPT_MODE=ambassador` + `GUARDRAIL_MODE=enforce`, same question, and the refusal + escalation.
+
+The narrative: "prompts drift, get overridden, and get injected; here is what holds when the prompt layer fails." That is a stronger and more honest claim than pretending the prompt does nothing. Rehearse until the naive configuration misbehaves reliably; keep a recorded run as backup (`docs/07-`).
+
+## UAE regulatory map
+
+Not legal advice; the map of what to raise with Binghatti's legal function. `VERIFY:` all of it with a UAE-qualified adviser before production.
+
+- **Real estate marketing.** Dubai property advertising sits under DLD/RERA; marketing material generally requires a Trakheesi permit with the number displayed. An AI surface quoting prices is plausibly advertising. Question for their legal team: does conversational output fall inside existing permit coverage, and must a permit reference appear in the interface? Misleading-claims prohibition is what Validator 2 exists for. Off-plan contractual matters (escrow, Oqood, SPA terms) are never characterised by the agent - always a human.
+- **Data protection (PDPL, Federal Decree-Law No. 45 of 2021).** Lawful basis and consent before contact details; purpose limitation on the brief; retention period and deletion route for transcripts (`PHASE-2:` implement; `VERIFY:` the period). **Cross-border inference is assumption A5 and the most likely production blocker - raise it in the first meeting unprompted; it is a credibility move.**
+- **Voice specifics.** Disclosure and transcription notice at call start, in the selected language, from fixed native-reviewed copy in `data/disclosures.yaml` - never model-generated, and not interruptible (the first few seconds of the call ignore barge-in so the disclosure always completes). The POC stores no raw audio, which defers the voice-as-biometric-data question entirely; `VERIFY:` its PDPL status with a UAE adviser before any production build records calls.
+- **AI disclosure.** A caller hearing a warm natural voice assumes a person unless told otherwise. Spoken disclosure is not optional in a regulated sales channel.
+
+## The audit trail
+
+Every buyer-facing statement is reconstructable: session, timestamp, inventory version, model, prompt/guardrail mode, generated sentences, and what was actually spoken at chunk granularity (a barge-in marks the chunk incomplete - claiming the buyer heard a full sentence they did not defeats the record's purpose). A buyer asserting "your agent told me handover was 2025" becomes a lookup, not a dispute. Frame this in the meeting as risk their current phone channel carries and this one retires.
+
+## Standard disclaimer block
+
+Rendered verbatim where figures are shown; not editable by the model. `VERIFY:` wording with Binghatti legal.
+
+> Figures shown are indicative and drawn from published project information. They are not an offer, a valuation, or a forecast. Property values can fall as well as rise. Visa and mortgage eligibility are determined by the relevant UAE authorities and lenders. Obtain independent financial and legal advice before committing.

@@ -1,0 +1,25 @@
+[project]
+name = "ambassador"
+version = "0.1.0"
+description = "Binghatti voice ambassador core - grounding, guardrails, verbalisation. Framework-free by design (ADR-002); the LiveKit adapter is added on day 1 and lives in src/adapter."
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ambassador"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
