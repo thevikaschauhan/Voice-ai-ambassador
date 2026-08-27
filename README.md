@@ -1,6 +1,6 @@
 # Binghatti voice ambassador - POC
 
-A multilingual voice agent for Binghatti Developers (Dubai), built by Future Focus Infotech for a technical evaluation meeting. It answers a prospective buyer in their language, qualifies them in conversation, recommends real inventory, and books a human ambassador - and it cannot speak a figure that is not in Binghatti's records, because every sentence is validated in code before it is synthesised into audio.
+A multilingual voice agent for Binghatti Developers (Dubai). It answers a prospective buyer in their language, qualifies them in conversation, recommends real inventory, and books a human ambassador - and it cannot speak a figure that is not in Binghatti's records, because every sentence is validated in code before it is synthesised into audio.
 
 ## Read in this order
 
