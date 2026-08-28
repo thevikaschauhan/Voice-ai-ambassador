@@ -14,6 +14,8 @@ The word "before" carries the claim, and in voice it is physics, not UX: played 
 
 **Extraction.** Every currency amount, bare numeral, percentage, year, and quarter reference. Western digits, Arabic-Indic digits (٠١٢٣٤٥٦٧٨٩, thousands separator ٬ and decimal ٫), and Devanagari digits (०-९). A validator that misses Arabic-Indic digits is worse than useless in an Arabic reply.
 
+Two rules about where a match may begin are load-bearing, and both were learned from a live bypass: extraction never starts **inside** a number (after a digit, comma or decimal point), and an adjacent **letter never blocks it**. With letters blocked, `AED750,000` extracted nothing at all and went unchecked; worse, `AED1,985,000` restarted after the comma, extracted the embedded and genuinely allowed `985,000`, and so validated a fabricated price as a real one before speaking it. Erring toward extracting more is the safe direction here: an over-extracted figure blocks a sentence, an under-extracted figure speaks an unverified one.
+
 **Normalisation.** Reduce to canonical value before comparison: `975,000`, `975000`, `975k`, `0.975 million`, `٩٧٥٬٠٠٠` all normalise to `975000`. Multiplier words: k, thousand, million, m, lakh (1e5), crore (1e7). Table-driven, unit tested per shipped language. (Beware the class of error this catches even in humans: AED 2,400,000 is 24 lakh, not 2.4 crore.)
 
 **Policy.**

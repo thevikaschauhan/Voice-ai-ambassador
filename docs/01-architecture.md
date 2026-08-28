@@ -87,7 +87,7 @@ agent/
 data/
   inventory.json             # system of record for the POC; placeholder figures, all VERIFY:
   prohibited-patterns.yaml   # English patterns, reviewable by a non-engineer
-  spoken-forms.yaml          # (language, kind, value) -> spoken form; ar/hi entries VERIFY:
+  spoken-forms.yaml          # per language: forms (kind, value) -> spoken, + currency_tokens; ar/hi VERIFY:
   whitelist.yaml             # allowed figures beyond inventory, each with a justification
 web/                         # Next.js demo surface, day 4
 ```
