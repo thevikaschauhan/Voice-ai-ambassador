@@ -5,6 +5,7 @@ The meeting script. Rehearse it end to end three consecutive clean times on day 
 ## Setup, before anyone arrives
 
 - Demo machine + external microphone, tested in the actual room if possible
+- Confirm `AMBASSADOR_EVENT_VERBOSE` is NOT set - the emitted event stream must stay redacted in front of the client
 - Phone hotspot as primary network, venue wifi as backup
 - Screen recording (with audio) on the desktop, one click away
 - Text-mode fallback tab open

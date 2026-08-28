@@ -12,14 +12,43 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.24",
 ]
+# The voice stack is a group, not a main dependency, so that ADR-002 stays
+# enforceable in practice rather than only on paper:
+#   uv sync --no-group voice && uv run --no-sync pytest
+# installs the core alone and still runs green - the core tests all pass and
+# the adapter tests skip themselves. It is in default-groups because the
+# adapter is now part of the build, so a plain `uv sync` produces a runnable
+# agent.
+#   livekit-agents          the framework itself (ADR-005)
+#   livekit-plugins-openai  LLM via OpenRouter with a base_url override (ADR-016)
+#   livekit-plugins-fishaudio  TTS, s2.1-pro (ADR-014)
+#   livekit-plugins-silero  VAD for endpointing and for wrapping the
+#                           non-streaming STT node in a StreamAdapter (ADR-015)
+voice = [
+    "livekit-agents>=1.7,<2",
+    "livekit-plugins-openai>=1.7,<2",
+    "livekit-plugins-fishaudio>=1.7,<2",
+    "livekit-plugins-silero>=1.7,<2",
+]
+
+[tool.uv]
+default-groups = ["dev", "voice"]
+# Do not resolve to a just-published package. livekit-agents ships roughly
+# weekly and 1.7.1 landed the morning this adapter was written; a client-facing
+# demo should not be the first thing to run an hours-old release. Five days
+# rather than seven because 1.7.0 shipped 2026-08-20T18:16Z and a 7-day window
+# would have excluded it by five hours, dropping the resolution back to 1.6.x.
+exclude-newer = "5 days"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ambassador"]
+packages = ["src/ambassador", "src/adapter"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"

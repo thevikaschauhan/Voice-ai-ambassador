@@ -79,6 +79,8 @@ Framework-provided: caller audio during playback propagates cancellation through
 
 Ours is only the audit consequence: the `TurnRecord` marks the interrupted chunk `completed: false`. The audit claim is chunk-granular - word-level truncation fidelity would require TTS word timestamps and is deliberately not claimed in the POC.
 
+The framework's default false-interruption handling (pause playback, two-second grace, resume if the "interruption" was a cough) is deliberately kept, and the audit adapts to it rather than the reverse: the turn seals when the speech handle resolves, not when the agent state changes - so a resumed false interruption audits `completed: true`, a confirmed interruption audits `completed: false`, and sealing is asynchronous relative to `agent_state_changed`. A session driver that tears down mid-speech must close the session (or call the agent's finalise hook) or the last turn seals with `audit_incomplete: true`.
+
 ## Recording, consent, data
 
 - Disclosure + transcription notice at call start, selected language, fixed copy from `data/disclosures.yaml`, native-reviewed, never model-generated. The copy says "transcribed", not "recorded" - the POC stores no raw audio, and the notice must match what is actually retained.

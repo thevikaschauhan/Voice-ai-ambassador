@@ -40,8 +40,9 @@ The model's output is split by kind, because each kind has a different natural t
         b  pass -> verbalise (closed-set lookup)              ~1ms
         c  returns SpeakableText -> framework TTS -> audio out
       violation -> see regeneration policy below
- 7  Adapter, after turn completes: async brief extraction (small model), Pydantic-validated,
-    pushed to the ambassador view
+ 7  Adapter, after the turn's speech handle resolves: async brief extraction (small model),
+    Pydantic-validated, pushed to the ambassador view. The extraction input is the context
+    the turn was parked with - a turn force-sealed by a newer one keeps its own transcript
  8  Events emitted with per-component timings; audit record of what was actually
     spoken (chunk granularity - see docs/04- barge-in)
 ```
@@ -49,6 +50,8 @@ The model's output is split by kind, because each kind has a different natural t
 Step 6 is the architecture; everything else is transport. When the tech lead asks "how do you stop it speaking a price it made up", the answer is `process_sentence()`, and you should be able to open the file.
 
 **Regeneration policy on guardrail violation.** If nothing has been synthesised yet this turn: cancel, regenerate once with the violation named in the retry prompt, then composed fallback. If audio has already played: skip regeneration entirely and speak a composed bridge ("Let me be precise about that figure") plus the correct escalation. A blind mid-turn regeneration repeats or contradicts what the buyer already heard; the bridge cannot.
+
+**Terminal LLM failure** (retry budget exhausted) speaks the composed fallback and escalates regardless of whether audio has already played - unlike a guardrail block, there is nothing left to bridge to when the model is gone. The `llm_failure` event carries `spoken_before` and the `fallback` event carries its reason, so the audit distinguishes the two situations. The retry budget itself is deliberately bounded: two framework passes of at most two SDK attempts each, with Retry-After clamped, roughly two seconds of backoff worst case before round-trips - a frozen turn is a worse outcome than an honest fallback.
 
 **Arithmetic questions.** The buyer's most predictable follow-up ("so what do I pay upfront?") is answered from derived figures computed at inventory load time (`inventory.py`), present in both the prompt and the allowed set. `PHASE-2:` a `compute_payment` function tool backed by deterministic code whose results extend the turn's allowed set dynamically.
 
