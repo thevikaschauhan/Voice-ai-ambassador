@@ -23,9 +23,9 @@ core-only mode (`uv sync --no-group voice`) as well as the full one.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
-import re
 from io import StringIO
 from pathlib import Path
 
@@ -310,25 +310,48 @@ def test_a_regeneration_reason_is_the_violation_detail_and_is_redacted():
 def emitted_event_names() -> dict[str, set[str]]:
     """Every event name the adapter emits, read out of the adapter's source.
 
-    Deliberately a regex over the source files rather than a hand-kept list.
-    The previous version of this test compared two hand-maintained lists and
-    agreed with itself while missing twelve live event types, which is the
-    failure mode a hand-kept list always has: it is written once, by the same
-    person who wrote the thing it is supposed to audit.
+    Deliberately derived from the source rather than a hand-kept list. The
+    first version of this test compared two hand-maintained lists and agreed
+    with itself while missing twelve live event types; the second used regexes
+    and was shown to miss any call site whose event name is not a bare string
+    literal (an f-string, a variable, even redundant parentheses).
 
-    Two shapes are matched. `.emit("x"` and `_on_event("x"` cover the call
-    sites; `"event": "x"` covers `_report_backpressure`, which writes its line
-    straight to the sink and never passes through `emit`.
+    So this version parses the AST, and enforces the stronger rule that makes
+    discovery sound: an event name MUST be a string literal at the call site.
+    Any `.emit(...)`/`_on_event(...)` call whose first argument is not a
+    plain string constant fails this function loudly instead of being skipped,
+    so a dynamic event name cannot slip an unclassified event past the
+    classification check below. Dict literals with an "event" key cover
+    `_report_backpressure`, which writes straight to the sink.
     """
-    call_site = re.compile(r"""(?:\.emit|_on_event)\(\s*["']([a-z_][a-z0-9_]*)["']""")
-    literal = re.compile(r"""["']event["']\s*:\s*["']([a-z_][a-z0-9_]*)["']""")
-
     adapter = Path(__file__).resolve().parents[1] / "src" / "adapter"
     found: dict[str, set[str]] = {}
+    dynamic: list[str] = []
     for path in sorted(adapter.glob("*.py")):
-        source = path.read_text(encoding="utf-8")
-        for match in (*call_site.finditer(source), *literal.finditer(source)):
-            found.setdefault(match.group(1), set()).add(path.name)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                name = func.attr if isinstance(func, ast.Attribute) else (
+                    func.id if isinstance(func, ast.Name) else None
+                )
+                if name in ("emit", "_on_event") and node.args:
+                    first = node.args[0]
+                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                        found.setdefault(first.value, set()).add(path.name)
+                    else:
+                        dynamic.append(f"{path.name}:{first.lineno}")
+            elif isinstance(node, ast.Dict):
+                for key, value in zip(node.keys, node.values):
+                    if (
+                        isinstance(key, ast.Constant) and key.value == "event"
+                        and isinstance(value, ast.Constant) and isinstance(value.value, str)
+                    ):
+                        found.setdefault(value.value, set()).add(path.name)
+    assert not dynamic, (
+        "event names must be string literals at the call site so they can be "
+        f"classified; dynamic names found at: {dynamic}"
+    )
     return found
 
 
