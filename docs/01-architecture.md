@@ -40,8 +40,9 @@ The model's output is split by kind, because each kind has a different natural t
         b  pass -> verbalise (closed-set lookup)              ~1ms
         c  returns SpeakableText -> framework TTS -> audio out
       violation -> see regeneration policy below
- 7  Adapter, after turn completes: async brief extraction (small model), Pydantic-validated,
-    pushed to the ambassador view
+ 7  Adapter, after the turn's speech handle resolves: async brief extraction (small model),
+    Pydantic-validated, pushed to the ambassador view. The extraction input is the context
+    the turn was parked with - a turn force-sealed by a newer one keeps its own transcript
  8  Events emitted with per-component timings; audit record of what was actually
     spoken (chunk granularity - see docs/04- barge-in)
 ```
