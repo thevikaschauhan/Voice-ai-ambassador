@@ -176,12 +176,16 @@ class _Sink:
         on_first_sentence: Callable[[], None] | None = None,
         on_regeneration: Callable[[str], None] | None = None,
         on_bridge: Callable[[str], None] | None = None,
+        on_fallback: Callable[[str], None] | None = None,
     ) -> None:
         self.on_decision = on_decision
         self.on_first_content = on_first_content
         self.on_first_sentence = on_first_sentence
         self.on_regeneration = on_regeneration
+        # The two recoveries are distinct (docs/01-): a bridge means audio had
+        # already played, a fallback means nothing had.
         self.on_bridge = on_bridge
+        self.on_fallback = on_fallback
 
 
 def _content_of(chunk: Any) -> str | None:
@@ -298,10 +302,14 @@ async def guarded_stream(
             return
 
         # Audio already played, or the retry has been spent: composed speech.
-        text = BRIDGE_COPY[guard.language] if spoken_anything else FALLBACK_COPY[guard.language]
+        bridging = spoken_anything
+        text = BRIDGE_COPY[guard.language] if bridging else FALLBACK_COPY[guard.language]
         composed = guard.compose(text)
-        if sink.on_bridge:
-            sink.on_bridge(composed)
+        if bridging:
+            if sink.on_bridge:
+                sink.on_bridge(composed)
+        elif sink.on_fallback:
+            sink.on_fallback(composed)
         spoken_anything = True
         yield _with_separator(composed)
         if flush_per_sentence:

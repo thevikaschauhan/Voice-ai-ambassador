@@ -15,17 +15,30 @@ with spoken forms. A record that stored only one of them could not answer
 Timings are milliseconds, measured, never estimated. A field that was not
 observed on a given turn stays None rather than defaulting to zero: a missing
 measurement and a zero-latency stage must not look the same on the meter.
+
+Two properties of the emitted stream are load-bearing and easy to lose:
+
+  redaction   the in-memory `TurnRecord` keeps full fidelity because the
+              ambassador view and the audit need it, but the stdout stream and
+              the optional file sink are the parts that leave the process, so
+              they carry no buyer utterance text and no PII-bearing brief
+              fields (docs/02-, docs/03- validator 4).
+  no blocking every emit lands on the hot path - two of them are the TTFT and
+              TTS-first-audio marks - so a write is queued to a single writer
+              task rather than performed inline.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Final, TextIO
 
 from ambassador.schemas import (
     GuardrailViolation,
@@ -35,9 +48,30 @@ from ambassador.schemas import (
     TurnRecord,
 )
 
+logger = logging.getLogger("ambassador.events")
+
 # Optional second sink, so a demo or a verification run can capture clean JSON
-# without the console UI interleaved. stdout is always written.
+# without the console UI interleaved. stdout is always written. The file sink
+# receives exactly the same redacted stream as stdout.
 _FILE_SINK_ENV = "AMBASSADOR_EVENT_LOG"
+
+# Dev-only escape hatch, documented in config.py: restores full emission,
+# buyer utterances and all. Never set for a demo or a deployment.
+_VERBOSE_ENV = "AMBASSADOR_EVENT_VERBOSE"
+
+REDACTED: Final = "[redacted]"
+
+# The only brief fields that may leave the process. Everything else on a
+# LeadBrief describes the buyer: budget amount, where they live, what they are
+# hesitant about, the free text of what they want.
+_BRIEF_EMITTED_FIELDS: Final = ("intent", "stage", "language", "shortlist_ids")
+
+# A full queue means the writer is behind, which is exactly when the voice path
+# must not wait. Oldest lines lose; the count is emitted once the writer keeps
+# up again, so a drop is never silent.
+_QUEUE_MAX: Final = 1024
+
+_STOP: Final = object()
 
 
 def _now_iso() -> str:
@@ -48,11 +82,42 @@ def _ms(seconds: float | None) -> float | None:
     return None if seconds is None else round(seconds * 1000, 1)
 
 
+def _redact_brief(brief: Any) -> Any:
+    """Reduce a serialised `LeadBrief` to its non-PII fields."""
+    if not isinstance(brief, dict):
+        return brief
+    out: dict[str, Any] = {k: brief[k] for k in _BRIEF_EMITTED_FIELDS if k in brief}
+    budget = brief.get("budget")
+    # The confirmed flag is a conversation-state fact; the amount is not.
+    out["budget_confirmed"] = None if not isinstance(budget, dict) else budget.get("confirmed")
+    out["redacted"] = True
+    return out
+
+
+def redact_event(record: dict[str, Any]) -> dict[str, Any]:
+    """The emitted view of one event record.
+
+    Guardrail decisions keep their figures: those are inventory data, and the
+    whole claim of the audit trail is that you can see which figure was
+    inspected. What goes is anything the buyer said or revealed.
+    """
+    event = record.get("event")
+    if event == "user_turn":
+        return {**record, "text": REDACTED}
+    if event in ("brief", "brief_fallback"):
+        return {**record, "brief": _redact_brief(record.get("brief"))}
+    if event == "brief_invalid":
+        # `raw` is the model's attempted brief, so it carries the same fields.
+        return {**record, "raw": REDACTED}
+    return record
+
+
 class EventLog:
     """Session-scoped event sink and in-memory turn store.
 
-    In-memory only, by ADR-012. The web tier reads this stream; nothing here
-    is durable, and PII redaction is a PHASE-2 concern (docs/03- validator 4).
+    In-memory only, by ADR-012. The web tier reads this stream; nothing here is
+    durable. The in-memory `TurnRecord`s hold the full utterance; the emitted
+    stream does not.
     """
 
     def __init__(
@@ -61,11 +126,15 @@ class EventLog:
         *,
         stream: TextIO | None = None,
         file_path: Path | None = None,
+        verbose: bool | None = None,
     ) -> None:
         self.session_id = session_id
         self._stream = stream if stream is not None else sys.stdout
         self._turns: list[TurnRecord] = []
         self._file: TextIO | None = None
+        self.verbose = (
+            _verbose_from_env() if verbose is None else verbose
+        )
 
         path = file_path or (
             Path(os.environ[_FILE_SINK_ENV]) if os.environ.get(_FILE_SINK_ENV) else None
@@ -74,15 +143,106 @@ class EventLog:
             path.parent.mkdir(parents=True, exist_ok=True)
             self._file = path.open("a", encoding="utf-8")
 
+        self._queue: asyncio.Queue[Any] | None = None
+        self._writer: asyncio.Task[None] | None = None
+        self._dropped = 0
+        # Once the writer has been drained and stopped, later events go direct
+        # rather than into a fresh queue nobody will ever drain.
+        self._writer_stopped = False
+
+    # -- emission ---------------------------------------------------------
+
     def emit(self, event: str, **fields: Any) -> dict[str, Any]:
-        record = {"ts": _now_iso(), "session": self.session_id, "event": event}
+        """Record an event and queue its emitted (redacted) form.
+
+        Returns the FULL record: callers that keep state in memory get the
+        unredacted view, the stream does not. Never raises and never blocks.
+        """
+        record: dict[str, Any] = {
+            "ts": _now_iso(),
+            "session": self.session_id,
+            "event": event,
+        }
         record.update(fields)
-        line = json.dumps(record, ensure_ascii=False, default=str)
-        print(line, file=self._stream, flush=True)
-        if self._file is not None:
-            self._file.write(line + "\n")
-            self._file.flush()
+        emitted = record if self.verbose else redact_event(record)
+        self._enqueue(json.dumps(emitted, ensure_ascii=False, default=str))
         return record
+
+    def _enqueue(self, line: str) -> None:
+        queue = self._ensure_writer()
+        if queue is None:
+            # No running loop (spikes, sync tests) or the writer is gone: the
+            # direct write is the fallback, not an error.
+            self._write(line)
+            return
+        while True:
+            try:
+                queue.put_nowait(line)
+                return
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:  # pragma: no cover - drained under us
+                    self._write(line)
+                    return
+                self._dropped += 1
+
+    def _ensure_writer(self) -> asyncio.Queue[Any] | None:
+        if self._writer_stopped:
+            return None
+        if self._queue is not None:
+            if self._writer is not None and not self._writer.done():
+                return self._queue
+            return None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        self._queue = asyncio.Queue(maxsize=_QUEUE_MAX)
+        self._writer = loop.create_task(self._writer_loop(), name="event_log_writer")
+        return self._queue
+
+    async def _writer_loop(self) -> None:
+        queue = self._queue
+        assert queue is not None
+        while True:
+            item = await queue.get()
+            if item is _STOP:
+                # Report before stopping, or a drop that happened on the final
+                # burst would never be reported at all.
+                self._report_backpressure()
+                return
+            self._write(item)
+            if queue.empty():
+                self._report_backpressure()
+
+    def _report_backpressure(self) -> None:
+        if not self._dropped:
+            return
+        dropped, self._dropped = self._dropped, 0
+        self._write(
+            json.dumps(
+                {
+                    "ts": _now_iso(),
+                    "session": self.session_id,
+                    "event": "event_log_backpressure",
+                    "dropped": dropped,
+                    "queue_max": _QUEUE_MAX,
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    def _write(self, line: str) -> None:
+        try:
+            print(line, file=self._stream, flush=True)
+            if self._file is not None:
+                self._file.write(line + "\n")
+                self._file.flush()
+        except Exception:  # a broken sink must not take the voice path with it
+            logger.warning("event log write failed", exc_info=True)
+
+    # -- turn store -------------------------------------------------------
 
     def add_turn(self, record: TurnRecord) -> None:
         self._turns.append(record)
@@ -91,10 +251,31 @@ class EventLog:
     def turns(self) -> list[TurnRecord]:
         return list(self._turns)
 
+    # -- shutdown ---------------------------------------------------------
+
+    async def aclose(self, timeout: float = 5.0) -> None:
+        """Drain the queue, stop the writer, close the file sink."""
+        writer, queue = self._writer, self._queue
+        if writer is not None and queue is not None and not writer.done():
+            await queue.put(_STOP)
+            try:
+                await asyncio.wait_for(asyncio.shield(writer), timeout=timeout)
+            except TimeoutError:  # pragma: no cover - a wedged stdout
+                writer.cancel()
+                logger.warning("event log writer did not drain in %.1fs", timeout)
+        self._writer_stopped = True
+        self._writer = None
+        self._queue = None
+        self.close()
+
     def close(self) -> None:
         if self._file is not None:
             self._file.close()
             self._file = None
+
+
+def _verbose_from_env() -> bool:
+    return os.environ.get(_VERBOSE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 class TurnTracker:
@@ -219,11 +400,23 @@ class TurnTracker:
         self._log.emit("regeneration", turn=self.turn_index, reason=reason)
 
     def record_bridge(self, text: str) -> None:
-        """Audio already played, so the violating sentence is replaced by a
-        composed bridge rather than a silent retry (docs/01- regeneration
-        policy)."""
+        """Audio already played this turn, so the violating sentence is replaced
+        by a composed bridge rather than a silent retry (docs/01- regeneration
+        policy).
+
+        Only ever the audio-already-played half of that policy. The
+        nothing-spoken-yet half is `record_fallback`, and the two are separate
+        events because they are separate claims: a bridge means the buyer heard
+        a seam, a fallback means the composed copy WAS the reply.
+        """
         self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
         self._log.emit("bridge", turn=self.turn_index, text=text)
+
+    def record_fallback(self, text: str, reason: str = "guardrail") -> None:
+        """Nothing was spoken this turn, so the composed fallback is the whole
+        reply (docs/01-). There is nothing to bridge from."""
+        self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
+        self._log.emit("fallback", turn=self.turn_index, text=text, reason=reason)
 
     def mark_interrupted(self) -> None:
         """Barge-in: the last chunk handed to TTS may not have finished

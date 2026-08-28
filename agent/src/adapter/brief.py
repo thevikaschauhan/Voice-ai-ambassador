@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -96,7 +97,7 @@ class BriefExtractor:
         base_url: str,
         project_ids: list[str],
         language: Language,
-        on_event: Any,
+        on_event: Callable[..., object],
         thinking_disabled: bool = True,
         client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -110,11 +111,27 @@ class BriefExtractor:
         self._client = client
         self._owns_client = client is None
         self._last_good: LeadBrief | None = None
+        # Extraction is detached and retries, so turn N can finish after turn
+        # N+1 and would otherwise overwrite the newer brief with older data.
+        # `_last_good` only ever moves forward.
+        self._last_accepted_turn: int | None = None
         self._tasks: set[asyncio.Task[None]] = set()
 
     @property
     def last_good(self) -> LeadBrief | None:
         return self._last_good
+
+    @property
+    def last_accepted_turn(self) -> int | None:
+        return self._last_accepted_turn
+
+    def _accept(self, brief: LeadBrief, turn_index: int) -> bool:
+        """Advance the last good brief, unless this result is stale."""
+        if self._last_accepted_turn is not None and turn_index < self._last_accepted_turn:
+            return False
+        self._last_good = brief
+        self._last_accepted_turn = turn_index
+        return True
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -127,7 +144,12 @@ class BriefExtractor:
 
     def schedule(self, transcript: list[dict[str, str]], turn_index: int) -> asyncio.Task[None]:
         """Fire and forget. The caller must not await this - that is the whole
-        point of putting the brief on its own channel."""
+        point of putting the brief on its own channel.
+
+        `turn_index` orders the results. Extraction retries, so a slow turn N
+        can land after turn N+1; when it does it is dropped rather than allowed
+        to overwrite the newer brief.
+        """
         task = asyncio.create_task(
             self._run(transcript, turn_index), name=f"brief_extraction_turn_{turn_index}"
         )
@@ -198,7 +220,16 @@ class BriefExtractor:
                 )
                 continue
 
-            self._last_good = brief
+            if not self._accept(brief, turn_index):
+                self._on_event(
+                    "brief_stale_dropped",
+                    turn=turn_index,
+                    attempt=attempt,
+                    last_accepted_turn=self._last_accepted_turn,
+                    reason="a later turn's brief is already the last good one",
+                )
+                return
+
             self._on_event(
                 "brief",
                 turn=turn_index,

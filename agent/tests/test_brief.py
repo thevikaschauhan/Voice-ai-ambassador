@@ -67,6 +67,27 @@ class ScriptedTransport(httpx.AsyncBaseTransport):
         )
 
 
+class PacedTransport(httpx.AsyncBaseTransport):
+    """A queue of (delay, content) pairs, so two concurrent extractions can be
+    made to complete in a chosen order."""
+
+    def __init__(self, scripted: list[tuple[float, str]]) -> None:
+        self._scripted = list(scripted)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await request.aread()
+        delay, content = self._scripted.pop(0)
+        if delay:
+            await asyncio.sleep(delay)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": content}}],
+                "usage": {"completion_tokens_details": {"reasoning_tokens": 0}},
+            },
+        )
+
+
 def make_extractor(transport: httpx.AsyncBaseTransport, events: list[tuple]) -> BriefExtractor:
     return BriefExtractor(
         api_key=FAKE_KEY,
@@ -172,6 +193,80 @@ async def test_unresolvable_shortlist_id_is_a_failure_not_a_silent_drop():
 
 
 # --- off the latency path -------------------------------------------------
+
+
+# --- out-of-order completion ----------------------------------------------
+
+
+async def test_a_late_turn_does_not_overwrite_a_newer_brief():
+    """Extraction is detached and retries, so turn N can finish after turn N+1.
+    The last good brief only ever moves forward."""
+    events: list[tuple] = []
+    newer = {**VALID_BRIEF, "stage": "booking"}
+    older = {**VALID_BRIEF, "stage": "opening"}
+
+    extractor = make_extractor(ScriptedTransport([json.dumps(newer)]), events)
+    await extractor.schedule(TRANSCRIPT, turn_index=2)
+    assert extractor.last_good.stage == "booking"
+
+    # Turn 1's slow extraction lands afterwards.
+    extractor._client = httpx.AsyncClient(transport=ScriptedTransport([json.dumps(older)]))
+    await extractor.schedule(TRANSCRIPT, turn_index=1)
+
+    assert extractor.last_good.stage == "booking"
+    assert extractor.last_accepted_turn == 2
+    names = [n for n, _ in events]
+    assert names == ["brief", "brief_stale_dropped"]
+    assert events[-1][1]["turn"] == 1
+    assert events[-1][1]["last_accepted_turn"] == 2
+
+
+async def test_overlapping_extractions_completing_out_of_order_keep_the_newer():
+    """The real shape of the race: both extractions in flight at once, the
+    older turn's the slower of the two."""
+    events: list[tuple] = []
+    newer = {**VALID_BRIEF, "stage": "booking"}
+    older = {**VALID_BRIEF, "stage": "opening"}
+
+    extractor = BriefExtractor(
+        api_key=FAKE_KEY,
+        model="qwen/qwen3.7-flash",
+        base_url="https://openrouter.ai/api/v1",
+        project_ids=PROJECT_IDS,
+        language="en",
+        on_event=lambda name, **fields: events.append((name, fields)),
+        client=httpx.AsyncClient(
+            # Call order is task creation order; turn 1 goes first and is slow.
+            transport=PacedTransport([(0.2, json.dumps(older)), (0.0, json.dumps(newer))])
+        ),
+    )
+
+    task_old = extractor.schedule(TRANSCRIPT, turn_index=1)
+    await asyncio.sleep(0)  # let turn 1 issue its request before turn 2 exists
+    task_new = extractor.schedule(TRANSCRIPT, turn_index=2)
+
+    await task_new
+    assert extractor.last_good.stage == "booking"  # the newer one landed first
+    await task_old
+
+    assert extractor.last_good.stage == "booking"  # and the older one did not win
+    assert extractor.last_accepted_turn == 2
+    assert [n for n, _ in events] == ["brief", "brief_stale_dropped"]
+
+
+async def test_a_repeat_of_the_same_turn_is_still_accepted():
+    """The guard drops older turns, not equal ones: a repair retry on the same
+    turn must still be able to land."""
+    events: list[tuple] = []
+    extractor = make_extractor(ScriptedTransport([json.dumps(VALID_BRIEF)]), events)
+    await extractor.schedule(TRANSCRIPT, turn_index=3)
+
+    later = {**VALID_BRIEF, "stage": "booking"}
+    extractor._client = httpx.AsyncClient(transport=ScriptedTransport([json.dumps(later)]))
+    await extractor.schedule(TRANSCRIPT, turn_index=3)
+
+    assert extractor.last_good.stage == "booking"
+    assert "brief_stale_dropped" not in [n for n, _ in events]
 
 
 async def test_scheduling_returns_immediately_and_does_not_block_the_caller():

@@ -28,6 +28,7 @@ from adapter.interception import (  # noqa: E402
     BRIDGE_COPY,
     FALLBACK_COPY,
     SentenceGuard,
+    _Sink,
     guarded_stream,
     split_sentences,
 )
@@ -249,6 +250,63 @@ async def test_a_second_violation_after_regeneration_falls_back(guard):
 
     assert FABRICATED not in tts.text
     assert tts.text.strip() == FALLBACK_COPY["en"]
+
+
+# --- the two recoveries are different events (docs/01-) -------------------
+
+
+async def test_nothing_spoken_yet_reports_a_fallback_not_a_bridge(guard):
+    """docs/01- distinguishes them and the audit has to as well: a bridge means
+    the buyer heard a seam, a fallback means the composed copy WAS the reply."""
+    bridges: list[str] = []
+    fallbacks: list[str] = []
+    sink = _Sink(on_bridge=bridges.append, on_fallback=fallbacks.append)
+
+    stream = fake_llm_stream([f"Marina Heights is AED {FABRICATED}. "])
+    tts, _ = await drain(guarded_stream(stream, guard=guard("enforce"), sink=sink))
+
+    assert bridges == []
+    assert fallbacks == [FALLBACK_COPY["en"]]
+    assert tts.text.strip() == FALLBACK_COPY["en"]
+
+
+async def test_audio_already_played_reports_a_bridge_not_a_fallback(guard):
+    bridges: list[str] = []
+    fallbacks: list[str] = []
+    sink = _Sink(on_bridge=bridges.append, on_fallback=fallbacks.append)
+
+    stream = fake_llm_stream(
+        [
+            "Skyrise is a strong choice. ",
+            f"Marina Heights is AED {FABRICATED}. ",
+        ]
+    )
+    tts, _ = await drain(guarded_stream(stream, guard=guard("enforce"), sink=sink))
+
+    assert fallbacks == []
+    assert bridges == [BRIDGE_COPY["en"]]
+    assert BRIDGE_COPY["en"] in tts.text
+
+
+async def test_a_spent_retry_with_nothing_spoken_is_still_a_fallback(guard):
+    """The regeneration also failed, so the turn ends on composed speech - but
+    the buyer has still heard nothing, so it is not a bridge."""
+    bridges: list[str] = []
+    fallbacks: list[str] = []
+    sink = _Sink(on_bridge=bridges.append, on_fallback=fallbacks.append)
+
+    async def regenerate(detail: str):
+        return fake_llm_stream([f"Still AED {FABRICATED}. "])
+
+    stream = fake_llm_stream([f"Marina Heights is AED {FABRICATED}. "])
+    await drain(
+        guarded_stream(
+            stream, guard=guard("enforce"), sink=sink, regenerate=regenerate
+        )
+    )
+
+    assert bridges == []
+    assert fallbacks == [FALLBACK_COPY["en"]]
 
 
 # --- hook 2's dependency: tool chunks must pass through untouched ---------

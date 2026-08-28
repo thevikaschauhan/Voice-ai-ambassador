@@ -8,6 +8,22 @@ start, and handed to the adapter as a frozen value.
 Secrets are never printed. `Settings.__repr__` and `Settings.redacted()` mask
 every credential-bearing field, so a settings object can be logged or dropped
 into a traceback without leaking a key.
+
+Two environment variables are read outside `Settings`, both by `events.py`,
+because they configure a sink rather than the session:
+
+  AMBASSADOR_EVENT_LOG      path to a second, file-based event sink. It
+                            receives exactly the stream stdout receives, which
+                            means it is redacted unless the flag below is set.
+  AMBASSADOR_EVENT_VERBOSE  DEV ONLY. Restores full emission: buyer utterance
+                            text and complete lead briefs reach stdout and the
+                            file sink. Never set it for a demo or a
+                            deployment - docs/02- and docs/03- say PII does not
+                            land in an emitted or durable stream, and this flag
+                            is the one way to break that. The in-memory
+                            `TurnRecord`s carry the full text either way, so
+                            the ambassador view and the audit lose nothing when
+                            it is off.
 """
 
 from __future__ import annotations

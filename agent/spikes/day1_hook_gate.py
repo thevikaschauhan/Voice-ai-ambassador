@@ -28,7 +28,11 @@ AGENT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENT_DIR / "src"))
 
 from livekit import rtc  # noqa: E402
-from livekit.agents import AgentSession  # noqa: E402
+from livekit.agents import (  # noqa: E402
+    AgentSession,
+    AgentStateChangedEvent,
+    SpeechCreatedEvent,
+)
 from livekit.agents.utils import http_context  # noqa: E402
 from livekit.agents.voice import io as agent_io  # noqa: E402
 from livekit.plugins import fishaudio, silero  # noqa: E402
@@ -108,9 +112,12 @@ async def _run() -> int:
     agent = AmbassadorAgent(settings=settings, log=log)
     audio = CaptureAudioOutput()
 
+    # The plugin does not own a client it was handed, so this script closes it.
+    llm = build_llm(settings, agent.note_usage, agent.note_upstream_status)
+
     session: AgentSession = AgentSession(
         vad=silero.VAD.load(),
-        llm=build_llm(settings, agent.note_usage, agent.note_upstream_status),
+        llm=llm.llm,
         tts=fishaudio.TTS(
             api_key=settings.fish_api_key,
             model=settings.fish_tts_model,
@@ -120,8 +127,12 @@ async def _run() -> int:
     )
     session.output.audio = audio
 
+    @session.on("speech_created")
+    def _on_speech_created(ev: SpeechCreatedEvent) -> None:
+        agent.note_speech_handle(ev.speech_handle)
+
     @session.on("agent_state_changed")
-    def _on_state(ev) -> None:  # noqa: ANN001
+    def _on_state(ev: AgentStateChangedEvent) -> None:
         if ev.new_state == "listening":
             agent.finish_turn(session.history)
 
@@ -159,6 +170,8 @@ async def _run() -> int:
     finally:
         await session.aclose()
         await agent.brief_extractor.aclose()
+        await llm.aclose()
+        await log.aclose()
 
     # --- gates -----------------------------------------------------------
     print("\n=== gates ===")

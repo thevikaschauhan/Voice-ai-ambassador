@@ -24,6 +24,7 @@ Run it:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterable
 from typing import Any
@@ -32,10 +33,13 @@ from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentSession,
+    AgentStateChangedEvent,
+    ErrorEvent,
     JobContext,
     JobProcess,
     ModelSettings,
     RunContext,
+    SpeechCreatedEvent,
     WorkerOptions,
     cli,
     function_tool,
@@ -46,6 +50,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils import is_given
+from livekit.agents.voice import SpeechHandle
 from livekit.plugins import fishaudio, silero
 
 from ambassador.guardrails.prohibited import load_patterns
@@ -60,8 +65,8 @@ from ambassador.verbalise import load_spoken_forms
 from .brief import BriefExtractor
 from .config import Settings, load_settings
 from .events import EventLog, TurnTracker
-from .interception import SentenceGuard, guarded_stream
-from .llm_openrouter import build_llm
+from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
+from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
 from .stt_openrouter import OpenRouterSTT
 
 logger = logging.getLogger("ambassador.agent")
@@ -107,6 +112,7 @@ class AmbassadorAgent(Agent):
         )
         self._turn_index = 0
         self._tracker: TurnTracker | None = None
+        self._speech_handle: SpeechHandle | None = None
 
     @property
     def brief_extractor(self) -> BriefExtractor:
@@ -161,17 +167,27 @@ class AmbassadorAgent(Agent):
             note="retried with backoff by the provider SDK",
         )
 
-    def note_usage(self, usage: dict[str, Any]) -> None:
+    def note_usage(self, usage: UsageFrame) -> None:
         """Called by the usage-tapping transport under the LLM plugin."""
         tracker = self._tracker
         if tracker is None:
             return
         tracker.record_usage(
-            prompt_tokens=usage.get("prompt_tokens"),
-            completion_tokens=usage.get("completion_tokens"),
-            reasoning_tokens=usage.get("reasoning_tokens"),
-            cached_tokens=usage.get("cached_tokens"),
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            reasoning_tokens=usage["reasoning_tokens"],
+            cached_tokens=usage["cached_tokens"],
         )
+
+    def note_speech_handle(self, handle: SpeechHandle) -> None:
+        """The framework's own interruption signal.
+
+        There is no session-level "interrupted" event; barge-in resolves the
+        speech handle's interrupt future, and `handle.interrupted` flips the
+        moment it does - before the agent returns to "listening", which is
+        where the turn is sealed. So the handle is kept and read at seal time.
+        """
+        self._speech_handle = handle
 
     # -- hook 1: interception between LLM and TTS -------------------------
 
@@ -210,6 +226,9 @@ class AmbassadorAgent(Agent):
                 chat_ctx=ctx,
                 tools=tools,
                 tool_choice=tool_choice,
+                # Explicit, because the default (max_retry=3, retry_interval=2.0)
+                # stacks on top of the SDK's own retries under the plugin.
+                conn_options=CONN_OPTIONS,
             )
             opened.append(stream)
             return stream
@@ -218,12 +237,27 @@ class AmbassadorAgent(Agent):
             return await open_stream(_REGENERATION_INSTRUCTION.format(detail=detail))
 
         sink = _tracker_sink(tracker)
+        spoke_anything = False
         try:
             source = await open_stream()
             async for out in guarded_stream(
                 source, guard=self._guard, sink=sink, regenerate=regenerate
             ):
+                if isinstance(out, str):
+                    spoke_anything = True
                 yield out
+        except (asyncio.CancelledError, GeneratorExit):
+            # Both derive from BaseException, so `except Exception` below would
+            # miss them anyway. Named explicitly because it is a decision, not
+            # an accident: barge-in and shutdown cancel this generator, that is
+            # not a failure, and speaking over it would be wrong.
+            raise
+        except Exception as exc:
+            # Retries are exhausted and LLMStream has re-raised through
+            # __anext__. Nothing has reached TTS from this point on, and
+            # AGENTS.md is absolute: a turn never ends in silence.
+            for text in self._terminal_failure_speech(tracker, exc, spoke_anything):
+                yield text
         finally:
             for stream in opened:
                 aclose = getattr(stream, "aclose", None)
@@ -231,7 +265,35 @@ class AmbassadorAgent(Agent):
                     try:
                         await aclose()
                     except Exception:
-                        logger.debug("llm stream close failed", exc_info=True)
+                        # Not fatal, but a stream left open leaks a connection
+                        # and is worth seeing without turning DEBUG on.
+                        logger.warning("llm stream close failed", exc_info=True)
+
+    def _terminal_failure_speech(
+        self, tracker: TurnTracker, exc: BaseException, spoke_anything: bool
+    ) -> list[str]:
+        """Composed speech for an LLM failure the retries could not absorb.
+
+        The fallback copy, not the bridge: the model produced nothing usable,
+        so there is no half-answer to bridge away from, and the fallback is the
+        line that hands the buyer to a human. `spoken_before` on the event says
+        whether the buyer had already heard part of a reply.
+        """
+        self._log.emit(
+            "llm_failure",
+            turn=tracker.turn_index,
+            error=type(exc).__name__,
+            detail=str(exc)[:200],
+            spoken_before=spoke_anything,
+        )
+        raw = FALLBACK_COPY[self._settings.language]
+        try:
+            composed = self._guard.compose(raw)
+        except AssertionError:  # pragma: no cover - a defect in the copy itself
+            logger.warning("fallback copy failed its own guardrails", exc_info=True)
+            composed = raw
+        tracker.record_fallback(composed, "llm_failure")
+        return [composed if composed.endswith((" ", "\n")) else composed + " "]
 
     # -- TTS timing (the Fish first-byte measurement) ---------------------
 
@@ -308,6 +370,12 @@ class AmbassadorAgent(Agent):
         tracker = self._tracker
         if tracker is None:
             return
+        handle = self._speech_handle
+        if handle is not None and handle.interrupted:
+            # Barge-in: the last chunk handed to TTS did not finish playing, so
+            # the audit must not claim it was spoken in full (docs/04-).
+            tracker.mark_interrupted()
+        self._speech_handle = None
         tracker.finish()
         transcript = [
             {"role": item.role, "content": item.text_content or ""}
@@ -321,9 +389,7 @@ class AmbassadorAgent(Agent):
         self._tracker = None
 
 
-def _tracker_sink(tracker: TurnTracker | None) -> Any:
-    from .interception import _Sink
-
+def _tracker_sink(tracker: TurnTracker | None) -> _Sink:
     if tracker is None:
         return _Sink()
     return _Sink(
@@ -338,7 +404,31 @@ def _tracker_sink(tracker: TurnTracker | None) -> Any:
         on_first_sentence=tracker.mark_first_sentence,
         on_regeneration=tracker.record_regeneration,
         on_bridge=tracker.record_bridge,
+        on_fallback=tracker.record_fallback,
     )
+
+
+async def shutdown_session(
+    *,
+    agent: AmbassadorAgent,
+    log: EventLog,
+    llm: BuiltLLM,
+    stt_node: OpenRouterSTT | None,
+) -> None:
+    """Close everything the session owns, in order.
+
+    Module level rather than a closure inside `entrypoint` so the lifecycle is
+    testable without a live room (tests/test_agent.py). The LLM's httpx client
+    is closed here because the plugin will not: it was handed the client, so it
+    sets `_owns_client = False`.
+    """
+    await agent.brief_extractor.drain()
+    await agent.brief_extractor.aclose()
+    if stt_node is not None:
+        await stt_node.aclose()
+    await llm.aclose()
+    log.emit("session_end", turns=len(log.turns))
+    await log.aclose()
 
 
 def prewarm(proc: JobProcess) -> None:
@@ -380,15 +470,23 @@ async def entrypoint(ctx: JobContext) -> None:
         latency_mode="low",
     )
 
+    llm = build_llm(settings, agent.note_usage, agent.note_upstream_status)
+
     session: AgentSession = AgentSession(
         stt=stt_node,
         vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
-        llm=build_llm(settings, agent.note_usage, agent.note_upstream_status),
+        llm=llm.llm,
         tts=tts,
     )
 
+    @session.on("speech_created")
+    def _on_speech_created(ev: SpeechCreatedEvent) -> None:
+        # The handle carries the framework's interruption state; the turn seal
+        # below reads it so barge-in marks the last chunk incomplete.
+        agent.note_speech_handle(ev.speech_handle)
+
     @session.on("agent_state_changed")
-    def _on_state(ev: Any) -> None:
+    def _on_state(ev: AgentStateChangedEvent) -> None:
         # "listening" is the framework's own end-of-turn signal, and the only
         # one that survives a tool call: a running tool holds the agent in
         # "thinking", so one buyer utterance still yields exactly one
@@ -399,16 +497,11 @@ async def entrypoint(ctx: JobContext) -> None:
             agent.finish_turn(session.history)
 
     @session.on("error")
-    def _on_error(ev: Any) -> None:
-        log.emit("session_error", error=str(getattr(ev, "error", ev)))
+    def _on_error(ev: ErrorEvent) -> None:
+        log.emit("session_error", error=str(ev.error))
 
     async def _shutdown() -> None:
-        await agent.brief_extractor.drain()
-        await agent.brief_extractor.aclose()
-        if stt_node is not None:
-            await stt_node.aclose()
-        log.emit("session_end", turns=len(log.turns))
-        log.close()
+        await shutdown_session(agent=agent, log=log, llm=llm, stt_node=stt_node)
 
     ctx.add_shutdown_callback(_shutdown)
 
