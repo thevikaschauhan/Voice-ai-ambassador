@@ -11,6 +11,7 @@ not passed guardrails cannot be verbalised, and text that has not been
 verbalised through here cannot become SpeakableText.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,7 +22,16 @@ from .schemas import FigureKind, SpeakableText, ValidatedSentence
 
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
-_AED_PREFIX = "AED "
+# The currency token, on either side of the amount. Spoken forms for amounts
+# already name the currency ("... dirhams"), so an AED written next to the
+# digits has to be swallowed with them or it is spoken twice. Both orders occur
+# live: the prompt asks for plain digits and the model writes "AED 985,000" on
+# some turns and "985,000 AED" on others - the suffix form is what produced
+# "nine hundred and eighty-five thousand dirhams AED" before this existed.
+# Case-insensitive because the model is not held to a casing rule, and the
+# separating space is optional in both directions.
+_CURRENCY_BEFORE = re.compile(r"\bAED\s*$", re.IGNORECASE)
+_CURRENCY_AFTER = re.compile(r"^\s*AED\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -49,6 +59,21 @@ def load_spoken_forms(path: Path | None = None) -> SpokenForms:
     return SpokenForms(by_value=by_value, by_surface=by_surface)
 
 
+def _consume_currency(text: str, start: int, end: int) -> tuple[int, int]:
+    """Widen an amount's span over an adjacent currency token, either side.
+
+    Pure span arithmetic on already-normalised text: it decides what the
+    replacement covers, it never rewrites anything itself.
+    """
+    before = _CURRENCY_BEFORE.search(text[:start])
+    if before is not None:
+        start = before.start()
+    after = _CURRENCY_AFTER.match(text[end:])
+    if after is not None:
+        end += after.end()
+    return start, end
+
+
 def verbalise(sentence: ValidatedSentence, forms: SpokenForms) -> SpeakableText:
     if not isinstance(sentence, ValidatedSentence):
         raise TypeError(
@@ -70,11 +95,9 @@ def verbalise(sentence: ValidatedSentence, forms: SpokenForms) -> SpeakableText:
         )
         if spoken is None:
             continue  # not in the table: leave digits, TTS reads them
-        start = match.start
-        # Spoken forms for amounts name the currency, so consume an "AED "
-        # prefix rather than speaking it twice.
-        if match.figure.kind == "amount" and text[:start].endswith(_AED_PREFIX):
-            start -= len(_AED_PREFIX)
-        text = text[:start] + spoken + text[match.end :]
+        start, end = match.start, match.end
+        if match.figure.kind == "amount":
+            start, end = _consume_currency(text, start, end)
+        text = text[:start] + spoken + text[end:]
 
     return SpeakableText(text=text, language=sentence.language)

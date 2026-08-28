@@ -44,36 +44,20 @@ from ambassador.schemas import (
 )
 from ambassador.verbalise import SpokenForms
 
-# Composed failure speech. Never model-generated: a bridge that varies is not a
-# bridge. English is the only language this build team self-certifies
-# (AGENTS.md), so ar/hi carry VERIFY: markers and must not ship unreviewed.
-#
-# These belong in a reviewable data file next to data/prerolls.yaml rather than
-# in adapter code; they are here only because day 1 must not modify data/.
-BRIDGE_COPY: dict[Language, str] = {
-    "en": "Let me be precise about that figure rather than guess.",
-    # VERIFY: native-authored Arabic bridge copy (day 3 native review)
-    "ar": "Let me be precise about that figure rather than guess.",
-    # VERIFY: native-authored Hindi bridge copy (day 3 native review)
-    "hi": "Let me be precise about that figure rather than guess.",
-}
+from .fallbacks import load_fallback_copy
 
-FALLBACK_COPY: dict[Language, str] = {
-    "en": (
-        "I do not want to quote you anything I cannot confirm. "
-        "Let me put you through to one of our ambassadors."
-    ),
-    # VERIFY: native-authored Arabic fallback copy (day 3 native review)
-    "ar": (
-        "I do not want to quote you anything I cannot confirm. "
-        "Let me put you through to one of our ambassadors."
-    ),
-    # VERIFY: native-authored Hindi fallback copy (day 3 native review)
-    "hi": (
-        "I do not want to quote you anything I cannot confirm. "
-        "Let me put you through to one of our ambassadors."
-    ),
-}
+# Composed failure speech. Never model-generated: a bridge that varies is not a
+# bridge. The strings live in data/fallbacks.yaml, beside the disclosure and
+# the prerolls, so the copy a buyer hears is reviewable by a non-engineer;
+# English is the only language this build team self-certifies (AGENTS.md), so
+# the ar/hi entries carry VERIFY: markers there and must not ship unreviewed.
+#
+# Read once at import: this is fixed copy for the life of the process, every
+# call site wants it as a language-keyed mapping, and the loader's emptiness
+# check is worth failing at start-up rather than mid-call.
+_COPY = load_fallback_copy()
+BRIDGE_COPY: dict[Language, str] = _COPY.bridge
+FALLBACK_COPY: dict[Language, str] = _COPY.fallback
 
 # A boundary is terminal punctuation followed by whitespace. Requiring the
 # whitespace is what keeps "AED 1.5 million" and "Q4 2026" intact while the

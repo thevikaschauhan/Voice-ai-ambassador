@@ -11,7 +11,7 @@
 # note AED 2,400,000 is 24 lakh, NOT 2.4 crore). Do not machine-fill them.
 
 en:
-  # amounts (spoken form names the currency; the "AED " prefix is consumed)
+  # amounts (spoken form names the currency; an adjacent AED token is consumed, prefix or suffix)
   - { kind: amount, value: 985000, spoken: "nine hundred and eighty-five thousand dirhams" }
   - { kind: amount, value: 197000, spoken: "one hundred and ninety-seven thousand dirhams" }
   - { kind: amount, value: 492500, spoken: "four hundred and ninety-two thousand five hundred dirhams" }

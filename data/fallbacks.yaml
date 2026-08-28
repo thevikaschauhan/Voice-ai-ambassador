@@ -1,0 +1,45 @@
+# Composed failure speech for the guardrail interception (docs/01- the
+# regeneration policy). Spoken product copy: a buyer hears these words, so
+# they are reviewable here rather than buried in adapter code.
+#
+# Two recoveries, and they are not interchangeable:
+#   bridge    audio has ALREADY played this turn, so the violating sentence is
+#             replaced rather than retried - a blind mid-turn retry repeats or
+#             contradicts what the buyer just heard.
+#   fallback  nothing has been spoken yet, so this composed copy IS the reply,
+#             and it is the line that hands the buyer to a human.
+#
+# Fixed copy, never model-generated: a bridge that varies is not a bridge
+# (same rule as the disclosure, ADR-013). Every language must carry a
+# non-empty string for both - AGENTS.md is absolute that a turn never ends in
+# silence, and these are the strings that hold that line when the model fails.
+# The loader rejects an empty one rather than letting the caller find out live.
+#
+# English entries below are drafted by the build team.
+# VERIFY: the Arabic and Hindi entries are the ENGLISH copy standing in until a
+# native speaker authors them (day 3). The call must not ship in ar/hi until
+# they do. Do not machine-translate them.
+
+bridge:
+  en: "Let me be precise about that figure rather than guess."
+
+  ar: "Let me be precise about that figure rather than guess."
+  # VERIFY: native-authored Arabic bridge copy, day 3.
+
+  hi: "Let me be precise about that figure rather than guess."
+  # VERIFY: native-authored Hindi bridge copy, day 3.
+
+fallback:
+  en: >-
+    I do not want to quote you anything I cannot confirm.
+    Let me put you through to one of our ambassadors.
+
+  ar: >-
+    I do not want to quote you anything I cannot confirm.
+    Let me put you through to one of our ambassadors.
+  # VERIFY: native-authored Arabic fallback copy, day 3.
+
+  hi: >-
+    I do not want to quote you anything I cannot confirm.
+    Let me put you through to one of our ambassadors.
+  # VERIFY: native-authored Hindi fallback copy, day 3.

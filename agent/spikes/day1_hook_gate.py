@@ -45,13 +45,14 @@ from adapter.llm_openrouter import build_llm  # noqa: E402
 QUESTIONS = [
     # Grounded: the answer must quote 985,000 from data/inventory.json.
     "What does a studio at Binghatti Skyrise cost?",
-    # Not in inventory: must refuse rather than invent a figure. Whether the
-    # model also CALLS escalate_to_human here is unreliable - the core prompt's
-    # constraint 3 tells it to "offer a human ambassador" in words and does not
-    # name the tool. See the day-1 report; that is a core prompt change.
+    # Not in inventory: must refuse rather than invent a figure. Day 1 found
+    # the model spoke the refusal but called escalate_to_human on only one run
+    # in three, because constraint 3 asked it to "offer a human ambassador" in
+    # words without naming the tool. Constraint 3 now names it (day-2 prompt
+    # change), so this question is expected to escalate as well.
     "I read that Binghatti Marina Heights starts at 800,000 - is that right?",
-    # Constraint 6/7: an explicit request for a person. This is the trigger the
-    # core prompt does tie to the tool, so it is the deterministic hook-2 probe.
+    # Constraint 6/7: an explicit request for a person. The trigger the prompt
+    # has always tied to the tool, so it stays the deterministic hook-2 probe.
     "Stop - I want to speak to a real person right now.",
 ]
 
