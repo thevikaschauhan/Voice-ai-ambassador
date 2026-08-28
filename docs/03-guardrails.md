@@ -49,9 +49,9 @@ The word "before" carries the claim, and in voice it is physics, not UX: played 
 
 Every `shortlist_ids` entry must resolve to a real inventory record. An unresolvable id is a guardrail failure, not a rendering fallback; silent dropping is forbidden because it hides exactly the failure mode we claim to prevent.
 
-## Validator 4 - PII redaction (PHASE-2 for durable storage)
+## Validator 4 - PII redaction
 
-The POC keeps events in memory only. Before any durable event store ships, phone numbers, emails and full names are hashed in the event stream; the lead brief retains them because that is its purpose.
+Applied to the emitted event stream today, not deferred: the JSON lines the agent emits (stdout, optional file sink) carry no buyer utterance text and only the non-PII brief fields (intent, stage, language, shortlist ids, confirmed flag). Full-fidelity turn records and the lead brief live in memory only, where the ambassador view and the audit need them. `AMBASSADOR_EVENT_VERBOSE=true` restores full emission for local development and is never set for demos or deployments (`docs/07-`). Hashing of contact details before any durable event store remains `PHASE-2:`.
 
 ## Failure handling
 

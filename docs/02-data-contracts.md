@@ -94,7 +94,7 @@ Budget currency is stored as stated by the buyer. Any conversion to AED is deter
 
 ## Events and audit
 
-Every turn emits one `TurnRecord`. PII (names in transcript) is retained in the POC's in-memory log only; `PHASE-2:` hashing before durable storage.
+Every turn emits one `TurnRecord`. Full fidelity (utterance text, brief PII) is retained in the POC's in-memory records only; the emitted JSON event stream is redacted by default (validator 4 in `docs/03-`). `PHASE-2:` hashing before durable storage. Event types on the emitted stream include: `user_turn`, `guardrail`, `bridge`, `fallback`, `tool_call`, `escalation`, `brief`, `brief_stale_dropped`, `llm_request`, `llm_usage`, `llm_failure`, `event_log_backpressure`, `turn_complete` - the latency meter and any consumer must tolerate new types.
 
 ```
 TurnRecord
