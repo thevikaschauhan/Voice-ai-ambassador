@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, get_args
 
 import yaml
 
@@ -31,7 +31,11 @@ from ambassador.schemas import Language
 
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
-_LANGUAGES: Final[tuple[Language, ...]] = ("en", "ar", "hi")
+# Derived, never hand-copied. A hand-written copy of the language set drifts
+# silently the day a language is added to the Literal: this loader would stop
+# demanding copy for it, the data file would pass, and the KeyError would land
+# mid-call on the one path that exists so a turn never ends in silence.
+_LANGUAGES: Final[tuple[Language, ...]] = get_args(Language)
 
 
 @dataclass(frozen=True)
@@ -48,10 +52,42 @@ class FallbackCopy:
 
 
 def _block(raw: Any, kind: str, source: Path) -> dict[Language, str]:
-    entries = (raw or {}).get(kind) or {}
+    """One block of the file, complete and text-only, or a curated ValueError.
+
+    Three separate failures, all of which used to reach a caller as something
+    worse than a message. A document or a block of the wrong shape raised a raw
+    AttributeError from inside the loader; a non-string scalar was coerced with
+    `str()` and shipped to TTS as speech ("True", "985000"); and a falsy scalar
+    was coerced to "" and then misreported as missing copy. YAML makes all three
+    easy to write by accident: bare `yes`/`no`/`on`/`off` parse as booleans and
+    bare digits as numbers, so `en: no` is a boolean, not the word.
+    """
+    document = {} if raw is None else raw
+    if not isinstance(document, dict):
+        raise ValueError(
+            f"{source.name}: the file must be a mapping of block name to "
+            f"per-language copy, got {type(document).__name__}."
+        )
+    entries = document.get(kind)
+    entries = {} if entries is None else entries
+    if not isinstance(entries, dict):
+        raise ValueError(
+            f"{source.name}: '{kind}' must be a mapping of language to copy, "
+            f"got {type(entries).__name__}."
+        )
     copy: dict[Language, str] = {}
     for language in _LANGUAGES:
-        text = str(entries.get(language) or "").strip()
+        value = entries.get(language)
+        if value is None:
+            value = ""
+        elif not isinstance(value, str):
+            raise ValueError(
+                f"{source.name}: '{kind}' copy for {language!r} is a "
+                f"{type(value).__name__}, not text. This value is spoken to a "
+                "buyer verbatim, so it has to be a quoted string - YAML reads "
+                "bare yes/no/on/off as booleans and bare digits as numbers."
+            )
+        text = value.strip()
         if not text:
             raise ValueError(
                 f"{source.name}: '{kind}' has no copy for {language!r}. This is "

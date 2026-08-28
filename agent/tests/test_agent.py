@@ -179,6 +179,34 @@ def spoken(chunks: list[Any]) -> str:
     return " ".join(c for c in chunks if isinstance(c, str))
 
 
+# --- the tool's triggers match the prompt's constraints -------------------
+#
+# The prompt asks for the tool and the docstring tells the model when to reach
+# for it; the model reads both. They drifted: the prompt named an unlisted
+# computation as an escalation (AGENTS.md invariant 2) while the tool's trigger
+# list did not mention computation at all, so the one constraint with no tool
+# name in the prompt also had no matching trigger here.
+
+
+def test_the_escalation_tool_lists_every_trigger_the_prompt_escalates_on():
+    doc = AmbassadorAgent.escalate_to_human.__doc__ or ""
+    triggers = doc.lower()
+    for topic in (
+        "not in the inventory",  # constraint 3
+        "price on enquiry",  # constraint 4
+        "computation",  # constraint 2
+        "negotiate",  # constraint 6
+        "complains or is distressed",  # constraint 7
+        "asks for a person",  # constraint 7
+    ):
+        assert topic in triggers, f"no trigger covers {topic!r}"
+
+
+def test_the_escalation_tool_says_a_spoken_offer_is_not_an_escalation():
+    doc = AmbassadorAgent.escalate_to_human.__doc__ or ""
+    assert "do not merely mention a colleague" in doc
+
+
 # --- finding 1: a terminal LLM failure still speaks -----------------------
 
 

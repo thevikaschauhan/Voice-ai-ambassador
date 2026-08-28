@@ -1,6 +1,16 @@
 # Closed-set spoken forms (ADR-009).
-# Keyed by (kind, value) or by exact surface (for quarters). Because only
-# allowed figures can reach verbalisation, this table is COMPLETE by
+# One block per language, each with two keys:
+#
+#   currency_tokens  the written currency markers that may sit next to an
+#                    amount. The spoken form below already names the currency,
+#                    so a written token beside the digits is swallowed with them
+#                    or the buyer hears the currency twice. Matched
+#                    case-insensitively, on either side, with or without a
+#                    separating space. Per language because the token a native
+#                    spoken form has to swallow is a native word.
+#   forms            keyed by (kind, value) or by exact surface (for quarters).
+#
+# Because only allowed figures can reach verbalisation, `forms` is COMPLETE by
 # construction once it covers every figure in inventory.json (source and
 # computed) plus the whitelist. Regenerate the value list when inventory
 # changes; a missing entry falls back to plain digits, which TTS reads.
@@ -11,33 +21,47 @@
 # note AED 2,400,000 is 24 lakh, NOT 2.4 crore). Do not machine-fill them.
 
 en:
-  # amounts (spoken form names the currency; an adjacent AED token is consumed, prefix or suffix)
-  - { kind: amount, value: 985000, spoken: "nine hundred and eighty-five thousand dirhams" }
-  - { kind: amount, value: 197000, spoken: "one hundred and ninety-seven thousand dirhams" }
-  - { kind: amount, value: 492500, spoken: "four hundred and ninety-two thousand five hundred dirhams" }
-  - { kind: amount, value: 295500, spoken: "two hundred and ninety-five thousand five hundred dirhams" }
-  - { kind: amount, value: 1200000, spoken: "one point two million dirhams" }
-  - { kind: amount, value: 240000, spoken: "two hundred and forty thousand dirhams" }
-  - { kind: amount, value: 480000, spoken: "four hundred and eighty thousand dirhams" }
-  - { kind: amount, value: 650000, spoken: "six hundred and fifty thousand dirhams" }
-  - { kind: amount, value: 65000, spoken: "sixty-five thousand dirhams" }
-  - { kind: amount, value: 390000, spoken: "three hundred and ninety thousand dirhams" }
-  - { kind: amount, value: 195000, spoken: "one hundred and ninety-five thousand dirhams" }
-  - { kind: amount, value: 2000000, spoken: "two million dirhams" }
-  # percents
-  - { kind: percent, value: 10, spoken: "ten per cent" }
-  - { kind: percent, value: 20, spoken: "twenty per cent" }
-  - { kind: percent, value: 30, spoken: "thirty per cent" }
-  - { kind: percent, value: 40, spoken: "forty per cent" }
-  - { kind: percent, value: 50, spoken: "fifty per cent" }
-  - { kind: percent, value: 60, spoken: "sixty per cent" }
-  # quarters (surface-keyed; replaced before the numeric pass)
-  - { surface: "Q4 2026", spoken: "the fourth quarter of 2026" }
-  - { surface: "Q3 2026", spoken: "the third quarter of 2026" }
-  - { surface: "Q2 2027", spoken: "the second quarter of 2027" }
+  currency_tokens: [AED, Dhs, DHS, dh, dirham, dirhams]
+  forms:
+    # amounts (the spoken form names the currency; an adjacent token is consumed, prefix or suffix)
+    - { kind: amount, value: 985000, spoken: "nine hundred and eighty-five thousand dirhams" }
+    - { kind: amount, value: 197000, spoken: "one hundred and ninety-seven thousand dirhams" }
+    - { kind: amount, value: 492500, spoken: "four hundred and ninety-two thousand five hundred dirhams" }
+    - { kind: amount, value: 295500, spoken: "two hundred and ninety-five thousand five hundred dirhams" }
+    - { kind: amount, value: 1200000, spoken: "one point two million dirhams" }
+    - { kind: amount, value: 240000, spoken: "two hundred and forty thousand dirhams" }
+    - { kind: amount, value: 480000, spoken: "four hundred and eighty thousand dirhams" }
+    - { kind: amount, value: 650000, spoken: "six hundred and fifty thousand dirhams" }
+    - { kind: amount, value: 65000, spoken: "sixty-five thousand dirhams" }
+    - { kind: amount, value: 390000, spoken: "three hundred and ninety thousand dirhams" }
+    - { kind: amount, value: 195000, spoken: "one hundred and ninety-five thousand dirhams" }
+    - { kind: amount, value: 2000000, spoken: "two million dirhams" }
+    # percents
+    - { kind: percent, value: 10, spoken: "ten per cent" }
+    - { kind: percent, value: 20, spoken: "twenty per cent" }
+    - { kind: percent, value: 30, spoken: "thirty per cent" }
+    - { kind: percent, value: 40, spoken: "forty per cent" }
+    - { kind: percent, value: 50, spoken: "fifty per cent" }
+    - { kind: percent, value: 60, spoken: "sixty per cent" }
+    # quarters (surface-keyed; replaced before the numeric pass)
+    - { surface: "Q4 2026", spoken: "the fourth quarter of 2026" }
+    - { surface: "Q3 2026", spoken: "the third quarter of 2026" }
+    - { surface: "Q2 2027", spoken: "the second quarter of 2027" }
 
-ar: []
+ar:
+  # VERIFY: native-authored, day 3, alongside the forms below. The list must
+  # name the Arabic currency word the spoken forms use AND any Latin token the
+  # model writes in an Arabic reply. Empty = nothing is consumed, which is safe
+  # only while the forms list is empty too.
+  currency_tokens: []
+  forms: []
   # VERIFY: native-authored, day 3. Empty list = digit fallback until then.
 
-hi: []
+hi:
+  # VERIFY: native-authored, day 3, alongside the forms below. The list must
+  # name the Hindi currency word the spoken forms use AND any Latin token the
+  # model writes in a Hindi reply. Empty = nothing is consumed, which is safe
+  # only while the forms list is empty too.
+  currency_tokens: []
+  forms: []
   # VERIFY: native-authored, day 3. Empty list = digit fallback until then.

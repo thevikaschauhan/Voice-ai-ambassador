@@ -49,12 +49,17 @@ QUESTIONS = [
     # the model spoke the refusal but called escalate_to_human on only one run
     # in three, because constraint 3 asked it to "offer a human ambassador" in
     # words without naming the tool. Constraint 3 now names it (day-2 prompt
-    # change), so this question is expected to escalate as well.
+    # change), so this question is expected to escalate as well - reported per
+    # turn below, informationally, because a live model is not a gate.
     "I read that Binghatti Marina Heights starts at 800,000 - is that right?",
     # Constraint 6/7: an explicit request for a person. The trigger the prompt
     # has always tied to the tool, so it stays the deterministic hook-2 probe.
     "Stop - I want to speak to a real person right now.",
 ]
+
+# Which question above is the unknown-project probe, so the expectation and the
+# thing that reports on it cannot drift apart.
+UNKNOWN_PROJECT_INDEX = 1
 
 
 class CaptureAudioOutput(agent_io.AudioOutput):
@@ -192,6 +197,27 @@ async def _run() -> int:
         "escalate_to_human" in all_actions,
         f"actions={all_actions}",
     )
+
+    # INTENTIONALLY INFORMATIONAL, not a gate. The gate above is satisfied by
+    # the deterministic question-3 probe on its own, so it says nothing about
+    # the unknown-project turn - it passed identically before constraint 3
+    # named the tool. This line is the only place that behaviour is observed.
+    # It stays informational because it is a live LLM probe: hard-failing on a
+    # model's per-run choice would make the gate flake for a reason that is not
+    # a regression in this repository. Read it across runs, not on one run.
+    if len(turns) > UNKNOWN_PROJECT_INDEX:
+        probe = turns[UNKNOWN_PROJECT_INDEX]
+        fired = "escalate_to_human" in probe.actions
+        print(
+            f"  [INFO] unknown-project turn {probe.turn_index} "
+            f"{'FIRED' if fired else 'did NOT fire'} escalate_to_human "
+            f"(actions={probe.actions}) - informational, not a gate"
+        )
+    else:
+        print(
+            f"  [INFO] no turn record at index {UNKNOWN_PROJECT_INDEX} to "
+            "inspect for the unknown-project escalation"
+        )
 
     brief = agent.brief_extractor.last_good
     ok &= gate(

@@ -345,13 +345,15 @@ class AmbassadorAgent(Agent):
 
         1. The buyer asks about a project that is not in the inventory.
         2. The buyer asks the price of a branded collection (price on enquiry).
-        3. The buyer asks about unit availability.
-        4. The buyer wants to negotiate.
-        5. The buyer raises contractual or legal terms (SPA, escrow, Oqood,
+        3. The buyer asks for a computation that is not listed in the
+           inventory. Never work it out yourself.
+        4. The buyer asks about unit availability.
+        5. The buyer wants to negotiate.
+        6. The buyer raises contractual or legal terms (SPA, escrow, Oqood,
            refunds, visas, mortgages).
-        6. The buyer explicitly asks for a person.
-        7. The buyer complains or is distressed.
-        8. Recognition has failed three times.
+        7. The buyer explicitly asks for a person.
+        8. The buyer complains or is distressed.
+        9. Recognition has failed three times.
 
         Call it in the same turn as your spoken reply; keep speaking normally.
 
