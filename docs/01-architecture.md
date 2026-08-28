@@ -165,6 +165,22 @@ The session opens with fixed, native-reviewed disclosure copy (never model-gener
 
 **Revisit when** day 0 recordings show a contender beating 1.7b on Arabic or Hinglish, or day 1 shows hosted latency missing the budget - either way a per-language config swap (whisper stays available on the same key as the escape hatch), not a rebuild.
 
+**REVISIT CLAUSE FIRED - measured 2026-08-29, this ADR is superseded pending a decision.** Once credits landed, the bake-off ran on a 4-second English utterance ("My budget is two million dirhams for a Binghatti Skyrise studio"), three runs each:
+
+| model | p50 | worst | brand name | numbers |
+|---|---|---|---|---|
+| `qwen/qwen3-asr-1.7b` | 1669ms | 85,714ms (one outlier) | "Bint Jbeil" | words ("two million") |
+| `qwen/qwen3-asr-flash` | does not exist on OpenRouter | - | - | - |
+| `openai/whisper-large-v3-turbo` | 2537ms | 19,284ms | "Binghati" | digits ("2 million") |
+| `openai/whisper-large-v3` | 2258ms | 2869ms | "binghati" | digits ("2 million") |
+
+Four findings, in order of consequence:
+
+1. **No model on this path meets the budget.** The 100-300ms post-endpoint line is missed by 6-25x, with occasional multi-second-to-minute outliers. Added to ~840ms LLM TTFT and ~390ms TTS, voice-to-voice lands near 3-4s against a 1200ms target. **This is an architecture finding, not a model-choice one:** base64 HTTP round-trips per utterance cannot do real-time voice, whichever model sits behind them. The fix is a genuinely streaming STT with a persistent connection (LiveKit ships first-party plugins for Deepgram, AssemblyAI, Speechmatics, Soniox and others, all one-line swaps in the session wiring).
+2. **`qwen3-asr-flash` is not available on OpenRouter**, so this ADR's named Arabic contender never existed on the chosen path.
+3. **Qwen renders numbers as words** ("two million"), whisper as digits ("2 million"). Any deterministic parse of buyer speech - notably ADR-011's confirmation policy, which is still prompt-only and unimplemented - finds nothing in the qwen transcript.
+4. **Every model mangles the client's name**, and OpenRouter's transcription endpoint ignores the `prompt` biasing parameter, so the `VERIFY:` on context biasing resolves to "not available here". A pronunciation lexicon fixes output; nothing currently fixes input recognition of "Binghatti".
+
 ### ADR-016 - LLM is Qwen 3.7 Flash, thinking disabled on the voice path (decided 2026-08-27; amended same day: access via OpenRouter)
 
 **Decision.** The conversation model and the brief-extraction model are both Qwen 3.7 Flash, accessed as `qwen/qwen3.7-flash` through OpenRouter (`https://openrouter.ai/api/v1`) via LiveKit's OpenAI plugin with a `base_url` override - pure configuration, ADR-006 holds. One model, one key, both channels. OpenRouter lists a single provider for this model - Alibaba Cloud International - and forwards requests directly, so there is no provider-routing variance to manage, and prompt caching passes through (cache read $0.006/M, write $0.038/M, 5-minute TTL - warm within a call, re-warmed between demo calls, cost immaterial). Direct DashScope international access remains the documented fallback if the proxy hop hurts latency; the swap is the base URL and key.
