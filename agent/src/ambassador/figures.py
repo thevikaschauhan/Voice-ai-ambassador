@@ -35,8 +35,17 @@ _MULTIPLIERS = {
     "crores": 10_000_000,
 }
 
+# The lookbehind blocks starting a match INSIDE a number (after a digit, a
+# comma, or a decimal point) and nothing else. It deliberately does not block a
+# letter: the model writes "AED750,000" often enough, and blocking letters there
+# was a guardrail bypass, not a nicety. With a letter blocked, "AED750,000"
+# extracted nothing at all and the fabricated figure was never checked, while
+# "AED1,985,000" restarted after the comma and extracted the allowed "985,000",
+# so a fabricated price validated as a real one and was spoken. Erring toward
+# extracting more is the safe direction here: an over-extracted figure is a
+# blocked sentence, an under-extracted one is an unverified sentence.
 _NUMBER_RE = re.compile(
-    r"(?<![\w.])"
+    r"(?<![\d.,])"
     r"(?P<num>\d[\d,]*(?:\.\d+)?)"
     r"(?:\s*(?P<mult>thousand|million|lakh|lacs|lac|crores|crore|k|m)\b)?"
     r"(?:\s*(?P<pct>%|percent\b|per\s+cent\b))?",

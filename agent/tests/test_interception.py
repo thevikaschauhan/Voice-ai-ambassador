@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -159,6 +160,19 @@ async def test_grounded_figure_is_spoken_and_verbalised(guard):
     # Verbalisation has run (ADR-009): digits are gone, the spoken form is not.
     assert GROUNDED not in tts.text
     assert "nine hundred and eighty-five thousand" in tts.text.lower()
+
+
+async def test_a_suffixed_currency_amount_is_spoken_once(guard):
+    """Observed live: the model wrote "985,000 AED" and the sink received
+    "...dirhams AED", because verbalisation only consumed an "AED " prefix.
+    Asserted on what TTS was handed, not on the verbaliser's return value."""
+    stream = fake_llm_stream([f"A studio at Skyrise is {GROUNDED} AED. "])
+    tts, _ = await drain(guarded_stream(stream, guard=guard("enforce")))
+
+    assert "AED" not in tts.text
+    assert tts.text.strip() == (
+        "A studio at Skyrise is nine hundred and eighty-five thousand dirhams."
+    )
 
 
 async def test_only_the_violating_sentence_is_withheld_when_it_comes_first(guard):
@@ -364,3 +378,19 @@ def test_composed_bridge_and_fallback_pass_the_guardrails(guard):
     # the assertion.
     assert g.compose(BRIDGE_COPY["en"])
     assert g.compose(FALLBACK_COPY["en"])
+
+
+def test_the_composed_copy_tracks_the_data_file():
+    """The copy moved to data/fallbacks.yaml, so the interception's constants
+    have to be that file's content and not a second copy of it. Read here with
+    yaml directly rather than through the loader, so the loader cannot agree
+    with itself while both have drifted from what a reviewer edited."""
+    import yaml
+
+    raw = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "data" / "fallbacks.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert BRIDGE_COPY == {k: v.strip() for k, v in raw["bridge"].items()}
+    assert FALLBACK_COPY == {k: v.strip() for k, v in raw["fallback"].items()}

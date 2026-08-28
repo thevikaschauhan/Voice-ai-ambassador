@@ -20,3 +20,5 @@ node_modules/
 
 # Separate embedded tooling repo, not part of this project
 hive/
+roster.json
+roster-backups/

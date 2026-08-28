@@ -31,7 +31,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal, get_args
 
 from ambassador.schemas import Language
 
@@ -40,6 +40,10 @@ ENV_PATH = AGENT_DIR / ".env"
 
 GuardrailMode = Literal["enforce", "warn"]
 PromptMode = Literal["ambassador", "naive"]
+
+# Derived from the Literal rather than restated, so LANGUAGE cannot start
+# rejecting a language the rest of the system already supports.
+_LANGUAGES: Final[tuple[Language, ...]] = get_args(Language)
 
 # Fields whose values must never reach a log, a console, or a traceback.
 _SECRET_FIELDS = frozenset(
@@ -186,8 +190,10 @@ def load_settings(env_path: Path | None = None) -> Settings:
         )
 
     language = _resolve(file_values, "LANGUAGE", "en")
-    if language not in ("en", "ar", "hi"):
-        raise ValueError(f"LANGUAGE must be one of en/ar/hi, got {language!r}")
+    if language not in _LANGUAGES:
+        raise ValueError(
+            f"LANGUAGE must be one of {'/'.join(_LANGUAGES)}, got {language!r}"
+        )
 
     return Settings(
         livekit_url=_resolve(file_values, "LIVEKIT_URL"),

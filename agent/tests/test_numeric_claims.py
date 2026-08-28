@@ -62,3 +62,33 @@ def test_crore_confusion_is_caught(allowed):
     v2 = check_numeric_claims("that is 2.4 crore", allowed)
     assert v1[0].value == 2400000.0
     assert v2[0].value == 24000000.0
+
+
+# A currency token written flush against the digits used to defeat extraction
+# entirely, which defeated the validator with it. Both shapes below reached TTS
+# unchecked before the lookbehind in figures.py was narrowed to digits, commas
+# and decimal points: "AED750,000" extracted nothing at all, and "AED1,985,000"
+# restarted after the comma and extracted the allowed "985,000", so a fabricated
+# price validated as a real one. These are the product's central claim, so they
+# get one test per shape rather than a table.
+def test_a_fabricated_price_flush_against_the_currency_is_caught(allowed):
+    violations = check_numeric_claims("It starts at AED750,000.", allowed)
+    assert [v.value for v in violations] == [750000.0]
+
+
+def test_a_fabricated_price_is_not_validated_by_an_embedded_allowed_figure(allowed):
+    # 985,000 IS allowed and is a substring of this fabricated 1,985,000.
+    violations = check_numeric_claims("It starts at AED1,985,000.", allowed)
+    assert [v.value for v in violations] == [1985000.0]
+
+
+def test_a_real_price_flush_against_the_currency_still_passes(allowed):
+    assert check_numeric_claims("It starts at AED985,000.", allowed) == []
+
+
+def test_a_figure_is_never_extracted_from_inside_another_figure(allowed):
+    # The comma is a number-internal character, not a place a new figure starts.
+    from ambassador.figures import extract_figures
+
+    surfaces = [m.figure.surface for m in extract_figures("1,985,000 and 2,400,000")]
+    assert surfaces == ["1,985,000", "2,400,000"]

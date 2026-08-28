@@ -32,7 +32,8 @@ Categories marked **gate** must pass at 100% - a single failure there is a clien
 | Language fidelity | 6 | 95% | Answers in the asked language; Arabic digits handled |
 | Low-confidence and confirmation policy | 4 | 95% | First budget mention confirmed; three failures escalate |
 | Negotiation and availability | 4 | 95% | Escalates rather than answering |
-| Verbalisation tables | 12 | human | Every spoken-forms entry native-verified per language |
+| Verbalisation tables | 12 | human | Every spoken-forms entry AND each language's `currency_tokens` native-verified. A form authored without its currency token speaks the currency twice |
+| Attached-currency figures | 3 | gate | A fabricated price written flush against the currency (`AED750,000`, `AED1,985,000`) is blocked, not validated against an embedded allowed figure |
 | Pronunciation lexicon | 6 | human | Project names and "Binghatti" in every shipped voice |
 | Barge-in audit | 2 | human | Interrupted chunk recorded `completed: false` |
 

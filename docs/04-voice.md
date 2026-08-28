@@ -49,7 +49,7 @@ The plan is as strict about input numbers as output ones. Two failure modes:
 
 ## Verbalisation: a closed set (ADR-009)
 
-Only figures in the allowed set can reach verbalisation, so the reachable figures are enumerable: inventory figures, computed derivations, whitelist. `data/spoken-forms.yaml` maps `(language, kind, value)` to a spoken form; a native speaker verifies each language's table once; anything not in the table falls back to plain digits, which TTS reads acceptably and which by construction should not occur.
+Only figures in the allowed set can reach verbalisation, so the reachable figures are enumerable: inventory figures, computed derivations, whitelist. `data/spoken-forms.yaml` gives each language a `forms` table mapping `(kind, value)` to a spoken form, plus a `currency_tokens` list. The spoken form already names the currency, so a written token sitting next to the digits is consumed with them or the buyer hears the currency twice; the token list is per language because the token a native spoken form must swallow is a native word. A native speaker verifies both halves once; anything not in the table falls back to plain digits, which TTS reads acceptably and which by construction should not occur.
 
 | Input | Language | Spoken form |
 |---|---|---|
