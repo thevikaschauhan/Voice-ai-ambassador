@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterable
+from dataclasses import dataclass
 from typing import Any
 
 from livekit import rtc
@@ -79,6 +80,28 @@ _REGENERATION_INSTRUCTION = (
 )
 
 
+@dataclass
+class _PendingTurn:
+    """A turn that has left the conversation but not yet its own audio.
+
+    The framework's "listening" transition is not the end of the turn (see
+    `AmbassadorAgent.finish_turn`), so the tracker is parked here alongside the
+    speech handle it is waiting on and the live chat context the post-turn
+    brief will be extracted from.
+    """
+
+    tracker: TurnTracker
+    handle: SpeechHandle | None
+    chat_ctx: lk_llm.ChatContext | None
+    sealed: bool = False
+
+
+def _unresolved(handle: SpeechHandle | None) -> bool:
+    """True only when a handle exists and never finished, which is the one case
+    where whether the audio played out is genuinely unknown."""
+    return handle is not None and not handle.done()
+
+
 class AmbassadorAgent(Agent):
     def __init__(self, *, settings: Settings, log: EventLog) -> None:
         projects = load_inventory()
@@ -113,6 +136,7 @@ class AmbassadorAgent(Agent):
         self._turn_index = 0
         self._tracker: TurnTracker | None = None
         self._speech_handle: SpeechHandle | None = None
+        self._pending: _PendingTurn | None = None
 
     @property
     def brief_extractor(self) -> BriefExtractor:
@@ -180,12 +204,12 @@ class AmbassadorAgent(Agent):
         )
 
     def note_speech_handle(self, handle: SpeechHandle) -> None:
-        """The framework's own interruption signal.
+        """Keep the handle this turn's audio belongs to.
 
-        There is no session-level "interrupted" event; barge-in resolves the
-        speech handle's interrupt future, and `handle.interrupted` flips the
-        moment it does - before the agent returns to "listening", which is
-        where the turn is sealed. So the handle is kept and read at seal time.
+        It is read when the handle RESOLVES, not when it is stored and not at
+        the "listening" transition: `finish_turn` explains why those are too
+        early. One handle spans a tool-using turn's two generations, so this is
+        still one handle per buyer utterance.
         """
         self._speech_handle = handle
 
@@ -366,27 +390,117 @@ class AmbassadorAgent(Agent):
     # -- hook 3: post-turn async task -------------------------------------
 
     def finish_turn(self, chat_ctx: lk_llm.ChatContext) -> None:
-        """Seal the turn record and fire brief extraction without awaiting it."""
+        """Park the turn against its speech handle. Sealing waits for that.
+
+        "listening" is not proof the turn ended, and reading
+        `handle.interrupted` here is wrong on the main barge-in path. The
+        framework defaults to `resume_false_interruption=True` with a 2.0s
+        `false_interruption_timeout` (livekit/agents/voice/turn.py,
+        `_INTERRUPTION_DEFAULTS`). With those on, a VAD barge-in takes the
+        pause branch of `_interrupt_by_audio_activity`
+        (livekit/agents/voice/agent_activity.py): it pauses the audio output
+        and moves the agent to "listening" WITHOUT touching the speech handle.
+        `interrupt()` is called later and only if the interruption is confirmed
+        real; a false interruption resumes playout and the handle completes
+        uninterrupted. So at this moment `handle.interrupted` is False on every
+        real barge-in, and sealing here would claim every chunk played out.
+
+        That pause-and-resume behaviour is wanted - it is why a cough does not
+        kill the reply - so the audit adapts to it rather than the reverse.
+        This method only parks the turn; `_seal` runs from the handle's own
+        done callback, the one moment both facts are settled.
+        """
+        pending = self._pending
+        if pending is not None and not pending.sealed:
+            # One speech can pass through "listening" more than once: a false
+            # interruption pauses, transitions, then resumes. Keep the newer
+            # context and let the handle say when the turn is actually over.
+            pending.chat_ctx = chat_ctx
+            if self._tracker is None or self._tracker is pending.tracker:
+                return
+            # A new turn opened while the old speech never resolved. Seal the
+            # old one on what is known rather than losing it.
+            self._seal(pending, audit_incomplete=_unresolved(pending.handle))
+
         tracker = self._tracker
         if tracker is None:
             return
-        handle = self._speech_handle
-        if handle is not None and handle.interrupted:
-            # Barge-in: the last chunk handed to TTS did not finish playing, so
-            # the audit must not claim it was spoken in full (docs/04-).
-            tracker.mark_interrupted()
-        self._speech_handle = None
-        tracker.finish()
+        self._tracker = None
+        handle, self._speech_handle = self._speech_handle, None
+        pending = _PendingTurn(tracker=tracker, handle=handle, chat_ctx=chat_ctx)
+        self._pending = pending
+        if handle is None or handle.done():
+            # Text-driven turns have no handle at all, and a handle that has
+            # already resolved will never call back.
+            self._seal(pending)
+            return
+        handle.add_done_callback(self._on_speech_handle_done)
+
+    def _on_speech_handle_done(self, handle: SpeechHandle) -> None:
+        """The framework's own signal that this turn's audio is over, whether it
+        played out or was cut off. Scheduled on the loop, never on the hot path."""
+        pending = self._pending
+        if pending is None or pending.handle is not handle:
+            return
+        self._seal(pending)
+
+    def _seal(self, pending: _PendingTurn, *, audit_incomplete: bool = False) -> None:
+        """Write the turn record and fire brief extraction without awaiting it."""
+        if pending.sealed:
+            return
+        pending.sealed = True
+        handle = pending.handle
+        if handle is not None:
+            handle.remove_done_callback(self._on_speech_handle_done)
+            if handle.interrupted:
+                # Confirmed barge-in: the last chunk handed to TTS did not
+                # finish playing, so the audit must not claim it did (docs/04-).
+                pending.tracker.mark_interrupted()
+        pending.tracker.finish(audit_incomplete=audit_incomplete)
+        if self._pending is pending:
+            self._pending = None
+        if pending.chat_ctx is None:
+            return
         transcript = [
             {"role": item.role, "content": item.text_content or ""}
-            for item in chat_ctx.items
+            for item in pending.chat_ctx.items
             if getattr(item, "type", None) == "message"
             and item.role in ("user", "assistant")
             and (item.text_content or "").strip()
         ]
         if transcript:
-            self._brief.schedule(transcript, tracker.turn_index)
+            self._brief.schedule(transcript, pending.tracker.turn_index)
+
+    def finalise_pending_turn(self) -> None:
+        """Close the books at teardown.
+
+        A session that goes down mid-speech leaves a handle that will never
+        resolve. The turn is sealed on what is known - marked interrupted if
+        the interrupt did land - and flagged `audit_incomplete` so nobody reads
+        completion out of a record that never saw the end of its own audio.
+        """
+        pending = self._pending
+        if pending is not None and not pending.sealed:
+            self._seal(pending, audit_incomplete=_unresolved(pending.handle))
+            return
+        tracker = self._tracker
+        if tracker is None:
+            return
+        # Teardown before the turn ever reached "listening": there is no
+        # settled transcript to extract a brief from, but the record itself is
+        # still worth keeping, and it is incomplete by construction.
         self._tracker = None
+        handle, self._speech_handle = self._speech_handle, None
+        self._seal(
+            _PendingTurn(tracker=tracker, handle=handle, chat_ctx=None),
+            audit_incomplete=True,
+        )
+
+    async def on_exit(self) -> None:
+        """The framework's own end-of-agent hook: `AgentSession.aclose` drains
+        the activity and awaits this. Anything still waiting on a speech handle
+        is sealed here rather than vanishing with the session."""
+        self.finalise_pending_turn()
 
 
 def _tracker_sink(tracker: TurnTracker | None) -> _Sink:
@@ -422,6 +536,10 @@ async def shutdown_session(
     is closed here because the plugin will not: it was handed the client, so it
     sets `_owns_client = False`.
     """
+    # Before the drain, or a brief scheduled by the last turn is never awaited.
+    # Idempotent with `AmbassadorAgent.on_exit`, which fires first when the
+    # session closes cleanly; this covers a shutdown that skips it.
+    agent.finalise_pending_turn()
     await agent.brief_extractor.drain()
     await agent.brief_extractor.aclose()
     if stt_node is not None:
@@ -481,18 +599,21 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @session.on("speech_created")
     def _on_speech_created(ev: SpeechCreatedEvent) -> None:
-        # The handle carries the framework's interruption state; the turn seal
-        # below reads it so barge-in marks the last chunk incomplete.
+        # The handle carries the framework's interruption state and its own
+        # completion. `finish_turn` parks the turn against it and the audit is
+        # sealed from the handle's done callback, not from this event.
         agent.note_speech_handle(ev.speech_handle)
 
     @session.on("agent_state_changed")
     def _on_state(ev: AgentStateChangedEvent) -> None:
-        # "listening" is the framework's own end-of-turn signal, and the only
-        # one that survives a tool call: a running tool holds the agent in
-        # "thinking", so one buyer utterance still yields exactly one
+        # "listening" is the framework's own end-of-conversation-turn signal,
+        # and the only one that survives a tool call: a running tool holds the
+        # agent in "thinking", so one buyer utterance still yields exactly one
         # TurnRecord even when the turn spans two generations. Sealing on
         # `conversation_item_added` instead splits a tool-using turn in two.
-        # The handler stays synchronous and cheap - it only schedules.
+        # It is NOT end-of-audio, though - a false interruption passes through
+        # here mid-speech - so `finish_turn` only parks the turn. The handler
+        # stays synchronous and cheap.
         if ev.new_state == "listening":
             agent.finish_turn(session.history)
 

@@ -4,7 +4,12 @@ Two separate claims are under test here, and they pull in opposite directions,
 which is why they are asserted together:
 
   redaction   docs/02- and docs/03- say PII never lands in an emitted or
-              durable stream. The in-memory `TurnRecord` still has to carry the
+              durable stream, and the rule the adapter applies is wider than
+              "PII": any free-text field that can carry model-spoken or
+              buyer-derived content goes, because the prompt has the model read
+              the buyer's budget back and that number then travels through the
+              agent's own sentence, the validator's detail and the tool
+              arguments. The in-memory `TurnRecord` still has to carry the
               buyer's exact words, because the ambassador view and the audit
               are built on them. So the assertions are made on BOTH sides: the
               text is absent from the emitted line and present in the record.
@@ -24,6 +29,7 @@ from io import StringIO
 from pathlib import Path
 
 from adapter.events import EventLog, TurnTracker
+from ambassador.schemas import ExtractedFigure, GuardrailViolation
 
 UTTERANCE = "My budget is about two million and I am buying from Mumbai"
 
@@ -109,20 +115,38 @@ def test_brief_events_emit_only_the_non_pii_fields():
         assert leaked not in buf.getvalue()
 
 
-def test_a_rejected_brief_does_not_leak_through_its_raw_text():
+def test_a_rejected_brief_does_not_leak_through_its_raw_text_or_its_error():
     """`brief_invalid` carries the model's attempted brief verbatim, so it
-    carries the same fields the accepted one would have."""
+    carries the same fields the accepted one would have - and a pydantic
+    validation message quotes the offending input value back inside itself."""
     log, buf = make_log(verbose=False)
-    log.emit("brief_invalid", turn=1, attempt="first", error="bad", raw=json.dumps(BRIEF))
+    log.emit(
+        "brief_invalid",
+        turn=1,
+        attempt="first",
+        error="budget.amount: input should be a valid number [input_value='two million']",
+        raw=json.dumps(BRIEF),
+    )
     log.close()
 
-    assert lines(buf)[0]["raw"] == "[redacted]"
+    emitted = lines(buf)[0]
+    assert emitted["raw"] == "[redacted]"
+    assert emitted["error"] == "[redacted]"
+    # The attempt number says which retry failed without saying what it said.
+    assert emitted["attempt"] == "first"
     assert "Mumbai" not in buf.getvalue()
+    assert "two million" not in buf.getvalue()
 
 
-def test_guardrail_decisions_keep_their_figures():
-    """Figures are inventory data, not PII, and the whole claim of the audit
-    trail is that you can see which figure was inspected."""
+def test_guardrail_decisions_emit_their_telemetry_and_redact_their_text():
+    """A guardrail line proves a sentence was inspected without reprinting it.
+
+    The figures used to be emitted on the theory that they are inventory data.
+    They are not, reliably: the prompt has the model read the buyer's budget
+    back for confirmation, so a buyer-stated amount lands in the sentence, in
+    the spoken form of it, and in the validator's account of both. What the
+    audit needs is the decision, and the decision is enumerated.
+    """
     log, buf = make_log(verbose=False)
     tracker = make_tracker(log)
     tracker.record_guardrail(
@@ -134,14 +158,126 @@ def test_guardrail_decisions_keep_their_figures():
     log.close()
 
     emitted = lines(buf)[0]
-    assert emitted["raw"] == "A studio is AED 985,000."
-    assert "985,000" in buf.getvalue()
+    # The decision survives in full.
+    assert emitted["outcome"] == "pass"
+    assert emitted["mode"] == "enforce"
+    assert emitted["turn"] == 1
+    assert emitted["sentence_index"] == 0
+    assert emitted["ms"] == 0.4
+    assert emitted["validator"] is None
+    # The sentence does not.
+    assert emitted["raw"] == "[redacted]"
+    assert emitted["spoken"] == "[redacted]"
+    assert "985,000" not in buf.getvalue()
+    assert "eighty-five thousand" not in buf.getvalue()
+    # In memory, the full sentence is still there for the audit and the UI.
+    assert tracker.generated_sentences == ["A studio is AED 985,000."]
+    assert tracker.spoken_chunks[0].text.startswith("A studio is nine hundred")
 
 
-def test_timings_tools_and_usage_are_emitted_unchanged():
+def test_a_violation_detail_quoting_an_amount_never_reaches_the_emitted_line():
+    """The detail and the figures list are the validator's account of the
+    sentence, and they name the figure it objected to - which, on the budget
+    read-back path, is the buyer's own number."""
     log, buf = make_log(verbose=False)
     tracker = make_tracker(log)
+    violation = GuardrailViolation(
+        validator="numeric_claims",
+        detail="AED 2,000,000 does not appear in the inventory",
+        figures=[ExtractedFigure(surface="AED 2,000,000", value=2000000.0, kind="amount")],
+    )
+    tracker.record_guardrail(
+        raw="Your two million budget covers a two bedroom.",
+        outcome="violation_blocked",
+        guardrail_ms=0.6,
+        spoken=None,
+        violation=violation,
+    )
+    log.close()
+
+    emitted = lines(buf)[0]
+    assert emitted["outcome"] == "violation_blocked"
+    # The validator NAME is enumerated telemetry and stays.
+    assert emitted["validator"] == "numeric_claims"
+    assert emitted["detail"] == "[redacted]"
+    assert emitted["figures"] == "[redacted]"
+    # A sentence that was blocked was never spoken; that stays a null, not a
+    # "[redacted]" that would imply speech.
+    assert emitted["spoken"] is None
+    for leaked in ("2,000,000", "2000000", "two million"):
+        assert leaked not in buf.getvalue()
+    # The in-memory record keeps the whole violation.
+    assert tracker.violations[0].detail == "AED 2,000,000 does not appear in the inventory"
+    assert tracker.violations[0].figures[0].value == 2000000.0
+
+
+def test_tool_calls_emit_the_name_and_redact_the_argument_values():
+    """Which tool fired and when is the hook-2 claim. The arguments are model
+    free text: `reason` paraphrases what the buyer said, `slot` is explicitly
+    "the slot in the buyer's own words"."""
+    log, buf = make_log(verbose=False)
+    tracker = make_tracker(log)
+    tracker.record_tool("escalate_to_human", reason="buyer is angry about the Mumbai handover")
+    tracker.record_tool("offer_booking", slot="Saturday after my flight from Mumbai")
+    log.close()
+
+    calls = [line_ for line_ in lines(buf) if line_["event"] == "tool_call"]
+    assert [c["tool"] for c in calls] == ["escalate_to_human", "offer_booking"]
+    assert [c["turn"] for c in calls] == [1, 1]
+    # The keys are enumerable telemetry; the values are not.
+    assert calls[0]["args"] == {"reason": "[redacted]"}
+    assert calls[1]["args"] == {"slot": "[redacted]"}
+    assert "Mumbai" not in buf.getvalue()
+    assert tracker.actions == ["escalate_to_human", "offer_booking"]
+
+
+def test_the_escalation_reason_and_the_booking_slot_are_redacted():
+    """Both events carry a separate copy of the same tool argument, so
+    redacting only `tool_call` would leave the leak intact one line down."""
+    log, buf = make_log(verbose=False)
+    log.emit(
+        "escalation",
+        reason="buyer is distressed about the Mumbai handover date",
+        routed_to="human_ambassador",
+    )
+    log.emit("booking_offered", slot="Saturday after my flight from Mumbai")
+    log.close()
+
+    by_event = {line_["event"]: line_ for line_ in lines(buf)}
+    assert by_event["escalation"]["reason"] == "[redacted]"
+    # Where it was routed is enumerated: it is the proof a human was notified.
+    assert by_event["escalation"]["routed_to"] == "human_ambassador"
+    assert by_event["booking_offered"]["slot"] == "[redacted]"
+    assert "Mumbai" not in buf.getvalue()
+
+
+def test_verbose_restores_the_guardrail_escalation_and_booking_text():
+    """The dev-only escape hatch is the only way to see any of it on stdout."""
+    log, buf = make_log(verbose=True)
+    tracker = make_tracker(log)
+    tracker.record_guardrail(
+        raw="A studio is AED 985,000.",
+        outcome="pass",
+        guardrail_ms=0.4,
+        spoken="A studio is nine hundred and eighty-five thousand dirhams.",
+    )
     tracker.record_tool("escalate_to_human", reason="asked for a person")
+    log.emit("escalation", reason="asked for a person", routed_to="human_ambassador")
+    log.emit("booking_offered", slot="Saturday after my flight")
+    log.close()
+
+    by_event = {line_["event"]: line_ for line_ in lines(buf)}
+    assert by_event["guardrail"]["raw"] == "A studio is AED 985,000."
+    assert by_event["guardrail"]["spoken"].startswith("A studio is nine hundred")
+    assert by_event["tool_call"]["args"] == {"reason": "asked for a person"}
+    assert by_event["escalation"]["reason"] == "asked for a person"
+    assert by_event["booking_offered"]["slot"] == "Saturday after my flight"
+
+
+def test_timings_and_usage_are_emitted_unchanged():
+    """Numeric telemetry is the half of the stream that is meant to be read."""
+    log, buf = make_log(verbose=False)
+    tracker = make_tracker(log)
     tracker.record_usage(
         prompt_tokens=100, completion_tokens=20, reasoning_tokens=0, cached_tokens=64
     )
@@ -149,10 +285,50 @@ def test_timings_tools_and_usage_are_emitted_unchanged():
     log.close()
 
     by_event = {line_["event"]: line_ for line_ in lines(buf)}
-    assert by_event["tool_call"]["tool"] == "escalate_to_human"
     assert by_event["llm_usage"]["thinking_off"] is True
     assert by_event["llm_usage"]["cached_tokens"] == 64
+    assert by_event["llm_usage"]["prompt_tokens"] == 100
+    assert by_event["llm_usage"]["completion_tokens"] == 20
     assert by_event["llm_ttft"]["ms"] is not None
+    assert by_event["llm_ttft"]["model"] == "qwen/qwen3.7-flash"
+
+
+def test_a_regeneration_reason_is_the_violation_detail_and_is_redacted():
+    """`regeneration.reason` is the same string as `guardrail.detail`, handed
+    to the retry instruction. Redacting one and not the other closes nothing."""
+    log, buf = make_log(verbose=False)
+    tracker = make_tracker(log)
+    tracker.record_regeneration("AED 2,000,000 does not appear in the inventory")
+    log.close()
+
+    assert lines(buf)[0]["reason"] == "[redacted]"
+    assert "2,000,000" not in buf.getvalue()
+    assert tracker.regenerated is True
+
+
+def test_every_event_the_adapter_emits_is_classified():
+    """The table is the whole defence, so a new event type with a free-text
+    field and no entry has to be a visible failure rather than a silent leak.
+
+    This asserts the inventory of event names, not the fields: adding an event
+    forces a decision here about which half of the rule it falls under.
+    """
+    from adapter.events import _REDACTED_FIELDS
+
+    redacted = set(_REDACTED_FIELDS)
+    # Classified as carrying free text.
+    assert redacted == {
+        "user_turn",
+        "brief_invalid",
+        "guardrail",
+        "regeneration",
+        "tool_call",
+        "escalation",
+        "booking_offered",
+    }
+    # Classified as safe, each for a reason recorded next to the table.
+    for event in ("bridge", "fallback", "llm_failure", "llm_usage", "turn_complete"):
+        assert event not in redacted
 
 
 # --- the dev-only escape hatch -------------------------------------------

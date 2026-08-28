@@ -19,10 +19,13 @@ measurement and a zero-latency stage must not look the same on the meter.
 Two properties of the emitted stream are load-bearing and easy to lose:
 
   redaction   the in-memory `TurnRecord` keeps full fidelity because the
-              ambassador view and the audit need it, but the stdout stream and
-              the optional file sink are the parts that leave the process, so
-              they carry no buyer utterance text and no PII-bearing brief
-              fields (docs/02-, docs/03- validator 4).
+              ambassador view and the audit need it, and the demo UI reads
+              in-process state rather than stdout. The stdout stream and the
+              optional file sink are the parts that leave the process, so they
+              carry no free text at all: no buyer utterance, no model
+              sentence, no tool argument, no validator detail (docs/02-,
+              docs/03- validator 4). One table decides this, `_REDACTED_FIELDS`
+              below, and the rule is stated above it.
   no blocking every emit lands on the hot path - two of them are the TTFT and
               TTS-first-audio marks - so a write is queued to a single writer
               task rather than performed inline.
@@ -94,22 +97,84 @@ def _redact_brief(brief: Any) -> Any:
     return out
 
 
-def redact_event(record: dict[str, Any]) -> dict[str, Any]:
-    """The emitted view of one event record.
+# --- the redaction table --------------------------------------------------
+#
+# THE RULE. Any free-text field that can carry model-spoken or buyer-derived
+# content is redacted by default: what the buyer said, what the model wrote, a
+# model paraphrase of either, or a validator detail that quotes the text back.
+# Enumerated and numeric telemetry is not redacted: timings, outcomes, counts,
+# event names, tool names, validator names, token usage, booleans. None of
+# that can carry a sentence.
+#
+# The trap this table exists to close is that "it is only the agent's own
+# words" is not a reason to emit something. The system prompt has the model
+# read the buyer's budget back for confirmation, so a buyer-stated amount
+# routinely appears inside an agent sentence, inside the validator detail that
+# objects to it, and inside the figures list that names it.
+#
+# When a new event type is added, classify its fields here. A new free-text
+# field with no entry in this table is a leak.
+#
+# Deliberately NOT redacted, and why:
+#   bridge.text / fallback.text  fixed composed copy from interception.py's
+#       BRIDGE_COPY and FALLBACK_COPY. Never model-generated, never
+#       buyer-derived, and showing which designed line was spoken is the whole
+#       point of the event.
+#   guardrail.validator          the validator's name, an enum in practice.
+#   llm_failure.detail           the transport exception, no conversation in it.
+#   brief / brief_fallback       a record with both kinds of field in it, so it
+#       is filtered field by field by `_redact_brief` instead.
+_REDACTED_FIELDS: Final[dict[str, tuple[str, ...]]] = {
+    "user_turn": ("text",),
+    # `raw` is the model's attempted brief; the validation `error` quotes the
+    # offending input value back inside its own message.
+    "brief_invalid": ("raw", "error"),
+    # `raw` is the model's sentence and `spoken` is what TTS was handed.
+    # `detail` and `figures` are the validator's account of that same sentence
+    # and name the figure it objected to, which is routinely the buyer's.
+    "guardrail": ("raw", "spoken", "detail", "figures"),
+    # The same violation detail, on its way into the retry instruction.
+    "regeneration": ("reason",),
+    # Tool arguments are model free text. The tool NAME stays: which tool fired
+    # and when is the hook-2 claim, and a name cannot carry an utterance.
+    "tool_call": ("args",),
+    # A model paraphrase of what the buyer complained about.
+    "escalation": ("reason",),
+    # "The slot in the buyer's own words", by the tool's own docstring.
+    "booking_offered": ("slot",),
+}
 
-    Guardrail decisions keep their figures: those are inventory data, and the
-    whole claim of the audit trail is that you can see which figure was
-    inspected. What goes is anything the buyer said or revealed.
+
+def _redact_value(value: Any) -> Any:
+    """Keep the shape, drop the content.
+
+    A mapping keeps its keys: which arguments a tool was called with is
+    enumerable telemetry, what was in them is not.
+    """
+    if isinstance(value, dict):
+        return {key: REDACTED for key in value}
+    return REDACTED
+
+
+def redact_event(record: dict[str, Any]) -> dict[str, Any]:
+    """The emitted view of one event record, per `_REDACTED_FIELDS`.
+
+    A field that is absent or None is left alone. `spoken: null` on a blocked
+    sentence is a fact about the turn rather than content, and rewriting it to
+    "[redacted]" would report a sentence that was never spoken.
     """
     event = record.get("event")
-    if event == "user_turn":
-        return {**record, "text": REDACTED}
     if event in ("brief", "brief_fallback"):
         return {**record, "brief": _redact_brief(record.get("brief"))}
-    if event == "brief_invalid":
-        # `raw` is the model's attempted brief, so it carries the same fields.
-        return {**record, "raw": REDACTED}
-    return record
+    fields = _REDACTED_FIELDS.get(event) if isinstance(event, str) else None
+    if not fields:
+        return record
+    out = dict(record)
+    for field in fields:
+        if out.get(field) is None:
+            continue
+        out[field] = _redact_value(out[field])
+    return out
 
 
 class EventLog:
@@ -468,7 +533,15 @@ class TurnTracker:
 
     # -- seal -------------------------------------------------------------
 
-    def finish(self) -> TurnRecord:
+    def finish(self, *, audit_incomplete: bool = False) -> TurnRecord:
+        """Seal the turn.
+
+        `audit_incomplete` says the turn's speech handle never resolved - a
+        session torn down mid-speech - so whether the last chunk finished
+        playing is unknown rather than known-good. The audit says so on the
+        emitted line instead of guessing, the same way a missing timing stays
+        None rather than defaulting to zero.
+        """
         total = self.elapsed()
         record = TurnRecord(
             session_id=self._log.session_id,
@@ -504,5 +577,6 @@ class TurnTracker:
             regenerated=self.regenerated,
             actions=self.actions,
             reasoning_tokens=self.reasoning_tokens,
+            audit_incomplete=audit_incomplete,
         )
         return record

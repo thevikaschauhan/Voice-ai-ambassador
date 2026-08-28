@@ -15,11 +15,14 @@ pieces where a defect is invisible until a demo:
                      not at all.
   honest audit       barge-in has to mark the interrupted chunk incomplete, or
                      the Ships table's "what the buyer actually heard" claim is
-                     false.
+                     false - and the framework only settles that question when
+                     the SpeechHandle resolves, well after the agent has gone
+                     back to "listening". See the barge-in section below.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -336,36 +339,158 @@ async def test_the_shutdown_path_drains_the_event_log():
 
 
 # --- finding 7: barge-in marks the chunk incomplete -----------------------
+#
+# The ordering in these tests is the real one, and it is the opposite of the
+# obvious one. livekit-agents 1.7.0 defaults to resume_false_interruption=True
+# with a 2.0s false_interruption_timeout (voice/turn.py
+# `_INTERRUPTION_DEFAULTS`). Under those defaults a VAD barge-in takes the
+# pause branch of `_interrupt_by_audio_activity` (voice/agent_activity.py):
+# audio_output.pause(), then _update_agent_state("listening"), and NOTHING
+# touches the speech handle. `interrupt()` lands later, from
+# `_cancel_speech_pause(interrupt=True)`, and only when the interruption is
+# confirmed; a false interruption resumes playout and the handle completes
+# uninterrupted instead.
+#
+# So "listening" arrives while `handle.interrupted` is still False on every
+# real barge-in. Each test below therefore fires finish_turn FIRST and resolves
+# the handle afterwards, which is the sequence the framework actually produces.
 
 
-async def test_barge_in_marks_the_last_spoken_chunk_incomplete():
+async def settle() -> None:
+    """Let the handle's done callback run: `Future.add_done_callback` schedules
+    through `call_soon`, so the seal lands on the next loop iteration."""
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+
+async def test_a_barge_in_confirmed_after_listening_still_marks_the_chunk():
+    """The refuted ordering: seal-time `handle.interrupted` is False here, and
+    a turn sealed at the state change would record the chunk as complete."""
     agent, log, _, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
     ctx = user_ctx()
     await run_llm_node(agent, ctx)
 
     handle = SpeechHandle.create()
     agent.note_speech_handle(handle)
-    handle.interrupt()
-    handle._mark_done()  # the framework does this once playout unwinds
 
+    # The pause branch: "listening" while the handle is untouched.
+    assert handle.interrupted is False
     agent.finish_turn(ctx)
+    assert log.turns == []  # nothing sealed yet, and that is the fix
 
+    # The interruption is confirmed and playout unwinds.
+    handle.interrupt()
+    handle._mark_done()
+    await settle()
+
+    assert len(log.turns) == 1
     record = log.turns[0]
     assert record.spoken_chunks
     assert record.spoken_chunks[-1].completed is False
 
 
-async def test_an_uninterrupted_turn_keeps_its_chunks_complete():
+async def test_a_false_interruption_that_resumes_audits_as_completed():
+    """The mirror case, and the reason the audit may not simply assume the
+    worst at "listening": the pause resolves into a resume and the handle
+    completes uninterrupted, so the buyer did hear the whole chunk."""
     agent, log, _, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
     ctx = user_ctx()
     await run_llm_node(agent, ctx)
 
     handle = SpeechHandle.create()
     agent.note_speech_handle(handle)
-    handle._mark_done()
-
     agent.finish_turn(ctx)
+    assert log.turns == []
 
+    # false_interruption_timeout elapses, audio_output.resume(), playout ends.
+    handle._mark_done()
+    await settle()
+
+    assert len(log.turns) == 1
+    assert log.turns[0].spoken_chunks
+    assert all(c.completed for c in log.turns[0].spoken_chunks)
+
+
+async def test_a_handle_that_never_resolves_is_audited_as_incomplete():
+    """Session teardown mid-speech. The handle will never call back, so the
+    turn is sealed on what is known and flagged rather than guessed at."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    ctx = user_ctx()
+    await run_llm_node(agent, ctx)
+
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(ctx)
+    assert log.turns == []
+
+    built = build_llm(make_settings(), agent.note_usage)
+    await shutdown_session(agent=agent, log=log, llm=built, stt_node=None)
+
+    assert len(log.turns) == 1
+    events = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+    complete = [e for e in events if e["event"] == "turn_complete"]
+    assert len(complete) == 1
+    assert complete[0]["audit_incomplete"] is True
+
+
+async def test_a_turn_whose_handle_resolved_is_not_flagged_incomplete():
+    """The negative control for the marker: a handle that resolved before
+    teardown produces a complete audit, so the flag means what it says."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    ctx = user_ctx()
+    await run_llm_node(agent, ctx)
+
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(ctx)
+    handle._mark_done()
+    await settle()
+
+    built = build_llm(make_settings(), agent.note_usage)
+    await shutdown_session(agent=agent, log=log, llm=built, stt_node=None)
+
+    events = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+    complete = [e for e in events if e["event"] == "turn_complete"]
+    assert len(complete) == 1
+    assert complete[0]["audit_incomplete"] is False
+
+
+async def test_the_agents_own_exit_hook_seals_a_pending_turn():
+    """`AgentSession.aclose` drains the activity and awaits `on_exit`, so a
+    session closed without the adapter's own shutdown path still books the
+    turn. The spike drives the session directly and relies on this."""
+    agent, log, _, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    ctx = user_ctx()
+    await run_llm_node(agent, ctx)
+
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(ctx)
+    assert log.turns == []
+
+    await agent.on_exit()
+
+    assert len(log.turns) == 1
+    await log.aclose()
+
+
+async def test_a_false_interruption_passing_through_listening_twice_seals_once():
+    """Pause, "listening", resume, then "listening" again when playout really
+    ends. One buyer utterance is still exactly one TurnRecord."""
+    agent, log, _, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    ctx = user_ctx()
+    await run_llm_node(agent, ctx)
+
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(ctx)  # the pause branch
+    agent.finish_turn(ctx)  # the real end of the turn, after the resume
+    assert log.turns == []
+
+    handle._mark_done()
+    await settle()
+
+    assert len(log.turns) == 1
     assert all(c.completed for c in log.turns[0].spoken_chunks)
 
 
@@ -381,12 +506,47 @@ async def test_an_interruption_does_not_leak_into_the_next_turn():
     await run_llm_node(agent, ctx)
     interrupted = SpeechHandle.create()
     agent.note_speech_handle(interrupted)
+    agent.finish_turn(ctx)
     interrupted.interrupt()
     interrupted._mark_done()
-    agent.finish_turn(ctx)
+    await settle()
 
     await run_llm_node(agent, ctx)
+    clean = SpeechHandle.create()
+    agent.note_speech_handle(clean)
     agent.finish_turn(ctx)
+    clean._mark_done()
+    await settle()
 
+    assert len(log.turns) == 2
     assert log.turns[0].spoken_chunks[-1].completed is False
     assert all(c.completed for c in log.turns[1].spoken_chunks)
+
+
+async def test_a_new_turn_does_not_strand_an_unresolved_previous_one():
+    """A handle that never resolves must not park its turn forever and swallow
+    the next one. The stranded turn is sealed, and flagged as incomplete."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"A studio is AED {GROUNDED}. "]),
+            HealthyStream([f"A studio is AED {GROUNDED}. "]),
+        ]
+    )
+    ctx = user_ctx()
+
+    await run_llm_node(agent, ctx)
+    stranded = SpeechHandle.create()
+    agent.note_speech_handle(stranded)
+    agent.finish_turn(ctx)  # never resolves
+
+    await run_llm_node(agent, ctx)
+    second = SpeechHandle.create()
+    agent.note_speech_handle(second)
+    agent.finish_turn(ctx)
+    second._mark_done()
+    await settle()
+
+    assert [t.turn_index for t in log.turns] == [1, 2]
+    events = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+    flags = [e["audit_incomplete"] for e in events if e["event"] == "turn_complete"]
+    assert flags == [True, False]
