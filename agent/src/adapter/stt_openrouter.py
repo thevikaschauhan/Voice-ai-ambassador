@@ -29,6 +29,7 @@ import wave
 from dataclasses import dataclass
 
 import httpx
+import numpy as np
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
@@ -49,7 +50,16 @@ logger = logging.getLogger("ambassador.stt")
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 TRANSCRIPTIONS_PATH = "/audio/transcriptions"
-AUDIO_FORMAT = "wav"
+# Measured 2026-08-29, one 4-second utterance, six warm calls each, same
+# transcript from every shape: WAV 16k = 174KB base64, p50 1035ms; WAV 8k =
+# 84KB, p50 732ms; MP3 32kbps = 21KB, p50 578ms. The upload was most of the
+# latency, not the model, and latency is near-flat in utterance length
+# (~520-820ms from 1.5s to 9.7s of audio), so the payload is the lever. MP3 it
+# is. No new dependency: PyAV ships with livekit-agents and carries libmp3lame.
+# 32kbps mono is well above what speech recognition needs and the transcript is
+# byte-identical to the uncompressed original.
+AUDIO_FORMAT = "mp3"
+MP3_BITRATE = 32_000
 
 
 @dataclass(frozen=True)
@@ -63,8 +73,10 @@ class _Options:
 def frames_to_wav_bytes(buffer: AudioBuffer) -> bytes:
     """One VAD-segmented utterance as a self-contained WAV container.
 
-    OpenRouter needs a format it can decode standalone, and the framework hands
-    us raw PCM frames, so the header has to be written here.
+    The fallback when MP3 encoding is unavailable, and the reference the
+    encoder is tested against. OpenRouter needs a format it can decode
+    standalone, and the framework hands us raw PCM frames, so the header has to
+    be written here.
     """
     frame = rtc.combine_audio_frames(buffer)
     out = io.BytesIO()
@@ -76,8 +88,52 @@ def frames_to_wav_bytes(buffer: AudioBuffer) -> bytes:
     return out.getvalue()
 
 
+def frames_to_mp3_bytes(buffer: AudioBuffer) -> bytes:
+    """The same utterance as MP3, roughly an eighth of the bytes.
+
+    Raises RuntimeError if PyAV or libmp3lame is unavailable, so the caller can
+    fall back to WAV rather than dropping the turn: a slower transcription is
+    recoverable, a missing one is a silent turn.
+    """
+    import av  # PyAV, already present via livekit-agents
+
+    frame = rtc.combine_audio_frames(buffer)
+    layout = "mono" if frame.num_channels == 1 else "stereo"
+    out = io.BytesIO()
+    try:
+        with av.open(out, mode="w", format="mp3") as container:
+            stream = container.add_stream("libmp3lame", rate=frame.sample_rate)
+            stream.bit_rate = MP3_BITRATE
+            source = av.AudioFrame.from_ndarray(
+                np.frombuffer(frame.data, dtype=np.int16).reshape(1, -1),
+                format="s16",
+                layout=layout,
+            )
+            source.sample_rate = frame.sample_rate
+            for packet in stream.encode(source):
+                container.mux(packet)
+            for packet in stream.encode(None):
+                container.mux(packet)
+    except Exception as exc:  # codec missing, unusual sample rate, PyAV change
+        raise RuntimeError(f"mp3 encoding unavailable: {exc}") from exc
+    return out.getvalue()
+
+
+def encode_utterance(buffer: AudioBuffer) -> tuple[bytes, str]:
+    """Encoded audio plus the format label OpenRouter should be told.
+
+    MP3 when it works, WAV when it does not. The format label travels with the
+    bytes so the two can never disagree on the wire.
+    """
+    try:
+        return frames_to_mp3_bytes(buffer), AUDIO_FORMAT
+    except RuntimeError as exc:
+        logger.warning("falling back to wav for this utterance: %s", exc)
+        return frames_to_wav_bytes(buffer), "wav"
+
+
 def build_request_body(
-    *, model: str, wav_bytes: bytes, language: str
+    *, model: str, audio_bytes: bytes, language: str, audio_format: str = AUDIO_FORMAT
 ) -> dict[str, object]:
     """The exact JSON OpenRouter's transcription endpoint expects.
 
@@ -87,8 +143,8 @@ def build_request_body(
     return {
         "model": model,
         "input_audio": {
-            "data": base64.b64encode(wav_bytes).decode("ascii"),
-            "format": AUDIO_FORMAT,
+            "data": base64.b64encode(audio_bytes).decode("ascii"),
+            "format": audio_format,
         },
         "language": language,
     }
@@ -143,10 +199,12 @@ class OpenRouterSTT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         lang = language if isinstance(language, str) and language else self._opts.language
+        audio_bytes, audio_format = encode_utterance(buffer)
         body = build_request_body(
             model=self._opts.model,
-            wav_bytes=frames_to_wav_bytes(buffer),
+            audio_bytes=audio_bytes,
             language=lang,
+            audio_format=audio_format,
         )
         url = self._opts.base_url.rstrip("/") + TRANSCRIPTIONS_PATH
 

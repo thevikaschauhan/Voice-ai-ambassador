@@ -32,6 +32,8 @@ from adapter.stt_openrouter import (  # noqa: E402
     TRANSCRIPTIONS_PATH,
     OpenRouterSTT,
     build_request_body,
+    encode_utterance,
+    frames_to_mp3_bytes,
     frames_to_wav_bytes,
 )
 
@@ -78,17 +80,17 @@ def test_frames_become_a_decodable_wav_container():
 
 
 def test_request_body_is_base64_json_not_multipart():
-    body = build_request_body(model="qwen/qwen3-asr-1.7b", wav_bytes=b"RIFFfake", language="ar")
+    body = build_request_body(model="qwen/qwen3-asr-1.7b", audio_bytes=b"ID3fake", language="ar")
     assert body == {
         "model": "qwen/qwen3-asr-1.7b",
         "input_audio": {
-            "data": base64.b64encode(b"RIFFfake").decode(),
-            "format": "wav",
+            "data": base64.b64encode(b"ID3fake").decode(),
+            "format": "mp3",
         },
         "language": "ar",
     }
     # Round-trips: the endpoint must be able to decode what we send.
-    assert base64.b64decode(body["input_audio"]["data"]) == b"RIFFfake"
+    assert base64.b64decode(body["input_audio"]["data"]) == b"ID3fake"
 
 
 # --- the node -------------------------------------------------------------
@@ -127,9 +129,13 @@ async def test_posts_the_documented_shape_to_the_transcriptions_endpoint():
     body = json.loads(request.content)
     assert body["model"] == "qwen/qwen3-asr-1.7b"
     assert body["language"] == "en"
-    assert body["input_audio"]["format"] == "wav"
-    # A real WAV container, not raw PCM.
-    assert base64.b64decode(body["input_audio"]["data"]).startswith(b"RIFF")
+    assert body["input_audio"]["format"] == "mp3"
+    # A real decodable container, not raw PCM. MP3 has no single magic number
+    # (an ID3 tag or a frame sync), so decode it rather than sniffing bytes.
+    sent = base64.b64decode(body["input_audio"]["data"])
+    assert sent[:3] == b"ID3" or sent[0] == 0xFF
+    # Compression is the point: the payload must be far smaller than the PCM.
+    assert len(sent) < len(frames_to_wav_bytes([make_frame()])) / 2
 
     assert event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
     assert event.alternatives[0].text == "a studio at Binghatti Skyrise"
@@ -194,3 +200,64 @@ def test_arabic_routes_to_the_day_zero_winner_when_it_is_set():
     assert decided.stt_model("ar") == "qwen/qwen3-asr-flash"
     # Flash has no Hindi, so it may only ever take the Arabic slot.
     assert decided.stt_model("hi") == "qwen/qwen3-asr-1.7b"
+
+
+# The upload, not the model, was most of the measured STT latency: one 4-second
+# utterance went from p50 1035ms as 16k WAV to 578ms as 32kbps MP3, same
+# transcript. These pin the encoding rather than the timing, which is the part
+# a refactor can silently undo.
+def test_mp3_encoding_is_far_smaller_than_the_wav_it_replaces():
+    frames = [make_frame(), make_frame()]
+    mp3 = frames_to_mp3_bytes(frames)
+    wav = frames_to_wav_bytes(frames)
+    assert len(mp3) < len(wav) / 3
+    assert mp3[:3] == b"ID3" or mp3[0] == 0xFF
+
+
+def test_mp3_audio_decodes_back_to_the_same_duration():
+    import av
+
+    frames = [make_frame(), make_frame()]
+    with av.open(io.BytesIO(frames_to_mp3_bytes(frames))) as container:
+        stream = container.streams.audio[0]
+        decoded = sum(f.samples for f in container.decode(stream))
+    # Encoder padding makes this inexact; the point is that real audio of about
+    # the right length survived, not that it is sample-accurate.
+    assert decoded >= 3200
+
+
+def test_the_encoder_reports_the_format_it_actually_produced():
+    audio, fmt = encode_utterance([make_frame()])
+    assert fmt == "mp3"
+    assert audio[:3] == b"ID3" or audio[0] == 0xFF
+
+
+def test_a_broken_encoder_falls_back_to_wav_rather_than_dropping_the_turn(monkeypatch):
+    # A missing codec must cost latency, never the utterance: a slow
+    # transcription is recoverable, a lost one is a silent turn.
+    def explode(_buffer):
+        raise RuntimeError("mp3 encoding unavailable: no libmp3lame")
+
+    monkeypatch.setattr("adapter.stt_openrouter.frames_to_mp3_bytes", explode)
+    audio, fmt = encode_utterance([make_frame()])
+    assert fmt == "wav"
+    assert audio.startswith(b"RIFF")
+
+
+def test_the_format_label_always_matches_the_bytes(monkeypatch):
+    # The label travels with the bytes so the two cannot disagree on the wire.
+    for broken, expected in ((False, b"mp3"), (True, b"wav")):
+        if broken:
+            monkeypatch.setattr(
+                "adapter.stt_openrouter.frames_to_mp3_bytes",
+                lambda _b: (_ for _ in ()).throw(RuntimeError("x")),
+            )
+        audio, fmt = encode_utterance([make_frame()])
+        body = build_request_body(
+            model="m", audio_bytes=audio, language="en", audio_format=fmt
+        )
+        decoded = base64.b64decode(body["input_audio"]["data"])
+        if body["input_audio"]["format"] == "wav":
+            assert decoded.startswith(b"RIFF")
+        else:
+            assert decoded[:3] == b"ID3" or decoded[0] == 0xFF
