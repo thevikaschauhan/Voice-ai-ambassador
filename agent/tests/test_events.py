@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from io import StringIO
 from pathlib import Path
 
@@ -306,29 +307,138 @@ def test_a_regeneration_reason_is_the_violation_detail_and_is_redacted():
     assert tracker.regenerated is True
 
 
-def test_every_event_the_adapter_emits_is_classified():
-    """The table is the whole defence, so a new event type with a free-text
-    field and no entry has to be a visible failure rather than a silent leak.
+def emitted_event_names() -> dict[str, set[str]]:
+    """Every event name the adapter emits, read out of the adapter's source.
 
-    This asserts the inventory of event names, not the fields: adding an event
-    forces a decision here about which half of the rule it falls under.
+    Deliberately a regex over the source files rather than a hand-kept list.
+    The previous version of this test compared two hand-maintained lists and
+    agreed with itself while missing twelve live event types, which is the
+    failure mode a hand-kept list always has: it is written once, by the same
+    person who wrote the thing it is supposed to audit.
+
+    Two shapes are matched. `.emit("x"` and `_on_event("x"` cover the call
+    sites; `"event": "x"` covers `_report_backpressure`, which writes its line
+    straight to the sink and never passes through `emit`.
     """
-    from adapter.events import _REDACTED_FIELDS
+    call_site = re.compile(r"""(?:\.emit|_on_event)\(\s*["']([a-z_][a-z0-9_]*)["']""")
+    literal = re.compile(r"""["']event["']\s*:\s*["']([a-z_][a-z0-9_]*)["']""")
 
-    redacted = set(_REDACTED_FIELDS)
-    # Classified as carrying free text.
-    assert redacted == {
-        "user_turn",
-        "brief_invalid",
-        "guardrail",
-        "regeneration",
-        "tool_call",
-        "escalation",
-        "booking_offered",
+    adapter = Path(__file__).resolve().parents[1] / "src" / "adapter"
+    found: dict[str, set[str]] = {}
+    for path in sorted(adapter.glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        for match in (*call_site.finditer(source), *literal.finditer(source)):
+            found.setdefault(match.group(1), set()).add(path.name)
+    return found
+
+
+def test_the_event_name_discovery_actually_finds_the_call_sites():
+    """A discovery test that discovers nothing passes everything. This is the
+    floor that stops a refactor of the emit call sites from quietly turning the
+    exhaustiveness check below into a no-op."""
+    found = emitted_event_names()
+    assert len(found) >= 25, f"discovery found only {sorted(found)}"
+    # One from each source file, and one that only the literal pattern reaches.
+    assert "user_turn" in found and "agent.py" in found["user_turn"]
+    assert "guardrail" in found and "events.py" in found["guardrail"]
+    assert "brief_error" in found and "brief.py" in found["brief_error"]
+    assert "event_log_backpressure" in found
+
+
+def test_every_event_the_adapter_emits_is_classified():
+    """The tables are the whole defence, so an event type that is in neither
+    has to be a visible failure rather than a silent leak.
+
+    Names come from the source, not from a list next to the assertion, so
+    adding an event to the adapter forces a decision about which half of the
+    rule it falls under before the suite goes green again.
+    """
+    from adapter.events import CLEAR_EVENTS, _REDACTED_FIELDS
+
+    found = emitted_event_names()
+    redacted, clear = set(_REDACTED_FIELDS), set(CLEAR_EVENTS)
+
+    unclassified = {
+        name: sorted(files) for name, files in found.items() if name not in redacted | clear
     }
-    # Classified as safe, each for a reason recorded next to the table.
-    for event in ("bridge", "fallback", "llm_failure", "llm_usage", "turn_complete"):
-        assert event not in redacted
+    assert not unclassified, (
+        "these events are emitted but classified nowhere. Add each to "
+        "_REDACTED_FIELDS with the fields that carry free text, or to "
+        f"CLEAR_EVENTS with the reason it carries none: {unclassified}"
+    )
+
+    # An event is one or the other. Both would mean the reason in CLEAR_EVENTS
+    # contradicts the fields listed in _REDACTED_FIELDS.
+    assert not (redacted & clear)
+
+    # And neither table may carry an entry for an event nobody emits: a stale
+    # entry reads like coverage and is not.
+    assert not (redacted | clear) - set(found)
+
+    # Every clear-list entry states why, because that is the reviewable part.
+    assert all(reason.strip() for reason in CLEAR_EVENTS.values())
+
+
+def test_the_brief_events_go_through_the_same_table_as_everything_else():
+    """`brief` and `brief_fallback` used to be handled by an early return that
+    ran before the table was consulted, so `brief_fallback.error` was emitted
+    verbatim and a table entry for it would have been dead code."""
+    log, buf = make_log(verbose=False)
+    log.emit(
+        "brief_fallback",
+        turn=1,
+        reason="extraction failed twice",
+        error="ValidationError: budget.amount input_value='two million, Mumbai'",
+        kept_last_good=False,
+        brief=BRIEF,
+    )
+    log.close()
+
+    emitted = lines(buf)[0]
+    assert emitted["error"] == "[redacted]"
+    # The brief is still reduced rather than blanked: the non-PII half is the
+    # point of the event.
+    assert emitted["brief"]["intent"] == "invest"
+    assert emitted["brief"]["redacted"] is True
+    assert "budget" not in emitted["brief"]
+    # Why the fallback happened is a literal the adapter wrote, and it stays.
+    assert emitted["reason"] == "extraction failed twice"
+    for leaked in ("two million", "Mumbai", "2000000", "marina view"):
+        assert leaked not in buf.getvalue()
+
+
+def test_an_upstream_response_body_never_reaches_the_emitted_stream():
+    """`brief_error` carries `f"{type(e).__name__}: {e}"` over a transport
+    failure, and brief.py builds that from up to 200 characters of raw upstream
+    body - from a request whose payload was the buyer's transcript."""
+    log, buf = make_log(verbose=False)
+    log.emit(
+        "brief_error",
+        turn=1,
+        attempt="first",
+        error='RuntimeError: HTTP 400: {"error":{"message":"bad prompt: '
+        'My budget is two million and I am buying from Mumbai"}}',
+    )
+    log.emit(
+        "llm_failure",
+        turn=1,
+        error="APIStatusError",
+        detail='400: {"error":"context: I am buying from Mumbai"}',
+        spoken_before=False,
+    )
+    log.emit("session_error", error='TTSError: rejected "nine hundred and eighty-five"')
+    log.close()
+
+    by_event = {line_["event"]: line_ for line_ in lines(buf)}
+    assert by_event["brief_error"]["error"] == "[redacted]"
+    assert by_event["brief_error"]["attempt"] == "first"
+    assert by_event["llm_failure"]["detail"] == "[redacted]"
+    # The exception CLASS name is enumerated telemetry and stays.
+    assert by_event["llm_failure"]["error"] == "APIStatusError"
+    assert by_event["llm_failure"]["spoken_before"] is False
+    assert by_event["session_error"]["error"] == "[redacted]"
+    for leaked in ("Mumbai", "two million", "eighty-five"):
+        assert leaked not in buf.getvalue()
 
 
 # --- the dev-only escape hatch -------------------------------------------

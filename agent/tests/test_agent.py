@@ -525,24 +525,36 @@ async def test_an_interruption_does_not_leak_into_the_next_turn():
 
 async def test_a_new_turn_does_not_strand_an_unresolved_previous_one():
     """A handle that never resolves must not park its turn forever and swallow
-    the next one. The stranded turn is sealed, and flagged as incomplete."""
+    the next one. The stranded turn is sealed, and flagged as incomplete.
+
+    Each turn gets its OWN chat context, with content that tells them apart.
+    Sharing one ctx object across both turns hides the defect this test exists
+    for: the forced seal used to take the context off the call that forced it,
+    which is the NEW turn's, and file the OLD turn's brief against it.
+    """
     agent, log, buf, _ = make_agent(
         [
             HealthyStream([f"A studio is AED {GROUNDED}. "]),
             HealthyStream([f"A studio is AED {GROUNDED}. "]),
         ]
     )
-    ctx = user_ctx()
+    scheduled: list[tuple[int, list[dict[str, str]]]] = []
+    agent.brief_extractor.schedule = (  # type: ignore[method-assign]
+        lambda transcript, turn: scheduled.append((turn, transcript))
+    )
 
-    await run_llm_node(agent, ctx)
+    first_ctx = user_ctx("What does a studio at Skyrise cost?")
+    second_ctx = user_ctx("And what is the handover date?")
+
+    await run_llm_node(agent, first_ctx)
     stranded = SpeechHandle.create()
     agent.note_speech_handle(stranded)
-    agent.finish_turn(ctx)  # never resolves
+    agent.finish_turn(first_ctx)  # never resolves
 
-    await run_llm_node(agent, ctx)
+    await run_llm_node(agent, second_ctx)
     second = SpeechHandle.create()
     agent.note_speech_handle(second)
-    agent.finish_turn(ctx)
+    agent.finish_turn(second_ctx)  # forces the stranded turn closed
     second._mark_done()
     await settle()
 
@@ -550,3 +562,12 @@ async def test_a_new_turn_does_not_strand_an_unresolved_previous_one():
     events = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
     flags = [e["audit_incomplete"] for e in events if e["event"] == "turn_complete"]
     assert flags == [True, False]
+
+    # Each turn's brief was extracted from its own transcript.
+    assert [turn for turn, _ in scheduled] == [1, 2]
+    first_text = " ".join(m["content"] for m in scheduled[0][1])
+    second_text = " ".join(m["content"] for m in scheduled[1][1])
+    assert "studio at Skyrise" in first_text
+    assert "handover date" not in first_text
+    assert "handover date" in second_text
+    assert first_text != second_text

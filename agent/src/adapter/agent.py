@@ -412,14 +412,18 @@ class AmbassadorAgent(Agent):
         """
         pending = self._pending
         if pending is not None and not pending.sealed:
-            # One speech can pass through "listening" more than once: a false
-            # interruption pauses, transitions, then resumes. Keep the newer
-            # context and let the handle say when the turn is actually over.
-            pending.chat_ctx = chat_ctx
             if self._tracker is None or self._tracker is pending.tracker:
+                # Still the same turn. One speech can pass through "listening"
+                # more than once - a false interruption pauses, transitions,
+                # then resumes - so take the newer context and let the handle
+                # say when the turn is actually over.
+                pending.chat_ctx = chat_ctx
                 return
             # A new turn opened while the old speech never resolved. Seal the
-            # old one on what is known rather than losing it.
+            # old one rather than losing it, on the context IT was parked with:
+            # `chat_ctx` here belongs to the NEW turn, and extracting it under
+            # the old turn's index would file a brief against an utterance that
+            # turn never heard.
             self._seal(pending, audit_incomplete=_unresolved(pending.handle))
 
         tracker = self._tracker

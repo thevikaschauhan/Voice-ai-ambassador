@@ -23,9 +23,11 @@ Two properties of the emitted stream are load-bearing and easy to lose:
               in-process state rather than stdout. The stdout stream and the
               optional file sink are the parts that leave the process, so they
               carry no free text at all: no buyer utterance, no model
-              sentence, no tool argument, no validator detail (docs/02-,
-              docs/03- validator 4). One table decides this, `_REDACTED_FIELDS`
-              below, and the rule is stated above it.
+              sentence, no tool argument, no validator detail, no upstream
+              response body (docs/02-, docs/03- validator 4). Two tables decide
+              this and every emitted event is in exactly one of them:
+              `_REDACTED_FIELDS` and `CLEAR_EVENTS`, with the rule stated above
+              them and a test that reads the event names out of the source.
   no blocking every emit lands on the hot path - two of them are the TTFT and
               TTS-first-audio marks - so a write is queued to a single writer
               task rather than performed inline.
@@ -39,6 +41,7 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final, TextIO
@@ -97,38 +100,32 @@ def _redact_brief(brief: Any) -> Any:
     return out
 
 
-# --- the redaction table --------------------------------------------------
+# --- the classification tables ---------------------------------------------
 #
 # THE RULE. Any free-text field that can carry model-spoken or buyer-derived
 # content is redacted by default: what the buyer said, what the model wrote, a
-# model paraphrase of either, or a validator detail that quotes the text back.
+# model paraphrase of either, a validator detail that quotes the text back, or
+# an upstream response body from a request whose payload was the transcript.
 # Enumerated and numeric telemetry is not redacted: timings, outcomes, counts,
-# event names, tool names, validator names, token usage, booleans. None of
-# that can carry a sentence.
+# event names, tool names, validator names, token usage, booleans, and fixed
+# literals the adapter itself wrote. None of that can carry a sentence.
 #
-# The trap this table exists to close is that "it is only the agent's own
-# words" is not a reason to emit something. The system prompt has the model
-# read the buyer's budget back for confirmation, so a buyer-stated amount
-# routinely appears inside an agent sentence, inside the validator detail that
-# objects to it, and inside the figures list that names it.
+# The trap this rule exists to close is that "it is only the agent's own words"
+# is not a reason to emit something. The system prompt has the model read the
+# buyer's budget back for confirmation, so a buyer-stated amount routinely
+# appears inside an agent sentence, inside the validator detail that objects to
+# it, and inside the figures list that names it. The second trap is an
+# exception message: `str(exc)` on a provider error carries up to a couple of
+# hundred characters of response body, and the request that produced it had the
+# transcript in its payload.
 #
-# When a new event type is added, classify its fields here. A new free-text
-# field with no entry in this table is a leak.
-#
-# Deliberately NOT redacted, and why:
-#   bridge.text / fallback.text  fixed composed copy from interception.py's
-#       BRIDGE_COPY and FALLBACK_COPY. Never model-generated, never
-#       buyer-derived, and showing which designed line was spoken is the whole
-#       point of the event.
-#   guardrail.validator          the validator's name, an enum in practice.
-#   llm_failure.detail           the transport exception, no conversation in it.
-#   brief / brief_fallback       a record with both kinds of field in it, so it
-#       is filtered field by field by `_redact_brief` instead.
+# EVERY event name emitted from src/adapter/ must appear in exactly one of the
+# two tables below. `test_every_event_the_adapter_emits_is_classified` reads
+# the event names straight out of the source and fails on any name that is in
+# neither, so a new event type cannot be added without a decision being made
+# about it here.
 _REDACTED_FIELDS: Final[dict[str, tuple[str, ...]]] = {
     "user_turn": ("text",),
-    # `raw` is the model's attempted brief; the validation `error` quotes the
-    # offending input value back inside its own message.
-    "brief_invalid": ("raw", "error"),
     # `raw` is the model's sentence and `spoken` is what TTS was handed.
     # `detail` and `figures` are the validator's account of that same sentence
     # and name the figure it objected to, which is routinely the buyer's.
@@ -142,6 +139,51 @@ _REDACTED_FIELDS: Final[dict[str, tuple[str, ...]]] = {
     "escalation": ("reason",),
     # "The slot in the buyer's own words", by the tool's own docstring.
     "booking_offered": ("slot",),
+    # `detail` is `str(exc)` on a provider error, so it can carry a response
+    # body. The `error` field beside it is the exception CLASS name and stays.
+    "llm_failure": ("detail",),
+    # Same hazard, from the framework's own error event.
+    "session_error": ("error",),
+    # A brief is a record with both kinds of field in it, so `brief` is reduced
+    # rather than blanked (see `_FIELD_REDUCERS`) and the emitted stream still
+    # shows intent, stage, language, shortlist and whether a budget was
+    # confirmed. `reason` on the fallback is a fixed literal and stays.
+    "brief": ("brief",),
+    "brief_fallback": ("brief", "error"),
+    # `raw` is the model's attempted brief; the validation `error` quotes the
+    # offending input value back inside its own message.
+    "brief_invalid": ("raw", "error"),
+    # `error` here is `f"{type(e).__name__}: {e}"` over a transport failure,
+    # and brief.py builds that message from up to 200 characters of the raw
+    # upstream response body.
+    "brief_error": ("error",),
+}
+
+# Events with no free-text field at all. The value is the reason, and it is
+# there to be read in review: "I could not think of one" is not a reason.
+CLEAR_EVENTS: Final[dict[str, str]] = {
+    "session_start": "the already-redacted config summary: model names, modes, booleans",
+    "session_end": "a turn count",
+    "stt_enabled": "the STT model and provider names",
+    "stt_disabled": "a fixed literal reason the adapter wrote",
+    "llm_request": "turn index, the tool names offered, the tool-choice mode",
+    "llm_upstream_error": "turn index, an HTTP status, a fixed literal note",
+    "llm_ttft": "turn index, milliseconds, the model name",
+    "llm_usage": "token counts and the thinking-off boolean",
+    "tts_first_audio": "turn index and two millisecond marks",
+    "interrupted": "a turn index",
+    "turn_complete": "timings, counts, booleans and the list of tool names fired",
+    "bridge": "fixed composed copy from interception.BRIDGE_COPY, never generated",
+    "fallback": "fixed composed copy from interception.FALLBACK_COPY, plus an enum reason",
+    "brief_retry": "an attempt number, a delay in seconds, an HTTP status",
+    "brief_stale_dropped": "turn indexes and a fixed literal reason",
+    "event_log_backpressure": "a dropped-line count and the queue bound",
+}
+
+# The default reduction is to blank a field. A field listed here is reduced by
+# its own function instead, because some of what it holds is worth emitting.
+_FIELD_REDUCERS: Final[dict[str, Callable[[Any], Any]]] = {
+    "brief": _redact_brief,
 }
 
 
@@ -159,13 +201,17 @@ def _redact_value(value: Any) -> Any:
 def redact_event(record: dict[str, Any]) -> dict[str, Any]:
     """The emitted view of one event record, per `_REDACTED_FIELDS`.
 
+    One mechanism, no bypass paths: every event goes through the same table
+    lookup, including the brief events, whose `brief` field is reduced by
+    `_FIELD_REDUCERS` rather than blanked. An early return for a special case
+    is how `brief_fallback.error` stayed in the clear while a table entry for
+    it would have looked like it was doing something.
+
     A field that is absent or None is left alone. `spoken: null` on a blocked
     sentence is a fact about the turn rather than content, and rewriting it to
     "[redacted]" would report a sentence that was never spoken.
     """
     event = record.get("event")
-    if event in ("brief", "brief_fallback"):
-        return {**record, "brief": _redact_brief(record.get("brief"))}
     fields = _REDACTED_FIELDS.get(event) if isinstance(event, str) else None
     if not fields:
         return record
@@ -173,7 +219,7 @@ def redact_event(record: dict[str, Any]) -> dict[str, Any]:
     for field in fields:
         if out.get(field) is None:
             continue
-        out[field] = _redact_value(out[field])
+        out[field] = _FIELD_REDUCERS.get(field, _redact_value)(out[field])
     return out
 
 
