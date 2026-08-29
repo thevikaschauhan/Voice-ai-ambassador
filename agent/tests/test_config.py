@@ -3,16 +3,23 @@ reaches a log cannot be un-logged.
 
 The `session_start` event serialises the whole settings object, so the
 redaction is not a nicety - it is the only thing between the demo's stdout and
-four live credentials.
+every live credential the process holds.
+
+That last phrase used to name a number. It said "four live credentials", and
+it was four when it was written; the redaction test enumerated those same four
+and stayed green while a fifth, DEEPGRAM_API_KEY, printed in full. Both the
+sentence and the test are now written against whatever the dataclass actually
+carries, because a count is a claim that rots without failing.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import fields
 
 import pytest
 
-from adapter.config import Settings, load_settings, parse_env_file
+from adapter.config import Settings, _is_credential, load_settings, parse_env_file
 
 REAL_LOOKING_KEY = "sk-or-v1-0123456789abcdef0123456789abcdef"
 
@@ -83,7 +90,9 @@ def test_missing_voice_credentials_are_named_not_echoed(env_file, monkeypatch):
     # An empty process value falls back to the file, which has the key set.
     assert settings.missing_for_voice() == []
 
-    bare = Settings(**{**settings.redacted(), "openrouter_api_key": "", "fish_api_key": ""})  # type: ignore[arg-type]
+    bare = Settings(
+        **{**settings.redacted(), "openrouter_api_key": "", "fish_api_key": ""}
+    )  # type: ignore[arg-type]
     assert bare.missing_for_voice() == ["OPENROUTER_API_KEY", "FISH_API_KEY"]
 
 
@@ -112,3 +121,94 @@ def test_invalid_mode_fails_loudly_at_startup(env_file, monkeypatch):
 
 def test_stt_is_off_by_default_so_the_agent_runs_without_audio_credit(env_file):
     assert load_settings(env_file).stt_enabled is False
+
+
+# --- credential classification -------------------------------------------
+#
+# The tests above enumerate; these derive. Both are wanted: the enumerated one
+# proves the specific credentials in the fixture are handled, and these prove
+# the handling extends to credentials nobody has thought of yet.
+
+
+def test_every_credential_field_is_redacted_whatever_it_is_called(env_file):
+    """Canaries built from the dataclass, so a new credential needs no edit here.
+
+    Each credential-bearing field gets a distinct, unmistakable value; none of
+    them may appear in the two renderings that reach a human.
+    """
+    base = load_settings(env_file).redacted()
+    credentials = [f.name for f in fields(Settings) if _is_credential(f.name)]
+    assert credentials, "no field was classified as a credential, so this is vacuous"
+
+    canaries = {name: f"CANARY-{name}-must-not-print" for name in credentials}
+    settings = Settings(**{**base, **canaries})  # type: ignore[arg-type]
+
+    rendered = repr(settings)
+    dumped = json.dumps(settings.redacted())
+    for name, canary in canaries.items():
+        assert canary not in rendered, name
+        assert canary not in dumped, name
+        assert settings.redacted()[name] == "<set>", name
+
+
+def test_the_credential_rule_covers_the_names_this_system_actually_uses():
+    """The set claim, stated as membership rather than as a count.
+
+    `deepgram_api_key` is named explicitly because it is the one that regressed.
+    """
+    classified = {f.name for f in fields(Settings) if _is_credential(f.name)}
+    assert {
+        "livekit_api_key",
+        "livekit_api_secret",
+        "openrouter_api_key",
+        "fish_api_key",
+        "deepgram_api_key",
+    } <= classified
+
+
+def test_plausible_future_credential_names_are_caught_and_plain_config_is_not():
+    # Caught: the shapes a future vendor field is likely to take.
+    for name in ("twilio_auth_token", "webhook_signing_secret", "db_password"):
+        assert _is_credential(name), name
+    # Not caught, and must not be: redacting these would make the operator's
+    # own configuration unreadable in the very log they check it from.
+    for name in ("llm_model", "tts_voice_id_en", "stt_provider", "monkey_patch"):
+        assert not _is_credential(name), name
+
+
+def test_the_recogniser_credential_is_demanded_only_when_that_recogniser_runs(
+    env_file,
+):
+    """Conditional on the selected provider, so the preflight is neither
+    silent about Deepgram nor wrong about OpenRouter."""
+    base = load_settings(env_file).redacted()
+
+    def settings(**overrides):
+        return Settings(**{**base, **overrides})  # type: ignore[arg-type]
+
+    deepgram_live = settings(
+        stt_enabled=True, stt_provider="deepgram", deepgram_api_key=""
+    )
+    assert "DEEPGRAM_API_KEY" in deepgram_live.missing_for_voice()
+
+    # Same missing key, but nothing will construct the recogniser.
+    assert (
+        "DEEPGRAM_API_KEY"
+        not in settings(
+            stt_enabled=False, stt_provider="deepgram", deepgram_api_key=""
+        ).missing_for_voice()
+    )
+    assert (
+        "DEEPGRAM_API_KEY"
+        not in settings(
+            stt_enabled=True, stt_provider="openrouter", deepgram_api_key=""
+        ).missing_for_voice()
+    )
+
+    # Set, so not reported. STT_PROVIDER is matched case-insensitively.
+    assert (
+        settings(
+            stt_enabled=True, stt_provider="Deepgram", deepgram_api_key="dg-set"
+        ).missing_for_voice()
+        == []
+    )
