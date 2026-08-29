@@ -192,6 +192,7 @@ def test_arabic_routes_to_the_day_zero_winner_when_it_is_set():
             tts_voice_id_en="", tts_voice_id_ar="", tts_voice_id_hi="",
             guardrail_mode="enforce", prompt_mode="ambassador",
             demo_mode=False, language="en",
+            allow_uncertified_language=False,
         )
 
     undecided = settings_with("")

@@ -4,6 +4,17 @@
 # The opening ignores barge-in so it always completes (docs/04-).
 # Copy says "transcribed", not "recorded": the POC stores no raw audio and
 # the notice must match what is actually retained.
+#
+# Loaded by agent/src/adapter/disclosure.py and spoken from the agent's
+# on_enter hook. This file had no loader at all until then, so none of the
+# above was happening in any language, English included.
+#
+# A LANGUAGE WITH NO COPY HERE CANNOT OPEN A CALL. Emptiness is not a
+# formatting detail: it is the readiness signal the session gate reads, and an
+# empty entry makes the agent refuse to start in that language. Setting
+# ALLOW_UNCERTIFIED_LANGUAGE=true opens in English instead and marks the event
+# stream `uncertified_fallback: true`, which is the graceful-degradation demo
+# docs/04- asks for - not a way to ship an unreviewed language quietly.
 
 en: >
   You are speaking with Binghatti's AI ambassador. This conversation is
@@ -11,8 +22,9 @@ en: >
   time.
 
 ar: ""
-  # VERIFY: native-authored Arabic disclosure, day 3. The call must not ship
-  # in Arabic until this exists and has been reviewed.
+  # VERIFY: native-authored Arabic disclosure. The call must not ship in
+  # Arabic until this exists and has been reviewed, and now it cannot: with
+  # this empty, LANGUAGE=ar refuses to start.
 
 hi: ""
-  # VERIFY: native-authored Hindi disclosure, day 3. Same rule.
+  # VERIFY: native-authored Hindi disclosure. Same rule, same enforcement.

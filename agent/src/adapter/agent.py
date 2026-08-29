@@ -49,6 +49,7 @@ from livekit.agents import (
 from livekit.agents import (
     llm as lk_llm,
 )
+from livekit.agents import stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils import is_given
 from livekit.agents.voice import SpeechHandle
@@ -65,6 +66,7 @@ from ambassador.verbalise import load_spoken_forms
 
 from .brief import BriefExtractor
 from .config import Settings, load_settings
+from .disclosure import load_disclosures, resolve_opening
 from .events import EventLog, TurnTracker
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
@@ -113,7 +115,9 @@ class AmbassadorAgent(Agent):
         instructions = (
             NAIVE_PROMPT
             if settings.prompt_mode == "naive"
-            else build_ambassador_prompt(serialise_for_prompt(projects), settings.language)
+            else build_ambassador_prompt(
+                serialise_for_prompt(projects), settings.language
+            )
         )
         super().__init__(instructions=instructions)
 
@@ -138,6 +142,17 @@ class AmbassadorAgent(Agent):
         self._speech_handle: SpeechHandle | None = None
         self._pending: _PendingTurn | None = None
 
+        # Resolved here rather than in on_enter, so a language with no
+        # native-authored disclosure fails while the operator is still looking
+        # at a terminal. Deciding this after the room connects means finding
+        # out that the agent has nothing to disclose while a buyer is already
+        # on the line.
+        self._opening, self._opening_language = resolve_opening(
+            load_disclosures(),
+            settings.language,
+            allow_uncertified=settings.allow_uncertified_language,
+        )
+
     @property
     def brief_extractor(self) -> BriefExtractor:
         return self._brief
@@ -145,6 +160,35 @@ class AmbassadorAgent(Agent):
     @property
     def tracker(self) -> TurnTracker | None:
         return self._tracker
+
+    # -- the opening disclosure -------------------------------------------
+
+    async def on_enter(self) -> None:
+        """Speak the AI disclosure before the model gets to say anything.
+
+        `allow_interruptions=False` is the point of doing this here rather than
+        leaving it to the prompt: the disclosure completes even if the buyer
+        talks over it (docs/04-), which a model-generated greeting cannot
+        promise. It goes into the chat context so the model can see it has
+        already greeted the buyer and does not do it twice.
+        """
+        degraded = self._opening_language != self._settings.language
+        self._log.emit(
+            "disclosure",
+            language=self._opening_language,
+            requested_language=self._settings.language,
+            # Loud on purpose. An English disclosure on an Arabic call is a
+            # deliberate, documented degradation, and the record must never let
+            # it be mistaken for a certified Arabic opening.
+            uncertified_fallback=degraded,
+        )
+        if degraded:
+            logger.warning(
+                "opening in %r: no native-authored disclosure for %r",
+                self._opening_language,
+                self._settings.language,
+            )
+        self.session.say(self._opening, allow_interruptions=False)
 
     # -- turn lifecycle ---------------------------------------------------
 
@@ -237,11 +281,15 @@ class AmbassadorAgent(Agent):
         self._log.emit(
             "llm_request",
             turn=tracker.turn_index,
-            tools=[getattr(t, "name", None) or getattr(t, "__name__", "?") for t in tools],
+            tools=[
+                getattr(t, "name", None) or getattr(t, "__name__", "?") for t in tools
+            ],
             tool_choice=str(tool_choice),
         )
 
-        async def open_stream(extra_instruction: str | None = None) -> AsyncIterable[Any]:
+        async def open_stream(
+            extra_instruction: str | None = None,
+        ) -> AsyncIterable[Any]:
             ctx = chat_ctx
             if extra_instruction:
                 ctx = chat_ctx.copy()
@@ -363,7 +411,9 @@ class AmbassadorAgent(Agent):
         if self._tracker is not None:
             self._tracker.record_tool("escalate_to_human", reason=reason)
         else:
-            self._log.emit("tool_call", tool="escalate_to_human", args={"reason": reason})
+            self._log.emit(
+                "tool_call", tool="escalate_to_human", args={"reason": reason}
+            )
         # STUB: the CRM/routing write is a console log behind this interface.
         self._log.emit("escalation", reason=reason, routed_to="human_ambassador")
         return (
@@ -381,7 +431,9 @@ class AmbassadorAgent(Agent):
         if self._tracker is not None:
             self._tracker.record_tool("offer_booking", slot=slot_description)
         else:
-            self._log.emit("tool_call", tool="offer_booking", args={"slot": slot_description})
+            self._log.emit(
+                "tool_call", tool="offer_booking", args={"slot": slot_description}
+            )
         # STUB: spoken read-back only; no calendar API in the POC (docs/06-).
         self._log.emit("booking_offered", slot=slot_description)
         return (
@@ -533,7 +585,12 @@ async def shutdown_session(
     agent: AmbassadorAgent,
     log: EventLog,
     llm: BuiltLLM,
-    stt_node: OpenRouterSTT | None,
+    # Whatever `build_stt` selected: Deepgram's streaming node, the
+    # whole-utterance OpenRouter one, or nothing in text mode. The annotation
+    # named OpenRouterSTT concretely until the factory landed and stopped
+    # importing it here; `from __future__ import annotations` kept that a
+    # lazy string, so it never raised, it just stopped meaning anything.
+    stt_node: stt.STT | None,
 ) -> None:
     """Close everything the session owns, in order.
 
