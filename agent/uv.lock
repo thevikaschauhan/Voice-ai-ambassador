@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-22T13:36:02.612194Z"
+exclude-newer = "2026-08-24T05:05:37.354998Z"
 exclude-newer-span = "P5D"
 
 [[package]]
@@ -159,6 +159,7 @@ dev = [
 ]
 voice = [
     { name = "livekit-agents" },
+    { name = "livekit-plugins-deepgram" },
     { name = "livekit-plugins-fishaudio" },
     { name = "livekit-plugins-openai" },
     { name = "livekit-plugins-silero" },
@@ -178,6 +179,7 @@ dev = [
 ]
 voice = [
     { name = "livekit-agents", specifier = ">=1.7,<2" },
+    { name = "livekit-plugins-deepgram", specifier = ">=1.7,<2" },
     { name = "livekit-plugins-fishaudio", specifier = ">=1.7,<2" },
     { name = "livekit-plugins-openai", specifier = ">=1.7,<2" },
     { name = "livekit-plugins-silero", specifier = ">=1.7,<2" },
@@ -936,6 +938,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/82/2e/7b4ec0de0e5f1ef4c2f441a3047dda950c11d819fb1804e0a13c6ef68317/livekit_local_inference-0.2.7-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f122e205899c5393ef4a710beedfece7a166649afa5ccbdc3cca61f2df113efa", size = 34835765, upload-time = "2026-08-18T09:47:08.974Z" },
     { url = "https://files.pythonhosted.org/packages/01/c9/5cee5031e9ac2b545f6a68d2442bb02a3a6564f298d91f321448c1b59944/livekit_local_inference-0.2.7-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7a97bc2932b73f72c5246cb8350cf2cd7d21fc6237053fc7c1ac645352ed0f3f", size = 34876770, upload-time = "2026-08-18T09:47:11.379Z" },
     { url = "https://files.pythonhosted.org/packages/7f/72/c2c956d1797bd944449fd90945ceea5dded222a54b2df8c967c77440298f/livekit_local_inference-0.2.7-cp314-cp314-win_amd64.whl", hash = "sha256:168c2f2dd55ee6dd94fd7caae0ff73e4875e25aa418df819905fd339de1de4cd", size = 34882427, upload-time = "2026-08-18T09:47:13.983Z" },
+]
+
+[[package]]
+name = "livekit-plugins-deepgram"
+version = "1.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bd/7d/54ade407a92a83b1de9cce2abe247b3f0906ac3297aaba87d2cf529335f2/livekit_plugins_deepgram-1.7.0.tar.gz", hash = "sha256:adfd12f8636a0f4c52422f75942b929667f1b654fa1ec2903c43297bd3087035", size = 24698, upload-time = "2026-08-20T18:16:48.635Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/0d/d715b74b4a8f1373e298f62912c306a3ff534590daaf42643172488da09d/livekit_plugins_deepgram-1.7.0-py3-none-any.whl", hash = "sha256:8c9f9e6298950f1981dc99e35bc2038c750327062a46240a03f3b6ac05f8047f", size = 31799, upload-time = "2026-08-20T18:16:47.507Z" },
 ]
 
 [[package]]

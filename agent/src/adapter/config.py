@@ -109,11 +109,15 @@ class Settings:
     llm_thinking: str
     brief_model: str
 
-    # STT - Qwen3-ASR via OpenRouter (ADR-015)
+    # STT - whole-utterance via OpenRouter (ADR-015) or streaming via Deepgram.
+    # The two differ on where transcription lands in the turn, not just on
+    # speed; see stt_factory.
     stt_provider: str
     stt_model_default: str
     stt_model_ar: str
     stt_enabled: bool
+    deepgram_api_key: str
+    deepgram_model: str
 
     # TTS - Fish Audio (ADR-014)
     fish_api_key: str
@@ -148,6 +152,16 @@ class Settings:
         if language == "ar" and self.stt_model_ar:
             return self.stt_model_ar
         return self.stt_model_default
+
+    def deepgram_language(self, language: Language) -> str:
+        """Our two-letter code as the locale Deepgram expects.
+
+        Arabic is deliberately the bare `ar` rather than a country locale: the
+        dialect question (Gulf, Egyptian, Levantine, not MSA) is the build's
+        highest risk (A6) and is settled by listening to real recordings, not
+        by guessing a locale string here.
+        """
+        return {"en": "en-US", "ar": "ar", "hi": "hi"}[language]
 
     def redacted(self) -> dict[str, object]:
         """Loggable view: secrets collapse to a presence flag, never a value."""
@@ -211,6 +225,8 @@ def load_settings(env_path: Path | None = None) -> Settings:
             file_values, "STT_MODEL_DEFAULT", "qwen/qwen3-asr-1.7b"
         ),
         stt_model_ar=_resolve(file_values, "STT_MODEL_AR"),
+        deepgram_api_key=_resolve(file_values, "DEEPGRAM_API_KEY"),
+        deepgram_model=_resolve(file_values, "DEEPGRAM_MODEL", "nova-3"),
         # Off by default: OpenRouter rejects audio requests under a $0.50
         # balance (AGENTS.md project learnings, 2026-08-27), and the agent must
         # stay runnable in text mode without it.

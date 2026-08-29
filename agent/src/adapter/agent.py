@@ -68,7 +68,7 @@ from .config import Settings, load_settings
 from .events import EventLog, TurnTracker
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
-from .stt_openrouter import OpenRouterSTT
+from .stt_factory import build_stt, describe
 
 logger = logging.getLogger("ambassador.agent")
 
@@ -574,17 +574,13 @@ async def entrypoint(ctx: JobContext) -> None:
 
     agent = AmbassadorAgent(settings=settings, log=log)
 
-    stt_node = None
-    if settings.stt_enabled:
-        stt_node = OpenRouterSTT(
-            api_key=settings.openrouter_api_key,
-            model=settings.stt_model(settings.language),
-            language=settings.language,
-        )
-        log.emit("stt_enabled", model=stt_node.model, provider=stt_node.provider)
+    stt_node = build_stt(settings)
+    if stt_node is not None:
+        log.emit("stt_enabled", **describe(stt_node))
     else:
-        # OpenRouter rejects audio under a $0.50 balance (402); text mode and
-        # the console's typed input both work without it.
+        # Text mode and the console's typed input both work without a
+        # recogniser, which is what kept the day-1 gate provable while
+        # OpenRouter rejected audio under a $0.50 balance.
         log.emit("stt_disabled", reason="STT_ENABLED is not set")
 
     tts = fishaudio.TTS(

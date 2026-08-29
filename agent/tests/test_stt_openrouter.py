@@ -186,6 +186,8 @@ def test_arabic_routes_to_the_day_zero_winner_when_it_is_set():
             stt_model_default="qwen/qwen3-asr-1.7b",
             stt_model_ar=ar,
             stt_enabled=False,
+            deepgram_api_key="",
+            deepgram_model="nova-3",
             fish_api_key="", fish_tts_model="s2.1-pro",
             tts_voice_id_en="", tts_voice_id_ar="", tts_voice_id_hi="",
             guardrail_mode="enforce", prompt_mode="ambassador",

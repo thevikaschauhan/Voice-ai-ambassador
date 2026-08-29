@@ -66,6 +66,8 @@ def make_settings(**overrides: Any) -> Settings:
         stt_model_default="qwen/qwen3-asr-1.7b",
         stt_model_ar="",
         stt_enabled=False,
+        deepgram_api_key="",
+        deepgram_model="nova-3",
         fish_api_key=FAKE_KEY,
         fish_tts_model="s2.1-pro",
         tts_voice_id_en="",
