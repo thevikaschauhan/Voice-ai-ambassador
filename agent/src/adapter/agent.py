@@ -69,6 +69,7 @@ from .config import Settings, load_settings
 from .disclosure import load_disclosures, resolve_opening
 from .events import EventLog, TurnTracker
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
+from .lexicon import load_lexicon, respell_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
 from .stt_factory import build_stt, describe
 
@@ -158,6 +159,17 @@ class AmbassadorAgent(Agent):
             on_event=log.emit,
             thinking_disabled=settings.thinking_disabled,
         )
+        # Read once at construction: fixed data for the life of the process,
+        # and a malformed file should fail in front of the operator rather
+        # than on the first sentence of a call.
+        self._lexicon = load_lexicon()
+        log.emit(
+            "lexicon",
+            languages=sorted(self._lexicon.languages_covered()),
+            call_language=settings.language,
+            applied=settings.language in self._lexicon.languages_covered(),
+        )
+
         self._turn_index = 0
         self._tracker: TurnTracker | None = None
         self._speech_handle: SpeechHandle | None = None
@@ -393,9 +405,16 @@ class AmbassadorAgent(Agent):
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
+        # Respelling happens here and nowhere earlier. It destroys the word the
+        # same way verbalisation destroys the digits, so everything that has to
+        # read real words - the transcript, the audit, the ambassador view -
+        # has already read them by this point, and only the synthesiser sees
+        # "bin-GAH-tee". A language with no authored respellings gets the
+        # stream back untouched, buffering included.
+        spoken = respell_stream(text, self._lexicon, self._settings.language)
         tracker = self._tracker
         first = True
-        async for frame in Agent.default.tts_node(self, text, model_settings):
+        async for frame in Agent.default.tts_node(self, spoken, model_settings):
             if first:
                 first = False
                 if tracker is not None:
