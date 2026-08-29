@@ -39,6 +39,13 @@ Two rules about where a match may begin are load-bearing, and both were learned 
 
 **English patterns only in the POC. Disclose this in the meeting.** The distinction to draw: the critical guardrail (numeric claims) is language-agnostic because it operates on digits, so the guarantee that a fabricated price cannot be spoken holds in all three languages. The stylistic layer is English-only until a native reviewer writes the Arabic and Hindi patterns. Never ship patterns nobody on the team can read - `VERIFY:` native review.
 
+Both halves of that are now verified by execution rather than asserted, and each has a wrinkle worth carrying into the room:
+
+- **The numeric claim genuinely holds across scripts.** `figures.py` normalises Arabic-Indic, extended Arabic-Indic and Devanagari digits along with the Arabic separators `٬` and `٫`, one character to one so verbalisation spans stay valid, and sentence splitting already breaks on `؟` and `।`. A fabricated price written `١٬٢٥٠٬٠٠٠` is caught and an allowed `٩٨٥٬٠٠٠` passes. This is the half a tech lead will expect to be broken.
+- **The stylistic layer does cover code-switching, which is the register that matters.** Every pattern runs against every sentence whatever language the call is in, so a reply in Arabic that slips into English to say "guaranteed returns" is caught. `language` on a pattern is provenance - the competence its author needed - and is deliberately never used for routing, because routing by the call's language would give exactly this up. What is not covered is a violation written wholly in Arabic or Devanagari script.
+
+The `prohibited_coverage` event at session start reports which languages actually have patterns, so the demo record states the real coverage instead of implying uniform protection.
+
 | Category | Catches | Action |
 |---|---|---|
 | Return guarantees | guaranteed/assured/promised return, yield, appreciation; risk-free; can't lose | Block |

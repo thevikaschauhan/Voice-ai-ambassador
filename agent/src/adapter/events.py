@@ -167,6 +167,7 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "session_start": "the already-redacted config summary: model names, modes, booleans",
     "session_end": "a turn count",
     "disclosure": "two language codes and a boolean, all from configuration",
+    "prohibited_coverage": "language codes, a boolean and a pattern count",
     "stt_enabled": "the STT model and provider names",
     "stt_disabled": "a fixed literal reason the adapter wrote",
     "llm_request": "turn index, the tool names offered, the tool-choice mode",

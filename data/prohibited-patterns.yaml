@@ -3,6 +3,16 @@
 # patterns must be WRITTEN by a native speaker, never translated by the build
 # agent (AGENTS.md). Reviewable by a non-engineer: each pattern is a regular
 # expression matched case-insensitively against one generated sentence.
+#
+# `language` IS PROVENANCE, NOT ROUTING. It records the language the pattern
+# was authored to catch, and therefore the competence its author needed. Every
+# pattern below is matched against every sentence whatever language the call is
+# in, deliberately: Arabic-English code-switching is the default Dubai register,
+# so an Arabic reply that slips into English to promise "guaranteed returns" is
+# caught by these English patterns, and routing by the call's language would
+# silently give that up. Over-matching blocks a sentence; under-matching speaks
+# an unverified one. Do not add filtering here without reading
+# guardrails/prohibited.py first.
 
 - category: return_guarantees
   language: en

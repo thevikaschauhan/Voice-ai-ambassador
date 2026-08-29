@@ -375,7 +375,13 @@ async def test_the_shutdown_path_drains_the_event_log():
         for line in buf.getvalue().splitlines()
         if line.strip()
     ]
-    assert events == ["session_start", "session_end"]
+    # What this test is about is that the queued writer drains before the
+    # process can exit, and drains in order. It used to assert the exact list,
+    # which coupled it to whichever events construction happened to emit and
+    # broke the moment the agent emitted one more at start-up.
+    assert events[-1] == "session_end", events
+    assert "session_start" in events
+    assert events.index("session_start") < events.index("session_end")
 
 
 # --- finding 7: barge-in marks the chunk incomplete -----------------------
