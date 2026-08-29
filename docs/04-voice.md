@@ -9,8 +9,8 @@ Planning targets; every figure gets measured against the real stack by the laten
 | Stage | Budget | Notes |
 |---|---|---|
 | Endpointing decision | 200-500ms | Semantic endpointing beats fixed silence thresholds |
-| STT final after endpoint | 100-300ms **only if streaming** | **The budget line and the chosen model disagree, and the line was written first.** 100-300ms assumes a streaming recogniser: partials arrive during speech, so only the tail after endpoint is charged. Qwen3-ASR is whole-utterance - nothing starts until the buyer stops - so its entire cost is additive. Measured on the hosted path: p50 1081ms, p90 2826ms. A faster host reduces this; only a streaming recogniser removes it from the critical path |
-| LLM time to first token | 200-600ms | Qwen 3.7 Flash (ADR-016) with thinking DISABLED - thinking on would add seconds here; prompt caching on the inventory block reduces variance; measure day 1 |
+| STT final after endpoint | 100-300ms **only if streaming** - MET: Deepgram measured 258-327ms (ADR-017) | **The budget line and the chosen model disagree, and the line was written first.** 100-300ms assumes a streaming recogniser: partials arrive during speech, so only the tail after endpoint is charged. Qwen3-ASR is whole-utterance - nothing starts until the buyer stops - so its entire cost is additive. Measured on the hosted path: p50 1081ms, p90 2826ms. A faster host reduces this; only a streaming recogniser removes it from the critical path |
+| LLM time to first token | 200-600ms | measured 685ms with caching live (ADR-017). Qwen 3.7 Flash (ADR-016) with thinking DISABLED - thinking on would add seconds here; prompt caching on the inventory block reduces variance; measure day 1 |
 | LLM first complete sentence | +150-400ms | Sentence boundary, not full response |
 | Guardrail validation | under 10ms | Regex extraction + set membership |
 | Verbalisation | under 5ms | Table lookup |

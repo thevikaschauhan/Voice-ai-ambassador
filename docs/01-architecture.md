@@ -165,7 +165,9 @@ The session opens with fixed, native-reviewed disclosure copy (never model-gener
 
 **Revisit when** day 0 recordings show a contender beating 1.7b on Arabic or Hinglish, or day 1 shows hosted latency missing the budget - either way a per-language config swap (whisper stays available on the same key as the escape hatch), not a rebuild.
 
-**REVISIT CLAUSE FIRED - measured 2026-08-29, this ADR is superseded pending a decision.** Once credits landed, the bake-off ran on a 4-second English utterance ("My budget is two million dirhams for a Binghatti Skyrise studio"), three runs each:
+**SUPERSEDED 2026-08-29 by ADR-017 (Deepgram streaming). Kept because the measurements below are why.**
+
+**REVISIT CLAUSE FIRED - measured 2026-08-29.** Once credits landed, the bake-off ran on a 4-second English utterance ("My budget is two million dirhams for a Binghatti Skyrise studio"), three runs each:
 
 | model | p50 | worst | brand name | numbers |
 |---|---|---|---|---|
@@ -202,6 +204,26 @@ Four findings, in order of consequence:
 - Data path is OpenRouter (US) forwarding to Alibaba Cloud International. Assumption A5 unchanged for the POC. `PHASE-2:` note for the meeting: a production build would go direct to the model host, and Alibaba Cloud has UAE-region infrastructure, so a UAE-resident inference story may be achievable with this vendor - `VERIFY:` whether Model Studio serves this model from the UAE region before claiming it.
 
 **Revisit when** measured TTFT with thinking off exceeds the budget, or Arabic/Hindi generation fails native review.
+
+### ADR-017 - STT is Deepgram streaming; prompt caching is enabled on the wire (decided 2026-08-29)
+
+**Decision.** Speech recognition is Deepgram (`nova-3`) through the first-party LiveKit plugin, selected by `STT_PROVIDER=deepgram`. The whole-utterance OpenRouter path stays selectable and tested, but is not the default. Separately, the system prompt is marked cacheable on the wire so Alibaba's explicit-only caching engages.
+
+**Why, measured rather than argued.** Same three utterances, streamed in real time as a live microphone would:
+
+| | whole-utterance (ADR-015) | Deepgram streaming |
+|---|---|---|
+| Charged after endpoint | p50 1081ms, p90 2826ms, worst 43174ms | **258 / 327 / 276ms** |
+| "Binghatti" | "Bint Jbeil" | **"Binghatti Skyrise"** |
+| Figures | words ("two million") | **digits ("2000000", "2 crore")** |
+
+The latency line is the point: streaming charges only the tail, which is what the budget in `docs/04-` always assumed. The other two rows were unfixable on the old path - OpenRouter ignored the biasing parameter, and word-form figures give a deterministic parse of buyer speech nothing to read, which ADR-011's confirmation policy needs.
+
+**Resulting budget**, with caching live: endpoint 200-500ms + STT ~280ms + LLM first sentence 530-770ms + guardrail 0.3ms + TTS 327ms after that sentence, so roughly **1.4-1.6s voice-to-voice** against a 1200ms target and 1500ms ceiling. At the ceiling, not comfortably inside it. The preroll masking already specified in `docs/04-` covers the slow tail; further headroom has to come from endpointing and TTS, which are now the two largest remaining components.
+
+**Prompt caching.** Measured live: 1043 of 1069 prompt tokens served from cache from the second call on, **prompt cost down 81%**, and confirmed in the running agent (1613 of 1962 tokens cached). The rewrite converts the system message from a string to a one-element content block carrying `cache_control`, in the httpx transport, because the plugin exposes no path to a content block (ADR-016). It returns the body untouched on any unexpected shape: a missed cache costs latency and money, a corrupted request costs the turn. **The latency benefit is not established** - completion times stayed inside the noise of OpenRouter's own variance. The cost saving is real and measured; do not claim the latency one without measuring it again.
+
+**Cost.** Deepgram is a new paid vendor and the first component not already on an existing account. `VERIFY:` its per-minute rate against `docs/08-`.
 
 ## Deployment
 

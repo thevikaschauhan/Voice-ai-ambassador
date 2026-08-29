@@ -601,3 +601,48 @@ async def test_a_new_turn_does_not_strand_an_unresolved_previous_one():
     assert "handover date" not in first_text
     assert "handover date" in second_text
     assert first_text != second_text
+
+
+# Alibaba caching through OpenRouter is explicit-only: the top-level parameter
+# is silently ignored and only a breakpoint on the system content block
+# engages it. Verified live 2026-08-29 - 1043 of 1069 prompt tokens served
+# from cache from the second call on, prompt cost down 81%. The rewrite is on
+# the wire because the plugin has no path to a content block (ADR-016), so
+# these pin the shape rather than the effect.
+def test_the_system_prompt_is_marked_cacheable():
+    import json as _json
+
+    from adapter.llm_openrouter import mark_system_prompt_cacheable
+
+    body = _json.dumps(
+        {"messages": [{"role": "system", "content": "INVENTORY"}, {"role": "user", "content": "hi"}]}
+    ).encode()
+    out = _json.loads(mark_system_prompt_cacheable(body))
+    system = out["messages"][0]["content"]
+    assert system == [
+        {"type": "text", "text": "INVENTORY", "cache_control": {"type": "ephemeral"}}
+    ]
+    # Everything else is untouched.
+    assert out["messages"][1] == {"role": "user", "content": "hi"}
+
+
+def test_a_body_it_cannot_understand_is_passed_through_unchanged():
+    from adapter.llm_openrouter import mark_system_prompt_cacheable
+
+    # A missed cache costs latency and money; a corrupted request costs the
+    # turn. Every unexpected shape must return the original bytes.
+    for body in (
+        b"not json at all",
+        b"{}",
+        b'{"messages": []}',
+        b'{"messages": [{"role": "user", "content": "no system message"}]}',
+        b'{"messages": [{"role": "system", "content": [{"type": "text", "text": "already blocks"}]}]}',
+    ):
+        assert mark_system_prompt_cacheable(body) is body
+
+
+def test_the_rewrite_can_be_switched_off():
+    from adapter.llm_openrouter import UsageTappingTransport
+
+    transport = UsageTappingTransport(lambda _u: None, cache_system_prompt=False)
+    assert transport._cache_system_prompt is False

@@ -182,20 +182,86 @@ class _UsageTappedStream(httpx.AsyncByteStream):
             await aclose()
 
 
+def mark_system_prompt_cacheable(body: bytes) -> bytes:
+    """Attach a cache breakpoint to the system message, in place.
+
+    Alibaba caching through OpenRouter is explicit-only, and measured
+    2026-08-28: the top-level `cache_control` parameter is silently ignored (it
+    looks applied and does nothing), while a breakpoint on the system CONTENT
+    BLOCK engages it - 1580 tokens read from cache on the second call, 82% off
+    the prompt cost, five-minute TTL. The serialised inventory is a stable
+    ~1.5k-token prefix on every turn, so it is exactly what should be cached.
+
+    This has to happen on the wire because the plugin serialises message
+    content as a plain string and offers no path to a content block:
+    `extra_body` reaches the request root but never inside `messages`, and
+    `ChatMessage.extra` is filtered to other providers (ADR-016). Rewriting the
+    body here is the smaller of the two evils named in that ADR; the
+    alternative was subclassing the plugin's LLM, which ADR-006 resists.
+
+    Returns the body unchanged on anything unexpected. A missed cache costs
+    latency and money; a corrupted request costs the turn.
+    """
+    try:
+        payload = json.loads(body)
+        messages = payload.get("messages")
+        if not isinstance(messages, list) or not messages:
+            return body
+        first = messages[0]
+        if not isinstance(first, dict) or first.get("role") != "system":
+            return body
+        content = first.get("content")
+        if not isinstance(content, str) or not content:
+            return body  # already a block list, or nothing to cache
+        first["content"] = [
+            {
+                "type": "text",
+                "text": content,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        return json.dumps(payload).encode("utf-8")
+    except Exception:  # malformed body, unexpected shape, encoding
+        logger.debug("could not mark the system prompt cacheable", exc_info=True)
+        return body
+
+
 class UsageTappingTransport(httpx.AsyncBaseTransport):
-    """httpx transport that tees SSE usage frames to a callback."""
+    """httpx transport that tees SSE usage frames to a callback, and marks the
+    system prompt cacheable on the way out.
+
+    The outbound rewrite is deliberate and narrow: it converts one string field
+    into a one-element content block and changes nothing else. It lives here
+    because it is the only point where the request exists as JSON we own.
+    """
 
     def __init__(
         self,
         on_usage: UsageCallback,
         inner: httpx.AsyncBaseTransport | None = None,
         on_status: StatusCallback | None = None,
+        cache_system_prompt: bool = True,
     ):
         self._on_usage = on_usage
         self._on_status = on_status
         self._inner = inner or httpx.AsyncHTTPTransport()
+        self._cache_system_prompt = cache_system_prompt
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if self._cache_system_prompt and request.method == "POST":
+            marked = mark_system_prompt_cacheable(request.content)
+            if marked is not request.content:
+                request = httpx.Request(
+                    method=request.method,
+                    url=request.url,
+                    headers=[
+                        (k, v)
+                        for k, v in request.headers.raw
+                        if k.lower() != b"content-length"
+                    ],
+                    content=marked,
+                    extensions=request.extensions,
+                )
         response = await self._inner.handle_async_request(request)
         if response.status_code >= 400:
             requested = clamp_retry_after(response.headers)
