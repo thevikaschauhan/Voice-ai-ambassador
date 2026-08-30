@@ -45,15 +45,38 @@ PromptMode = Literal["ambassador", "naive"]
 # rejecting a language the rest of the system already supports.
 _LANGUAGES: Final[tuple[Language, ...]] = get_args(Language)
 
-# Fields whose values must never reach a log, a console, or a traceback.
-_SECRET_FIELDS = frozenset(
-    {
-        "livekit_api_key",
-        "livekit_api_secret",
-        "openrouter_api_key",
-        "fish_api_key",
-    }
+# Words that make a field name credential-bearing. Matched against the name's
+# underscore-separated parts, not as substrings, so "monkey" is not a "key".
+#
+# Classified by NAME rather than listed by hand, because the hand-written list
+# went stale the day a credential was added: DEEPGRAM_API_KEY (ADR-017) was
+# never appended to it, so the key printed in full through `repr()` and
+# `redacted()` for as long as it existed, while the test guarding this passed,
+# because that test enumerated the credentials that existed when it was
+# written. A rule covers the field nobody remembers to add; a list covers the
+# fields someone already thought of.
+_CREDENTIAL_WORDS: Final = frozenset(
+    {"key", "secret", "token", "password", "credential"}
 )
+
+
+def _is_credential(field_name: str) -> bool:
+    """True when the name says the value is a credential.
+
+    Plurals count: `api_keys` is as much a credential as `api_key`, and the
+    first version of this rule missed it because it compared whole parts
+    against singular words only.
+
+    A part that merely CONTAINS a credential word does not count, so `monkey`
+    is not a `key` and an operator can still read their own configuration out
+    of a log. That leaves one gap on purpose - a run-together name like
+    `apikey` - and `test_no_credential_looking_field_escapes_classification`
+    is the guard for it: it scans the dataclass with a deliberately looser
+    substring rule and fails the build rather than letting the value leak.
+    """
+    parts = set(field_name.split("_"))
+    return bool(_CREDENTIAL_WORDS & (parts | {p.removesuffix("s") for p in parts}))
+
 
 _MASK = "<set>"
 _UNSET = "<unset>"
@@ -168,7 +191,7 @@ class Settings:
         out: dict[str, object] = {}
         for field in fields(self):
             value = getattr(self, field.name)
-            if field.name in _SECRET_FIELDS:
+            if _is_credential(field.name):
                 out[field.name] = _MASK if value else _UNSET
             else:
                 out[field.name] = value
@@ -180,11 +203,21 @@ class Settings:
 
     def missing_for_voice(self) -> list[str]:
         """Credentials the voice path cannot start without. Reported by name
-        only - the check never echoes a value."""
+        only - the check never echoes a value.
+
+        The recogniser's credential depends on which recogniser is selected, so
+        it is conditional rather than always required. Omitting it did not make
+        the failure silent - the Deepgram plugin raises when it is constructed -
+        but it moved the failure from this preflight, which names everything
+        missing at once, to session start, which names one thing and only after
+        the operator has begun a demo.
+        """
         required = {
             "OPENROUTER_API_KEY": self.openrouter_api_key,
             "FISH_API_KEY": self.fish_api_key,
         }
+        if self.stt_enabled and self.stt_provider.lower() == "deepgram":
+            required["DEEPGRAM_API_KEY"] = self.deepgram_api_key
         return [name for name, value in required.items() if not value]
 
 
