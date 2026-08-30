@@ -55,7 +55,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice import SpeechHandle
 from livekit.plugins import fishaudio, silero
 
-from ambassador.guardrails.prohibited import load_patterns
+from ambassador.guardrails.prohibited import languages_covered, load_patterns
 from ambassador.inventory import (
     build_allowed_figures,
     load_inventory,
@@ -121,13 +121,34 @@ class AmbassadorAgent(Agent):
         )
         super().__init__(instructions=instructions)
 
+        patterns = load_patterns()
+        covered = languages_covered(patterns)
         self._guard = SentenceGuard(
             language=settings.language,
             allowed=build_allowed_figures(projects),
-            patterns=load_patterns(),
+            patterns=patterns,
             forms=load_spoken_forms(),
             mode=settings.guardrail_mode,
         )
+        # Stated, not assumed. Every pattern runs against every sentence, so a
+        # reply that code-switches into English is checked whatever language
+        # the call is in - but a violation written wholly in Arabic or
+        # Devanagari script matches nothing until someone authors patterns for
+        # it. Without this line the record shows a guardrail that looks equally
+        # strong in all three languages.
+        log.emit(
+            "prohibited_coverage",
+            languages=sorted(covered),
+            call_language=settings.language,
+            native_patterns=settings.language in covered,
+            pattern_count=len(patterns),
+        )
+        if settings.language not in covered:
+            logger.warning(
+                "no prohibited-language patterns authored for %r: only English "
+                "and English code-switched violations are caught",
+                settings.language,
+            )
         self._brief = BriefExtractor(
             api_key=settings.openrouter_api_key,
             model=settings.brief_model,
