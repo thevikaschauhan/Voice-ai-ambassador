@@ -38,6 +38,11 @@ def derive(project: Project) -> DerivedFigures | None:
     )
 
 
+# Only `currency` figures may take a spoken form that names a currency.
+# `identifier` is read as a sequence and must never take a quantity form.
+_WHITELIST_KINDS = frozenset({"currency", "quantity", "identifier"})
+
+
 def _load_whitelist(path: Path | None = None) -> dict:
     data = yaml.safe_load(
         (path or DATA_DIR / "whitelist.yaml").read_text(encoding="utf-8")
@@ -50,6 +55,15 @@ def _load_whitelist(path: Path | None = None) -> dict:
                     "'why' - every whitelist entry is a hole a wrong figure could "
                     "pass through and must justify itself"
                 )
+            if entry.get("kind") not in _WHITELIST_KINDS:
+                raise ValueError(
+                    f"whitelist entry {entry.get('value')!r} in {section} has "
+                    f"kind {entry.get('kind')!r}, not one of "
+                    f"{'/'.join(sorted(_WHITELIST_KINDS))}. The kind decides "
+                    "whether verbalisation may give it a currency-naming spoken "
+                    "form; guessing wrong makes a phone number a price or a "
+                    "square footage a sum of money."
+                )
     return data
 
 
@@ -59,12 +73,14 @@ def build_allowed_figures(
     """Global allowed set (ADR-008): every figure in inventory, source and
     computed, plus the justified whitelist."""
     amounts: set[float] = set()
+    currency: set[float] = set()
     percents: set[float] = set()
     years: set[int] = set()
 
     for p in projects:
         if p.price_from_aed is not None:
             amounts.add(float(p.price_from_aed))
+            currency.add(float(p.price_from_aed))
         for size in (p.size_sqft_min, p.size_sqft_max):
             if size is not None:
                 amounts.add(float(size))
@@ -74,15 +90,21 @@ def build_allowed_figures(
             percents.update(float(m.pct) for m in p.payment_plan)
         derived = derive(p)
         if derived is not None:
+            # Payment-plan instalments: money by construction.
             amounts.update(float(a) for a in derived.milestone_amounts_aed)
+            currency.update(float(a) for a in derived.milestone_amounts_aed)
 
     wl = _load_whitelist(whitelist_path)
     amounts.update(float(e["value"]) for e in wl.get("amounts") or [])
+    currency.update(
+        float(e["value"]) for e in wl.get("amounts") or [] if e["kind"] == "currency"
+    )
     percents.update(float(e["value"]) for e in wl.get("percents") or [])
     years.update(int(e["value"]) for e in wl.get("years") or [])
 
     return AllowedFigures(
         amounts=frozenset(amounts),
+        currency_amounts=frozenset(currency),
         percents=frozenset(percents),
         years=frozenset(years),
     )

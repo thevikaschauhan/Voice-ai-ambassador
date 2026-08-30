@@ -1,15 +1,31 @@
 # Figures the agent may speak that do not come from inventory.
 # Every entry is a hole a wrong number could pass through: keep this file
-# short, and every entry MUST carry a `why` (enforced by a test).
+# short, and every entry MUST carry a `why` and a `kind` (both enforced by
+# tests).
+#
+# `kind` decides whether the figure is MONEY, and money is the only kind whose
+# spoken form names a currency. The guardrail does not care - a number is a
+# number to it - but verbalisation does: an amount's spoken form is allowed to
+# swallow an adjacent "AED" because the form says "dirhams" itself. Author a
+# currency-naming form for something that is not money and the buyer hears
+# "four hundred and twenty dirhams square feet".
+#
+#   currency    an amount in AED
+#   quantity    a dimensionless count or measure (square feet, floors)
+#   identifier  a number read as a sequence, never as a quantity - phone
+#               numbers, permit numbers. NEVER give one a quantity form.
 
 amounts:
   - value: 2000000
+    kind: currency
     why: "Golden Visa property investment threshold in AED. VERIFY: current rule with a UAE adviser before the demo."
   - value: 80015
-    why: "Binghatti's toll-free hotline number, spoken when routing to a human."
+    kind: identifier
+    why: "Binghatti's toll-free hotline number, spoken when routing to a human. VERIFY: the real number AND how it should be read aloud, with the client - it is an identifier, so TTS reading it as 'eighty thousand and fifteen' is wrong."
 
 percents: []
 
 years:
   - value: 2026
+    kind: quantity
     why: "The current year; appears in scheduling and small talk."

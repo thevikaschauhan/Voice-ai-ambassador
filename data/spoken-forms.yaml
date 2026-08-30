@@ -11,9 +11,18 @@
 #   forms            keyed by (kind, value) or by exact surface (for quarters).
 #
 # Because only allowed figures can reach verbalisation, `forms` is COMPLETE by
-# construction once it covers every figure in inventory.json (source and
-# computed) plus the whitelist. Regenerate the value list when inventory
-# changes; a missing entry falls back to plain digits, which TTS reads.
+# construction once it covers every CURRENCY figure in inventory.json (source
+# and computed) plus the whitelist entries marked `kind: currency`. That is now
+# checked rather than asserted - `verbalise.spoken_form_gaps()` reports what a
+# language still owes, and a test holds English at zero.
+#
+# AUTHOR A FORM ONLY FOR MONEY, PERCENTS AND QUARTERS. The allowed set also
+# holds square footages (420, 1200, 2100 ...) and Binghatti's hotline number,
+# and those must have NO entry here. An amount's spoken form is allowed to
+# swallow an adjacent "AED" precisely because the form names the currency
+# itself, so a currency-naming form on a square footage makes the buyer hear
+# "four hundred and twenty dirhams square feet". A bare quantity is read
+# correctly by the digit fallback; leave it alone.
 #
 # English entries below are drafted by the build team.
 # VERIFY: Arabic and Hindi entries must be AUTHORED BY A NATIVE SPEAKER

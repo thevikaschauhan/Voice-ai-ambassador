@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 
 from ambassador.schemas import ValidatedSentence
-from ambassador.verbalise import load_spoken_forms, verbalise
+from ambassador.inventory import build_allowed_figures, load_inventory
+from ambassador.verbalise import (
+    load_spoken_forms,
+    quarter_surface_gaps,
+    spoken_form_gaps,
+    verbalise,
+)
 
 
 def test_known_amount_speaks_from_the_table(forms):
@@ -35,9 +41,21 @@ _DOUBLE_CURRENCY = re.compile(
 
 CURRENCY_CASES = [
     # (case name, written by the model, what TTS must receive)
-    ("prefix", "The starting price is AED 985,000.", f"The starting price is {_DIRHAMS}."),
-    ("suffix", "The starting price is 985,000 AED.", f"The starting price is {_DIRHAMS}."),
-    ("bare amount", "The starting price is 985,000.", f"The starting price is {_DIRHAMS}."),
+    (
+        "prefix",
+        "The starting price is AED 985,000.",
+        f"The starting price is {_DIRHAMS}.",
+    ),
+    (
+        "suffix",
+        "The starting price is 985,000 AED.",
+        f"The starting price is {_DIRHAMS}.",
+    ),
+    (
+        "bare amount",
+        "The starting price is 985,000.",
+        f"The starting price is {_DIRHAMS}.",
+    ),
     # Casing is not something the model is held to, so neither is the match.
     ("lowercase suffix", "It starts at 985,000 aed.", f"It starts at {_DIRHAMS}."),
     ("lowercase prefix", "It starts at aed 985,000.", f"It starts at {_DIRHAMS}."),
@@ -116,7 +134,10 @@ CURRENCY_CASES = [
 
 @pytest.mark.parametrize(
     "written,expected",
-    [pytest.param(written, expected, id=name) for name, written, expected in CURRENCY_CASES],
+    [
+        pytest.param(written, expected, id=name)
+        for name, written, expected in CURRENCY_CASES
+    ],
 )
 def test_currency_token_is_consumed_on_either_side(forms, written, expected):
     out = verbalise(ValidatedSentence(text=written, language="en"), forms)
@@ -165,9 +186,7 @@ def test_unknown_value_falls_back_to_digits(forms):
 def test_language_without_a_table_keeps_digits(forms):
     # Arabic table is empty until natively authored (VERIFY: day 3);
     # digits are normalised to western form and left for TTS
-    out = verbalise(
-        ValidatedSentence(text="السعر ٩٨٥٬٠٠٠ درهم", language="ar"), forms
-    )
+    out = verbalise(ValidatedSentence(text="السعر ٩٨٥٬٠٠٠ درهم", language="ar"), forms)
     assert "985,000" in out.text
 
 
@@ -301,3 +320,51 @@ def test_the_old_flat_list_shape_fails_with_a_message(tmp_path: Path):
 
     with pytest.raises(ValueError, match="'en' must map to 'currency_tokens'"):
         load_spoken_forms(path)
+
+
+# --- coverage: ADR-009's "complete by construction", actually checked --------
+#
+# The claim is that only allowed figures reach verbalisation, so the reachable
+# figures are enumerable and can all be authored once. Nothing enforced it.
+
+
+def test_english_has_a_spoken_form_for_every_currency_amount_and_percent():
+    """The drift guard. Adding a project to inventory adds a price and four
+    derived instalments, and without this nothing notices that they have no
+    spoken form until a buyer hears raw digits."""
+    allowed = build_allowed_figures(load_inventory())
+    assert spoken_form_gaps(load_spoken_forms(), allowed, "en") == {}
+
+
+def test_square_footages_and_the_hotline_are_not_reported_as_gaps():
+    """They are in `amounts` but they are not money, and they SHOULD have no
+    form: the digit fallback reads a bare quantity correctly, while a
+    currency-naming form would produce "four hundred and twenty dirhams square
+    feet". Reporting them would send whoever authors the table into that.
+    """
+    allowed = build_allowed_figures(load_inventory())
+    not_money = allowed.amounts - allowed.currency_amounts
+    assert not_money, "nothing is classified non-currency, so this is vacuous"
+    # Sizes come from inventory, the hotline from the whitelist's identifier.
+    assert 420.0 in not_money and 80015.0 in not_money
+
+    reported = spoken_form_gaps(load_spoken_forms(), allowed, "en").get("amount", [])
+    assert not (set(reported) & not_money)
+
+
+def test_an_unauthored_language_reports_every_figure_it_owes():
+    """What the native-reviewer packet is built from, so it must be complete
+    rather than a sample."""
+    allowed = build_allowed_figures(load_inventory())
+    forms = load_spoken_forms()
+    for language in ("ar", "hi"):
+        if forms.by_value.get((language, "amount", 985000.0)):
+            continue  # authored since; the English test above covers drift
+        gaps = spoken_form_gaps(forms, allowed, language)
+        assert set(gaps["amount"]) == set(allowed.currency_amounts)
+        assert set(gaps["percent"]) == set(allowed.percents)
+        assert quarter_surface_gaps(forms, language) == [
+            "Q2 2027",
+            "Q3 2026",
+            "Q4 2026",
+        ]
