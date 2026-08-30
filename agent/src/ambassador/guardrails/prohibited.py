@@ -42,6 +42,7 @@ native speaker authors patterns - not when anyone here translates them.
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -58,17 +59,60 @@ class ProhibitedPattern:
 
 
 def load_patterns(path: Path | None = None) -> list[ProhibitedPattern]:
-    raw = yaml.safe_load(
-        (path or _DATA_DIR / "prohibited-patterns.yaml").read_text(encoding="utf-8")
-    )
+    """Compile the file, or say what is wrong with it in one sentence.
+
+    Every failure here already landed at start-up rather than mid-call, so
+    none of this is a correctness fix. It is that the next person to edit this
+    file is an engineer transcribing a native reviewer's patterns, and
+    `KeyError: 'language'` with no filename and no line is a poor thing to hand
+    them. The sibling loaders in `data/` all report their own failures; this
+    one did not.
+    """
+    source = path or _DATA_DIR / "prohibited-patterns.yaml"
+    raw: Any = yaml.safe_load(source.read_text(encoding="utf-8"))
+    groups = [] if raw is None else raw
+    if not isinstance(groups, list):
+        raise ValueError(
+            f"{source.name}: the file must be a list of pattern groups, got "
+            f"{type(groups).__name__}."
+        )
+
     compiled: list[ProhibitedPattern] = []
-    for group in raw:
-        for pattern in group["patterns"]:
+    for index, group in enumerate(groups):
+        where = f"{source.name}: group {index}"
+        if not isinstance(group, dict):
+            raise ValueError(f"{where} is a {type(group).__name__}, not a mapping.")
+        for field in ("category", "language", "patterns"):
+            if not group.get(field):
+                raise ValueError(
+                    f"{where} ({group.get('category', 'unnamed')!r}) has no "
+                    f"{field!r}. 'language' records who was competent to write "
+                    "these patterns, so it is required even though every "
+                    "pattern is matched in every language."
+                )
+        patterns = group["patterns"]
+        if not isinstance(patterns, list):
+            raise ValueError(
+                f"{where}: 'patterns' must be a list, got {type(patterns).__name__}."
+            )
+        for pattern in patterns:
+            if not isinstance(pattern, str):
+                raise ValueError(
+                    f"{where}: every pattern must be a quoted regular "
+                    f"expression, got {type(pattern).__name__}."
+                )
+            try:
+                regex = re.compile(pattern, re.IGNORECASE)
+            except re.error as exc:
+                raise ValueError(
+                    f"{where}: {pattern!r} is not a valid regular expression "
+                    f"({exc}). Remember YAML needs the backslashes doubled."
+                ) from exc
             compiled.append(
                 ProhibitedPattern(
                     category=group["category"],
                     language=group["language"],
-                    regex=re.compile(pattern, re.IGNORECASE),
+                    regex=regex,
                 )
             )
     return compiled

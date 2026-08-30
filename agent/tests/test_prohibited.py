@@ -1,3 +1,5 @@
+import pytest
+
 from ambassador.guardrails.prohibited import (
     check_prohibited,
     languages_covered,
@@ -106,3 +108,47 @@ def test_coverage_is_honest_about_a_language_with_no_patterns(tmp_path):
     covered = languages_covered(load_patterns(source))
     assert "en" in covered
     assert "ar" not in covered
+
+
+# --- the loader reports its own failures -----------------------------------
+#
+# All of these already failed at start-up rather than mid-call, so none is a
+# correctness fix. The next person to edit this file is an engineer
+# transcribing a native reviewer's patterns, and a bare KeyError with no
+# filename is a poor thing to hand them.
+
+
+def write_patterns(tmp_path, body: str):
+    path = tmp_path / "prohibited-patterns.yaml"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_a_group_missing_its_language_says_so_and_says_why_it_matters(tmp_path):
+    path = write_patterns(tmp_path, '- category: c\n  patterns:\n    - "x"\n')
+    with pytest.raises(ValueError, match="has no 'language'"):
+        load_patterns(path)
+
+
+def test_a_group_missing_its_patterns_says_so(tmp_path):
+    with pytest.raises(ValueError, match="has no 'patterns'"):
+        load_patterns(write_patterns(tmp_path, "- category: c\n  language: ar\n"))
+
+
+def test_an_invalid_regex_names_the_pattern_and_the_yaml_trap(tmp_path):
+    """Doubling backslashes is the mistake this file invites, and the message
+    should say so rather than leaving a bare `re.error`."""
+    path = write_patterns(
+        tmp_path, '- category: c\n  language: ar\n  patterns:\n    - "[unclosed"\n'
+    )
+    with pytest.raises(ValueError, match="not a valid regular expression"):
+        load_patterns(path)
+
+
+def test_an_empty_file_loads_as_no_patterns_rather_than_a_type_error(tmp_path):
+    assert load_patterns(write_patterns(tmp_path, "")) == []
+
+
+def test_a_file_of_the_wrong_shape_gives_a_message(tmp_path):
+    with pytest.raises(ValueError, match="must be a list of pattern groups"):
+        load_patterns(write_patterns(tmp_path, "category: c\n"))
