@@ -69,7 +69,13 @@ Ordering restated once: guardrails inspect digits, verbalisation destroys digits
 
 ## Pronunciation lexicon
 
-`data/lexicon.yaml` - per language, applied before synthesis. Fish exposes phoneme control for English only among our languages (CMU Arpabet - the `arpabet` field); Arabic and Hindi rely on the `respell` field, alias respelling written into the text ("Bin-GAH-tee").
+`data/lexicon.yaml` - per language, applied before synthesis by `adapter/lexicon.py` in the `tts_node`, after guardrails and verbalisation. Respelling destroys the word the way verbalisation destroys the digits, so it comes last: the transcript, the audit and the ambassador view keep the real words, and only the synthesiser sees "bin-GAH-tee". Fish exposes phoneme control for English only among our languages (CMU Arpabet - the `arpabet` field); Arabic and Hindi rely on the `respell` field.
+
+**This file also had no loader, so none of it was reaching Fish in any language.** "Binghatti" was synthesised from its literal spelling, and the by-ear verification this section asks for could not be carried out, because the thing under test was not in the path.
+
+**Respellings are per language, and that is not a formality.** A respelling is instructions to a voice in that voice's own orthography. Handing "bin-GAH-tee" to an Arabic voice does not fix a mispronunciation, it selects a different one, quite possibly a spelled-out one. So a term is respelled only in a language whose entry someone competent in that language wrote, and passed through untouched otherwise - which is exactly the old behaviour, so an unauthored language is no worse off. The `en` entries are the build team's own; ar and hi are native-authored deliverables like the rest of `data/`.
+
+Two properties are held by tests rather than by care: a term is still respelled when the text stream happens to split across it (today's chunks are whole sentences so it cannot happen, which is why nothing else would notice if that changed), and the first sentence is never held back, because TTS first audio is one of the two largest remaining components of the budget.
 
 Minimum set: **Binghatti** (mispronouncing the client's name in their own boardroom is unrecoverable), Bugatti, Jacob&Co, Burj Khalifa, Jumeirah Village Circle, Al Jaddaf, Business Bay, Meydan, Oqood, Trakheesi, Ejari, dirham/AED. Verify each by ear in every shipped voice during rehearsal.
 

@@ -35,7 +35,7 @@ import pytest
 # ADR-002: the core stays installable and testable with no voice stack present.
 pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
 
-from livekit.agents import APIConnectOptions  # noqa: E402
+from livekit.agents import Agent, APIConnectOptions  # noqa: E402
 from livekit.agents import llm as lk_llm  # noqa: E402
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN  # noqa: E402
 from livekit.agents.voice import SpeechHandle  # noqa: E402
@@ -751,3 +751,40 @@ async def test_the_override_opens_in_english_and_the_event_stream_says_so(monkey
     assert event["language"] == "en"
     assert event["requested_language"] == "ar"
     assert event["uncertified_fallback"] is True
+
+
+# --- the lexicon reaches the synthesiser -----------------------------------
+#
+# The module had full unit coverage while `tts_node` ignored it, which is the
+# original defect one layer up: a respelling that exists and never arrives.
+# A mutation that replaced the wiring with a pass-through killed no test until
+# this one existed.
+#
+# The mirror case - an unauthored language must be handed the original
+# words, never an English respelling - is covered in test_lexicon.py rather
+# than here, because constructing an `ar` agent will stop being possible
+# once the disclosure gate lands and this test would become a landmine.
+
+
+async def test_the_respelling_is_applied_to_the_text_handed_to_tts(monkeypatch):
+    log = EventLog("sess_test", stream=StringIO(), verbose=False)
+    agent = AmbassadorAgent(settings=make_settings(language="en"), log=log)
+
+    handed_to_tts: list[str] = []
+
+    async def capture(agent_, text, model_settings):
+        async for chunk in text:
+            handed_to_tts.append(chunk)
+        return
+        yield  # makes this an async generator; never reached
+
+    monkeypatch.setattr(Agent.default, "tts_node", staticmethod(capture))
+
+    async def source():
+        yield "Binghatti Skyrise is ready."
+
+    assert [frame async for frame in agent.tts_node(source(), None)] == []
+
+    joined = "".join(handed_to_tts)
+    assert "bin-GAH-tee" in joined, joined
+    assert "Binghatti" not in joined, joined

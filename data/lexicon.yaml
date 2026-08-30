@@ -1,38 +1,70 @@
-# Pronunciation lexicon (docs/04-). Applied before synthesis.
-# TTS is Fish Audio (ADR-014), which supports phoneme control for ENGLISH
-# ONLY among our languages, in CMU Arpabet notation: the `arpabet` field.
-# Arabic and Hindi voices rely on `respell` - alias respelling written into
-# the text before synthesis.
-# VERIFY: every entry BY EAR in every shipped voice during day 5 rehearsal.
-# Mispronouncing "Binghatti" in their own boardroom is unrecoverable.
+# Pronunciation lexicon (docs/04-). Applied to the text handed to TTS, after
+# guardrails and verbalisation, by agent/src/adapter/lexicon.py. The transcript
+# and the audit keep the real words; only the synthesiser sees a respelling.
+#
+# This file had no loader at all until that module existed, so none of the
+# below was reaching Fish, in any language. "Binghatti" was synthesised from
+# its literal spelling.
+#
+# TTS is Fish Audio (ADR-014), which supports phoneme control for ENGLISH ONLY
+# among our languages, in CMU Arpabet notation: the `arpabet` field. Other
+# languages rely on `respell` - alias respelling written into the text before
+# synthesis.
+#
+# RESPELLINGS ARE PER LANGUAGE, AND THIS IS NOT A FORMALITY. A respelling is
+# instructions to a voice in that voice's own orthography. "bin-GAH-tee" tells
+# an English voice what to do and tells an Arabic voice to read Latin letters,
+# which is a different mispronunciation rather than a fix - very possibly a
+# spelled-out one. So a term is only respelled in a language whose entry
+# someone competent in that language has written, and is otherwise passed
+# through untouched, which is exactly today's behaviour and no worse than it.
+#
+# The `en` entries below are the build team's own and are English. Marking them
+# so is a statement of fact, not an act of authorship.
+# VERIFY: ar and hi respellings are native-authored, and every entry is checked
+# BY EAR in every shipped voice during rehearsal. Mispronouncing the client's
+# name in their own boardroom is unrecoverable.
 
 - term: Binghatti
   arpabet: null   # VERIFY: with the client - bin-GAT-ti
-  respell: "bin-GAH-tee"
+  respell:
+    en: "bin-GAH-tee"
 - term: Bugatti
   arpabet: null
-  respell: "boo-GAH-tee"
+  respell:
+    en: "boo-GAH-tee"
 - term: Jacob & Co
   arpabet: null
-  respell: "JAY-kob and ko"
+  respell:
+    en: "JAY-kob and ko"
 - term: Jumeirah Village Circle
   arpabet: null
-  respell: "joo-MAY-rah Village Circle"
+  respell:
+    en: "joo-MAY-rah Village Circle"
 - term: Al Jaddaf
   arpabet: null
-  respell: "al JAD-daf"
+  respell:
+    en: "al JAD-daf"
 - term: Meydan
   arpabet: null
-  respell: "may-DAHN"
+  respell:
+    en: "may-DAHN"
 - term: Oqood
   arpabet: null
-  respell: "oh-KOOD"
+  respell:
+    en: "oh-KOOD"
 - term: Trakheesi
   arpabet: null
-  respell: "tra-KHEE-see"
+  respell:
+    en: "tra-KHEE-see"
 - term: Ejari
   arpabet: null
-  respell: "eh-JAH-ree"
+  respell:
+    en: "eh-JAH-ree"
 - term: AED
   arpabet: null
-  respell: "dirhams"
+  # A backstop. Verbalisation already consumes the written currency token beside
+  # an allowed figure (data/spoken-forms.yaml), so a surviving "AED" is one that
+  # reached TTS some other way.
+  respell:
+    en: "dirhams"
