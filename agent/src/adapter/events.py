@@ -95,7 +95,9 @@ def _redact_brief(brief: Any) -> Any:
     out: dict[str, Any] = {k: brief[k] for k in _BRIEF_EMITTED_FIELDS if k in brief}
     budget = brief.get("budget")
     # The confirmed flag is a conversation-state fact; the amount is not.
-    out["budget_confirmed"] = None if not isinstance(budget, dict) else budget.get("confirmed")
+    out["budget_confirmed"] = (
+        None if not isinstance(budget, dict) else budget.get("confirmed")
+    )
     out["redacted"] = True
     return out
 
@@ -164,6 +166,7 @@ _REDACTED_FIELDS: Final[dict[str, tuple[str, ...]]] = {
 CLEAR_EVENTS: Final[dict[str, str]] = {
     "session_start": "the already-redacted config summary: model names, modes, booleans",
     "session_end": "a turn count",
+    "disclosure": "two language codes and a boolean, all from configuration",
     "stt_enabled": "the STT model and provider names",
     "stt_disabled": "a fixed literal reason the adapter wrote",
     "llm_request": "turn index, the tool names offered, the tool-choice mode",
@@ -243,9 +246,7 @@ class EventLog:
         self._stream = stream if stream is not None else sys.stdout
         self._turns: list[TurnRecord] = []
         self._file: TextIO | None = None
-        self.verbose = (
-            _verbose_from_env() if verbose is None else verbose
-        )
+        self.verbose = _verbose_from_env() if verbose is None else verbose
 
         path = file_path or (
             Path(os.environ[_FILE_SINK_ENV]) if os.environ.get(_FILE_SINK_ENV) else None
@@ -386,7 +387,12 @@ class EventLog:
 
 
 def _verbose_from_env() -> bool:
-    return os.environ.get(_VERBOSE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+    return os.environ.get(_VERBOSE_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 class TurnTracker:
@@ -443,7 +449,9 @@ class TurnTracker:
         if self.llm_ttft is None:
             self.llm_ttft = self.elapsed()
             self._log.emit(
-                "llm_ttft", turn=self.turn_index, ms=_ms(self.llm_ttft),
+                "llm_ttft",
+                turn=self.turn_index,
+                ms=_ms(self.llm_ttft),
                 model=self.model,
             )
 

@@ -154,6 +154,12 @@ class Settings:
     prompt_mode: PromptMode
     demo_mode: bool
     language: Language
+    # Opens a call in a language with no native-authored disclosure, falling
+    # back to the English one. docs/04- argues for demonstrating Arabic
+    # degrading gracefully rather than avoiding Arabic, and this is the switch
+    # that permits it. Off by default: the disclosure is the one thing a call
+    # may not open without.
+    allow_uncertified_language: bool
 
     @property
     def thinking_disabled(self) -> bool:
@@ -273,4 +279,7 @@ def load_settings(env_path: Path | None = None) -> Settings:
         prompt_mode=prompt_mode,
         demo_mode=_resolve_bool(file_values, "DEMO_MODE"),
         language=language,
+        allow_uncertified_language=_resolve_bool(
+            file_values, "ALLOW_UNCERTIFIED_LANGUAGE"
+        ),
     )

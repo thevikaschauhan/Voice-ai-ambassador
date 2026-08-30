@@ -42,6 +42,7 @@ from livekit.agents.voice import SpeechHandle  # noqa: E402
 
 from adapter.agent import AmbassadorAgent, shutdown_session  # noqa: E402
 from adapter.config import Settings  # noqa: E402
+from adapter.disclosure import UncertifiedLanguageError  # noqa: E402
 from adapter.events import EventLog  # noqa: E402
 from adapter.interception import FALLBACK_COPY  # noqa: E402
 from adapter.llm_openrouter import build_llm, clamp_retry_after  # noqa: E402
@@ -77,6 +78,7 @@ def make_settings(**overrides: Any) -> Settings:
         prompt_mode="ambassador",
         demo_mode=False,
         language="en",
+        allow_uncertified_language=False,
     )
     base.update(overrides)
     return Settings(**base)
@@ -154,7 +156,9 @@ class SpyLLM(lk_llm.LLM):
         return self._streams.pop(0)
 
 
-def make_agent(streams: list[Any]) -> tuple[AmbassadorAgent, EventLog, StringIO, SpyLLM]:
+def make_agent(
+    streams: list[Any],
+) -> tuple[AmbassadorAgent, EventLog, StringIO, SpyLLM]:
     buf = StringIO()
     log = EventLog("sess_test", stream=buf, verbose=False)
     agent = AmbassadorAgent(settings=make_settings(), log=log)
@@ -248,7 +252,9 @@ async def test_the_failure_is_recorded_as_an_llm_failure_event():
     assert failures[0]["error"] == "Boom"
     assert failures[0]["spoken_before"] is False
     # The composed reply is logged as a fallback, not as a bridge.
-    assert [e["event"] for e in events if e["event"] in ("bridge", "fallback")] == ["fallback"]
+    assert [e["event"] for e in events if e["event"] in ("bridge", "fallback")] == [
+        "fallback"
+    ]
     assert [e for e in events if e["event"] == "fallback"][0]["reason"] == "llm_failure"
 
 
@@ -364,7 +370,11 @@ async def test_the_shutdown_path_drains_the_event_log():
 
     await shutdown_session(agent=agent, log=log, llm=built, stt_node=None)
 
-    events = [json.loads(line)["event"] for line in buf.getvalue().splitlines() if line.strip()]
+    events = [
+        json.loads(line)["event"]
+        for line in buf.getvalue().splitlines()
+        if line.strip()
+    ]
     assert events == ["session_start", "session_end"]
 
 
@@ -615,7 +625,12 @@ def test_the_system_prompt_is_marked_cacheable():
     from adapter.llm_openrouter import mark_system_prompt_cacheable
 
     body = _json.dumps(
-        {"messages": [{"role": "system", "content": "INVENTORY"}, {"role": "user", "content": "hi"}]}
+        {
+            "messages": [
+                {"role": "system", "content": "INVENTORY"},
+                {"role": "user", "content": "hi"},
+            ]
+        }
     ).encode()
     out = _json.loads(mark_system_prompt_cacheable(body))
     system = out["messages"][0]["content"]
@@ -646,3 +661,87 @@ def test_the_rewrite_can_be_switched_off():
 
     transport = UsageTappingTransport(lambda _u: None, cache_system_prompt=False)
     assert transport._cache_system_prompt is False
+
+
+# --- the opening disclosure ------------------------------------------------
+#
+# `AmbassadorAgent` resolves its opening in __init__ and speaks it in
+# on_enter. Both halves matter: resolving early is what makes an uncertified
+# language a start-up error rather than a discovery made while a buyer is
+# already on the line, and `allow_interruptions=False` is the whole reason the
+# disclosure is system speech instead of a line in the prompt.
+
+
+@dataclass
+class _RecordedSay:
+    text: str
+    allow_interruptions: Any
+
+
+class _FakeSession:
+    def __init__(self) -> None:
+        self.said: list[_RecordedSay] = []
+
+    def say(self, text, *, allow_interruptions=NOT_GIVEN, **kwargs):
+        self.said.append(_RecordedSay(text, allow_interruptions))
+        return None
+
+
+def _attach(monkeypatch, agent: AmbassadorAgent) -> _FakeSession:
+    """A real AgentSession needs a room, a worker and live credentials."""
+    session = _FakeSession()
+    monkeypatch.setattr(
+        AmbassadorAgent, "session", property(lambda self: session), raising=False
+    )
+    return session
+
+
+async def test_the_disclosure_is_spoken_and_cannot_be_barged_over(monkeypatch):
+    buf = StringIO()
+    log = EventLog("sess_test", stream=buf, verbose=False)
+    agent = AmbassadorAgent(settings=make_settings(language="en"), log=log)
+    session = _attach(monkeypatch, agent)
+
+    await agent.on_enter()
+
+    assert len(session.said) == 1
+    spoken = session.said[0]
+    # The specific claim the copy has to make, not just "something was said".
+    assert "transcribed" in spoken.text.lower()
+    assert spoken.allow_interruptions is False
+
+
+async def test_an_uncertified_language_refuses_to_build_the_agent_at_all():
+    """The failure lands in __init__, before a room is ever connected."""
+    log = EventLog("sess_test", stream=StringIO(), verbose=False)
+    with pytest.raises(UncertifiedLanguageError, match="'ar'"):
+        AmbassadorAgent(settings=make_settings(language="ar"), log=log)
+
+
+async def test_the_override_opens_in_english_and_the_event_stream_says_so(monkeypatch):
+    """The degradation has to be visible in the record, not just in the audio.
+
+    An Arabic call that opened with an English disclosure and logged
+    `language: ar` would be a false audit of a compliance step.
+    """
+    buf = StringIO()
+    log = EventLog("sess_test", stream=buf, verbose=False)
+    agent = AmbassadorAgent(
+        settings=make_settings(language="ar", allow_uncertified_language=True),
+        log=log,
+    )
+    session = _attach(monkeypatch, agent)
+
+    await agent.on_enter()
+    # The log queues writes to a single writer task, so the buffer is only
+    # authoritative once it has been drained.
+    await log.aclose()
+
+    assert "transcribed" in session.said[0].text.lower()  # the English copy
+    emitted = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+    disclosures = [e for e in emitted if e["event"] == "disclosure"]
+    assert len(disclosures) == 1, emitted
+    event = disclosures[0]
+    assert event["language"] == "en"
+    assert event["requested_language"] == "ar"
+    assert event["uncertified_fallback"] is True

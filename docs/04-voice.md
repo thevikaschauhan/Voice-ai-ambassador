@@ -83,7 +83,11 @@ The framework's default false-interruption handling (pause playback, two-second 
 
 ## Recording, consent, data
 
-- Disclosure + transcription notice at call start, selected language, fixed copy from `data/disclosures.yaml`, native-reviewed, never model-generated. The copy says "transcribed", not "recorded" - the POC stores no raw audio, and the notice must match what is actually retained.
+- Disclosure + transcription notice at call start, selected language, fixed copy from `data/disclosures.yaml`, native-reviewed, never model-generated. The copy says "transcribed", not "recorded" - the POC stores no raw audio, and the notice must match what is actually retained. Spoken from the agent's `on_enter` hook with `allow_interruptions=False`, so it completes even under barge-in.
+
+  **This paragraph described something that was not happening.** `data/disclosures.yaml` had no loader anywhere in the codebase, no call site spoke it, and the system prompt told the model the opening was handled for it - so the model was instructed not to disclose and nothing else did. The result was a voice agent that never disclosed it was one, in any language, English included. Wired in `adapter/disclosure.py`; every branch of the original omission was individually reasonable, which is why nothing caught it.
+
+- **An empty disclosure blocks its language.** A language with no native-authored copy cannot open a call, because the disclosure *is* the thing it would be opening without, so `LANGUAGE=ar` now refuses to start rather than degrading quietly. `ALLOW_UNCERTIFIED_LANGUAGE=true` opens in English instead and marks the event stream `uncertified_fallback: true` - that is the graceful-degradation demo this document argues for, not a way to ship an unreviewed language. Presence of copy in that file is consequently the readiness signal for a language, which makes the ship-Arabic-or-drop-it decision a state of the repository rather than a note in a meeting.
 - No raw audio stored. Transcript, guardrail decisions, timings, brief only.
 - `VERIFY:` UAE requirements on consent wording and voice-as-biometric under PDPL with a qualified adviser before production.
 
