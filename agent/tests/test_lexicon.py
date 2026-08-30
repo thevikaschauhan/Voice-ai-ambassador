@@ -203,3 +203,23 @@ def test_coverage_reports_only_languages_with_entries(tmp_path):
 
 def test_an_empty_lexicon_is_not_an_error(tmp_path):
     assert load_lexicon(write(tmp_path, "")) == Lexicon(by_language={})
+
+
+def test_a_respelling_is_substituted_literally_not_as_a_regex_template(tmp_path):
+    r"""`re.sub` reads a replacement string as a template.
+
+    A backslash in a respelling is an escape and `\1` is a group reference;
+    both raise `re.PatternError`. This runs inside `tts_node`, so that raise is
+    a turn with no audio, and the values likeliest to contain a backslash are
+    exactly the native-authored ones this file exists to receive.
+    """
+    for respelling in (r"bin\GAH-tee", r"bin-\1-tee", r"bin\\GAH", r"a\g<0>b"):
+        # YAML single-quoted scalars take a backslash literally, so the value
+        # in the file is exactly `respelling`. Python's repr() would escape it
+        # and test something else.
+        quoted = "'" + respelling.replace("'", "''") + "'"
+        path = write(
+            tmp_path, "- term: Binghatti\n  respell:\n    en: " + quoted + "\n"
+        )
+        spoken = load_lexicon(path).apply("Binghatti Skyrise", "en")
+        assert spoken == f"{respelling} Skyrise", respelling

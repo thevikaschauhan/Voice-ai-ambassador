@@ -75,7 +75,14 @@ class Lexicon:
 
     def apply(self, text: str, language: Language) -> str:
         for pattern, respelling in self.by_language.get(language, ()):
-            text = pattern.sub(respelling, text)
+            # A function, not the string: `re.sub` reads a replacement STRING
+            # as a template, so a backslash in a respelling is an escape and
+            # `\1` is a group reference. Both raise `re.PatternError`, and this
+            # runs inside `tts_node`, so the raise would surface as a turn with
+            # no audio - the one outcome AGENTS.md rules out absolutely. The
+            # values likeliest to contain a backslash are the native-authored
+            # ones this file exists to receive.
+            text = pattern.sub(lambda _match, r=respelling: r, text)
         return text
 
 
