@@ -166,9 +166,53 @@ def test_the_credential_rule_covers_the_names_this_system_actually_uses():
     } <= classified
 
 
+# Deliberately looser than `_is_credential`: it matches a credential word
+# ANYWHERE in the name, so it also flags run-together spellings like
+# `livekit_apikey` that the real rule skips to keep plain configuration
+# readable. The looseness is the point - this is a build-time tripwire, not
+# the masking rule.
+_CREDENTIAL_SUBSTRINGS = ("key", "secret", "token", "password", "credential")
+
+
+def test_no_credential_looking_field_escapes_classification():
+    """The gap `_is_credential` leaves on purpose, closed at build time.
+
+    `_is_credential` matches whole underscore-separated parts so that `monkey`
+    is not a `key`. That means a field named `livekit_apikey` or `authtoken`
+    would slip through and print in full. Rather than loosen the masking rule
+    and make real configuration unreadable in the operator's own log, this
+    fails the suite the moment such a field is added, and the fix is to rename
+    it to the `*_api_key` convention the rest of the settings already use.
+    """
+    suspicious = [
+        field.name
+        for field in fields(Settings)
+        if any(word in field.name.lower() for word in _CREDENTIAL_SUBSTRINGS)
+    ]
+    assert suspicious, "no field looks credential-bearing, so this is vacuous"
+
+    unclassified = [name for name in suspicious if not _is_credential(name)]
+    assert not unclassified, (
+        "these fields read as credentials but are not masked, so their values "
+        f"reach repr() and the event stream: {unclassified}. Rename them to the "
+        "underscore-separated convention (…_api_key, …_api_secret) that "
+        "_is_credential recognises."
+    )
+
+
 def test_plausible_future_credential_names_are_caught_and_plain_config_is_not():
     # Caught: the shapes a future vendor field is likely to take.
-    for name in ("twilio_auth_token", "webhook_signing_secret", "db_password"):
+    for name in (
+        "twilio_auth_token",
+        "webhook_signing_secret",
+        "db_password",
+        # Plurals. The first version of the rule compared whole parts
+        # against singular words only and let every one of these through.
+        "fish_api_keys",
+        "auth_tokens",
+        "service_credentials",
+        "signing_secrets",
+    ):
         assert _is_credential(name), name
     # Not caught, and must not be: redacting these would make the operator's
     # own configuration unreadable in the very log they check it from.

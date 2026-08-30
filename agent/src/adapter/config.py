@@ -61,7 +61,21 @@ _CREDENTIAL_WORDS: Final = frozenset(
 
 
 def _is_credential(field_name: str) -> bool:
-    return bool(_CREDENTIAL_WORDS & set(field_name.split("_")))
+    """True when the name says the value is a credential.
+
+    Plurals count: `api_keys` is as much a credential as `api_key`, and the
+    first version of this rule missed it because it compared whole parts
+    against singular words only.
+
+    A part that merely CONTAINS a credential word does not count, so `monkey`
+    is not a `key` and an operator can still read their own configuration out
+    of a log. That leaves one gap on purpose - a run-together name like
+    `apikey` - and `test_no_credential_looking_field_escapes_classification`
+    is the guard for it: it scans the dataclass with a deliberately looser
+    substring rule and fails the build rather than letting the value leak.
+    """
+    parts = set(field_name.split("_"))
+    return bool(_CREDENTIAL_WORDS & (parts | {p.removesuffix("s") for p in parts}))
 
 
 _MASK = "<set>"
