@@ -1,0 +1,44 @@
+# Deterministic confirmation copy (ADR-011, docs/04-).
+#
+# Fixed copy with one slot, never model-generated - same rule as the
+# disclosure and the fallbacks (ADR-013). The slot is filled with a literal
+# slice of the buyer's own transcript, never with anything a model wrote.
+#
+# Why the first budget mention is ALWAYS confirmed, even when the buyer named
+# the currency: a misheard "two" for "ten" is as expensive as a misread
+# currency, and one extra question at the top of a call is cheap next to
+# recommending a property twenty times off.
+#
+# `{amount}` is replaced with what the buyer said, e.g. "2 crore".
+
+en:
+  # Currency unstated. Names both options so the buyer answers in one word.
+  ask_currency: "{amount} - is that in dirhams or in rupees?"
+  # Currency stated. Read back to catch a misheard number, not the currency.
+  confirm_amount: "{amount} - have I got that right?"
+  # The buyer's budget is in a currency we hold no confirmed rate for. We do
+  # not guess a conversion; we hand over. See data/currencies.yaml.
+  cannot_convert: >-
+    I would rather not convert that myself and risk being wrong.
+    Let me put you through to one of our ambassadors.
+  # Three tries and the buyer still has not told us. Making them repeat a
+  # fourth time earns lasting resentment (docs/04-).
+  give_up: >-
+    Let me put you through to one of our ambassadors who can go through the
+    numbers with you properly.
+
+ar:
+  ask_currency: ""
+  confirm_amount: ""
+  cannot_convert: ""
+  give_up: ""
+  # VERIFY: native-authored. Until these exist the policy cannot run in
+  # Arabic, and the loader reports the language as uncovered rather than
+  # speaking English into an Arabic call.
+
+hi:
+  ask_currency: ""
+  confirm_amount: ""
+  cannot_convert: ""
+  give_up: ""
+  # VERIFY: native-authored. Same rule.

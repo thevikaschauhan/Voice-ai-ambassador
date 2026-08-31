@@ -71,6 +71,39 @@ List every written form of the currency your phrases above already say aloud - t
 
 - [ ] currency tokens:
 
+## 3b. Checking a buyer's budget back to them
+
+Before recommending anything, the system reads a stated budget back. It never guesses a currency: "two crore" is about AED 880,000 if the buyer meant rupees and AED 20 million if they meant dirhams, and guessing wrong recommends a property twenty times off.
+
+`{amount}` is replaced with what the buyer said, e.g. "2 crore".
+
+**ask_currency** - they gave a number but no currency
+English: > {amount} - is that in dirhams or in rupees?
+- [ ] Hindi:
+
+**confirm_amount** - they gave both; we read it back to catch a mishearing
+English: > {amount} - have I got that right?
+- [ ] Hindi:
+
+**cannot_convert** - their budget is not in dirhams and we will not guess a rate
+English: > I would rather not convert that myself and risk being wrong. Let me put you through to one of our ambassadors.
+- [ ] Hindi:
+
+**give_up** - they have been asked three times; hand to a person warmly
+English: > Let me put you through to one of our ambassadors who can go through the numbers with you properly.
+- [ ] Hindi:
+
+### The currency words a buyer might say
+
+Every way a buyer could name dirhams or rupees out loud, so the system hears it. Different from the list above: that one is what the agent says, this is what a Hindi speaker says to it.
+
+- [ ] dirhams:
+- [ ] rupees:
+
+And the words that mark a number as a budget rather than a bedroom count - the equivalents of "budget", "spend", "afford", "up to".
+
+- [ ] budget words:
+
 ## 4. How these names should sound
 
 (Respellings exist today for: en.)

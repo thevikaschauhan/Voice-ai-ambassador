@@ -39,6 +39,15 @@ The plan is as strict about input numbers as output ones. Two failure modes:
 1. **Misrecognition**: "two million" transcribed as "two hundred million".
 2. **Unit and currency ambiguity**: "do crore ka budget hai" - two crore of what? INR 2 crore is roughly AED 880k; AED 2 crore is 20 million. Guessing wrong recommends a property off by up to 20x. Same trap with "million" from European and Russian buyers assuming home currency.
 
+**Confirmation policy (ADR-011), deterministic - and now implemented in `ambassador/budget.py`, not in the prompt.** It was prompt constraint 8 until this landed, and ADR-007 is explicit that prompt instructions reduce violation rates without eliminating them. What makes it deterministic is that the policy takes the turn: when a confirmation is owed, `llm_node` speaks it and the model never runs, so the question cannot be skipped, reworded, or answered on the buyer's behalf. Constraint 8 now tells the model the system owns this, the way constraint 10 already did for the disclosure.
+
+Two things are deliberately refused rather than approximated:
+
+- **No conversion on an unverified rate.** `data/currencies.yaml` ships no rate and `confirmed: false`. A made-up exchange rate spoken to a buyer is the same class of error as a made-up price - a specific, checkable, wrong number said with confidence - so a non-AED budget is handed to a human instead. An operator sets a real rate, dates it, and flips the flag. Worth demonstrating rather than hiding.
+- **No English confirmation in a non-English call.** The copy is per language and only English is authored, so the policy reports itself off for ar/hi rather than asking the question in the wrong language.
+
+The confirmation echoes the buyer's own budget, which is by construction not an inventory figure, so it cannot go through `SentenceGuard.compose()` - every confirmation would be blocked as a fabricated amount. It takes a separate, bounded path: the template comes from `data/confirmations.yaml`, the slot must be a literal substring of the transcript, and no model output passes through it. The spoken text stays out of the emitted event stream for the same reason a buyer utterance does.
+
 **Confirmation policy (ADR-011), deterministic:**
 
 - The first budget mention in a session is always confirmed, and the confirmation names the currency: "Two crore - in rupees or in dirhams?"

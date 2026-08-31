@@ -97,7 +97,8 @@ def describe(node: stt.STT | None) -> dict[str, object]:
     streaming = provider == "deepgram"
     return {
         "provider": provider,
-        "model": getattr(node, "model", None) or getattr(node, "_opts", None)
+        "model": getattr(node, "model", None)
+        or getattr(node, "_opts", None)
         and getattr(node._opts, "model", None),
         "streaming": streaming,
         # The number that decides whether the budget line applies as written.

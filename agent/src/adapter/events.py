@@ -167,6 +167,15 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "session_start": "the already-redacted config summary: model names, modes, booleans",
     "session_end": "a turn count",
     "disclosure": "two language codes and a boolean, all from configuration",
+    "budget_policy": "language codes and booleans, all from configuration",
+    # An enum action, a currency code and booleans - and deliberately NOT the
+    # text. A confirmation echoes the buyer's own budget, so its text is
+    # buyer-derived free content; `record_confirmation` keeps it in the
+    # in-memory TurnRecord, where the audit and the ambassador view need it,
+    # and never puts it on the emitted stream.
+    "budget_confirmation": "an enum action, a currency code and booleans",
+    "budget_confirmed": "a turn index and a currency code",
+    "budget_confirmation_spoken": "a turn index and an enum action, never the text",
     "lexicon": "language codes and a boolean, all from a static data file",
     "prohibited_coverage": "language codes, a boolean and a pattern count",
     "stt_enabled": "the STT model and provider names",
@@ -180,6 +189,10 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "turn_complete": "timings, counts, booleans and the list of tool names fired",
     "bridge": "fixed composed copy from data/fallbacks.yaml (bridge), never generated",
     "fallback": "fixed composed copy from data/fallbacks.yaml (fallback), plus an enum reason",
+    # Both of the above are clear ONLY because their text is fixed copy from a
+    # data file. Anything that interpolates the buyer - the budget
+    # confirmation did, through record_fallback, until this was caught - must
+    # not be routed through them. Use record_confirmation instead.
     "brief_retry": "an attempt number, a delay in seconds, an HTTP status",
     "brief_stale_dropped": "turn indexes and a fixed literal reason",
     "event_log_backpressure": "a dropped-line count and the queue bound",
@@ -538,6 +551,22 @@ class TurnTracker:
         reply (docs/01-). There is nothing to bridge from."""
         self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
         self._log.emit("fallback", turn=self.turn_index, text=text, reason=reason)
+
+    def record_confirmation(self, text: str, action: str) -> None:
+        """A deterministic confirmation spoken instead of running the turn.
+
+        Shaped like `record_fallback` and emitted differently on purpose. That
+        event carries its text in the clear, which is safe for fixed copy out
+        of a data file and NOT safe here: a confirmation interpolates the
+        buyer's own budget, and routing it through `record_fallback` put a
+        buyer-derived figure onto stdout and the file sink. The chunk still
+        goes into the in-memory record, which is what the audit and the
+        ambassador view read.
+        """
+        self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
+        self._log.emit(
+            "budget_confirmation_spoken", turn=self.turn_index, action=action
+        )
 
     def mark_interrupted(self) -> None:
         """Barge-in: the last chunk handed to TTS may not have finished

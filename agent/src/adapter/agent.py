@@ -55,6 +55,8 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice import SpeechHandle
 from livekit.plugins import fishaudio, silero
 
+from ambassador.budget import BudgetPolicy, load_currency_vocabulary
+from ambassador.figures import normalise_digits
 from ambassador.guardrails.prohibited import languages_covered, load_patterns
 from ambassador.inventory import (
     build_allowed_figures,
@@ -66,6 +68,8 @@ from ambassador.verbalise import load_spoken_forms
 
 from .brief import BriefExtractor
 from .config import Settings, load_settings
+from .confirmations import compose as compose_confirmation
+from .confirmations import load_confirmations
 from .disclosure import load_disclosures, resolve_opening
 from .events import EventLog, TurnTracker
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
@@ -159,6 +163,30 @@ class AmbassadorAgent(Agent):
             on_event=log.emit,
             thinking_disabled=settings.thinking_disabled,
         )
+        # ADR-011. The policy speaks INSTEAD of the model when it has a
+        # question, which is what makes it deterministic: prompt constraint 8
+        # asked the model to confirm, and ADR-007 is explicit that asking
+        # reduces violations without eliminating them.
+        self._confirmations = load_confirmations()
+        self._budget_vocabulary = load_currency_vocabulary()
+        self._budget = BudgetPolicy(self._budget_vocabulary, settings.language)
+        self._budget_policy_runs = self._confirmations.covers(settings.language)
+        self._budget_last_action = "none"
+        log.emit(
+            "budget_policy",
+            active=self._budget_policy_runs,
+            call_language=settings.language,
+            copy_languages=sorted(self._confirmations.languages_covered()),
+            currency_languages=sorted(self._budget_vocabulary.languages_covered()),
+            conversion_available=self._budget_vocabulary.rate.usable,
+        )
+        if not self._budget_policy_runs:
+            logger.warning(
+                "budget confirmation policy is OFF for %r: no confirmation copy "
+                "authored, so a budget in this language is acted on unconfirmed",
+                settings.language,
+            )
+
         # Read once at construction: fixed data for the life of the process,
         # and a malformed file should fail in front of the operator rather
         # than on the first sentence of a call.
@@ -290,6 +318,58 @@ class AmbassadorAgent(Agent):
         """
         self._speech_handle = handle
 
+    # -- ADR-011: the deterministic budget confirmation --------------------
+
+    def _budget_confirmation(self, tracker: TurnTracker) -> str | None:
+        """Copy to speak instead of running this turn, or None to carry on.
+
+        Returns None whenever the policy has nothing to say, which is every
+        turn after the budget is settled and every turn in a language whose
+        confirmation copy nobody has authored. Speaking English into an Arabic
+        call would be worse than not asking.
+        """
+        if not self._budget_policy_runs:
+            return None
+        said = normalise_digits(tracker.buyer_utterance)
+        decision = self._budget.observe(said)
+        if not decision.speaks:
+            if decision.currency is not None:
+                self._log.emit(
+                    "budget_confirmed",
+                    turn=tracker.turn_index,
+                    currency=decision.currency,
+                )
+            return None
+
+        template = self._confirmations.line(self._settings.language, decision.action)
+        try:
+            text = (
+                compose_confirmation(
+                    template,
+                    echoed=decision.mention.surface,
+                    said=said,
+                )
+                if decision.mention is not None and "{amount}" in template
+                else template
+            )
+        except ValueError:
+            # The echo did not come from the transcript, which should be
+            # impossible - the surface is extracted from it. Refusing to speak
+            # is right, but the turn must not end in silence, so fall through
+            # to the model rather than raising into the voice path.
+            logger.warning("budget confirmation refused its own echo", exc_info=True)
+            return None
+
+        self._budget_last_action = decision.action
+        self._log.emit(
+            "budget_confirmation",
+            turn=tracker.turn_index,
+            action=decision.action,
+            currency=decision.currency,
+            hands_over=decision.hands_over,
+        )
+        return text
+
     # -- hook 1: interception between LLM and TTS -------------------------
 
     async def llm_node(
@@ -340,6 +420,20 @@ class AmbassadorAgent(Agent):
 
         async def regenerate(detail: str) -> AsyncIterable[Any]:
             return await open_stream(_REGENERATION_INSTRUCTION.format(detail=detail))
+
+        # ADR-011, before the model is given the turn at all. Asking the model
+        # to confirm is what constraint 8 already did; this takes the turn away
+        # from it, so the question cannot be skipped, reworded or answered on
+        # the buyer's behalf.
+        confirmation = self._budget_confirmation(tracker)
+        if confirmation is not None:
+            tracker.record_confirmation(confirmation, self._budget_last_action)
+            yield (
+                confirmation
+                if confirmation.endswith((" ", "\n"))
+                else (confirmation + " ")
+            )
+            return
 
         sink = _tracker_sink(tracker)
         spoke_anything = False

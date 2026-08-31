@@ -788,3 +788,108 @@ async def test_the_respelling_is_applied_to_the_text_handed_to_tts(monkeypatch):
     joined = "".join(handed_to_tts)
     assert "bin-GAH-tee" in joined, joined
     assert "Binghatti" not in joined, joined
+
+
+# --- ADR-011: the confirmation takes the turn away from the model ----------
+#
+# Prompt constraint 8 already asked the model to confirm a budget, and ADR-007
+# is explicit that asking reduces violations without eliminating them. What
+# makes this deterministic is that the model never runs on the turn where a
+# confirmation is owed.
+
+
+def _budget_agent(**overrides):
+    buf = StringIO()
+    log = EventLog("sess_test", stream=buf, verbose=False)
+    agent = AmbassadorAgent(settings=make_settings(**overrides), log=log)
+    return agent, log, buf
+
+
+async def test_an_ambiguous_budget_is_confirmed_and_the_model_never_runs():
+    """The twenty-times error, stopped before it can be made.
+
+    "2 crore" is INR 2 crore (about AED 880k) or AED 2 crore (20 million).
+    The SpyLLM would raise IndexError if it were called, so this also proves
+    no LLM request was made.
+    """
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])  # any call pops from an empty list
+
+    reply = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+
+    assert "2 crore" in reply
+    assert "dirhams or in rupees" in reply
+
+
+async def test_the_confirmation_is_not_repeated_once_the_budget_is_settled():
+    """A policy that asks every turn is one the operator switches off."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    first = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "dirhams or in rupees" in first
+
+    agent._tracker = None
+    second = spoken(await run_llm_node(agent, user_ctx("Dirhams.")))
+    # Settled, so the model gets this turn. Asserting on its words rather than
+    # on GROUNDED: the reply is verbalised on the way out, so the digits are
+    # already gone by here.
+    assert "A studio is" in second
+    assert "dirhams or in rupees" not in second
+
+
+async def test_a_non_aed_budget_hands_over_rather_than_converting():
+    """No confirmed exchange rate ships, and a converted figure derived from a
+    guess is the same class of error as a fabricated price."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    agent._tracker = None
+    reply = spoken(await run_llm_node(agent, user_ctx("Rupees.")))
+
+    assert "ambassadors" in reply
+    assert "convert" in reply.lower()
+
+
+async def test_the_buyers_budget_never_reaches_the_emitted_stream():
+    """The leak this test exists for was real.
+
+    The confirmation was first routed through `record_fallback`, whose event
+    carries its text in the clear - safe for fixed copy from a data file, and
+    not safe for a line that interpolates the buyer's own budget. docs/03-
+    validator 4 keeps buyer-derived content off stdout and the file sink
+    entirely.
+    """
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    await log.aclose()
+
+    emitted = buf.getvalue()
+    assert "2 crore" not in emitted, emitted
+    assert "dirhams or in rupees" not in emitted, emitted
+    # The fact of it is still auditable.
+    assert "budget_confirmation" in emitted
+
+
+async def test_the_audit_still_records_what_the_buyer_heard():
+    """Keeping it off the stream must not blind the in-process record, which
+    is what the ambassador view and the audit read."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+
+    chunks = [c.text for c in agent.tracker.spoken_chunks]
+    assert any("2 crore" in c for c in chunks), chunks
+
+
+async def test_a_language_with_no_confirmation_copy_does_not_speak_english():
+    """Better to skip the policy than to answer an Arabic buyer in English."""
+    agent, _, _ = _budget_agent(language="ar", allow_uncertified_language=True)
+    agent._llm = SpyLLM([HealthyStream(["مرحبا. "])])
+
+    reply = spoken(await run_llm_node(agent, user_ctx("2 crore")))
+    assert "dirhams or in rupees" not in reply

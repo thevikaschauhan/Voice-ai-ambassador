@@ -238,3 +238,117 @@ def to_aed(amount: float, currency: Currency, rate: ConversionRate) -> float:
 
 class ConversionUnavailable(RuntimeError):
     """Raised when a conversion is asked for and no confirmed rate exists."""
+
+
+# --- the policy state machine ---------------------------------------------
+#
+# Pure and framework-free: it takes utterances and returns what should happen,
+# and the adapter is what actually speaks. Keeping it here means the twenty-
+# times error is testable without a room, a socket or a vendor.
+
+Action = Literal[
+    "none", "ask_currency", "confirm_amount", "cannot_convert", "give_up"
+]
+
+# Three tries, then hand over. A voice bot that makes the buyer repeat
+# themselves a fourth time earns lasting resentment (docs/04-).
+_MAX_ATTEMPTS = 3
+
+
+@dataclass(frozen=True)
+class Decision:
+    action: Action
+    mention: BudgetMention | None = None
+    # Set once the currency is settled, so the caller can act on the budget.
+    currency: Currency | None = None
+
+    @property
+    def speaks(self) -> bool:
+        return self.action != "none"
+
+    @property
+    def hands_over(self) -> bool:
+        """Both terminal actions route to a human, and the caller must treat
+        them the same way even though the copy differs."""
+        return self.action in ("cannot_convert", "give_up")
+
+
+class BudgetPolicy:
+    """One buyer's budget, from first mention to settled currency.
+
+    Deliberately a small state machine rather than a prompt instruction: the
+    model never gets the chance to skip the question, because the adapter
+    speaks the confirmation INSTEAD of running a turn.
+    """
+
+    def __init__(self, vocabulary: CurrencyVocabulary, language: str) -> None:
+        self._vocabulary = vocabulary
+        self._language = language
+        self._mention: BudgetMention | None = None
+        self._currency: Currency | None = None
+        self._awaiting = False
+        self._attempts = 0
+        self._settled = False
+
+    @property
+    def settled(self) -> bool:
+        """True once the budget needs nothing further - confirmed, or given up
+        on. A settled policy never speaks again."""
+        return self._settled
+
+    @property
+    def currency(self) -> Currency | None:
+        return self._currency
+
+    def observe(self, utterance: str) -> Decision:
+        if self._settled:
+            return Decision("none")
+        if self._awaiting:
+            return self._answer(utterance)
+        return self._first_mention(utterance)
+
+    def _first_mention(self, utterance: str) -> Decision:
+        mention = find_budget(utterance, self._vocabulary, self._language)
+        if mention is None:
+            return Decision("none")
+        self._mention = mention
+        self._awaiting = True
+        if mention.needs_currency:
+            return Decision("ask_currency", mention)
+        # ADR-011 confirms the FIRST mention even when the currency was named:
+        # a misheard "two" for "ten" costs as much as a misread currency.
+        return Decision("confirm_amount", mention)
+
+    def _answer(self, utterance: str) -> Decision:
+        """Read the buyer's reply to the confirmation.
+
+        A currency named anywhere in the reply settles it - the buyer answers
+        "dirhams", not in a full sentence - and a reply that names none counts
+        as a failed attempt rather than as consent.
+        """
+        assert self._mention is not None
+        currency = _currency_near(
+            normalise_digits(utterance), 0, len(utterance), self._vocabulary,
+            self._language,
+        )
+        if currency is None and not self._mention.needs_currency:
+            # The question was "have I got that right", not "which currency".
+            # Anything that is not a fresh contradiction settles it.
+            currency = self._mention.currency
+
+        if currency is None:
+            self._attempts += 1
+            if self._attempts >= _MAX_ATTEMPTS:
+                return self._settle(Decision("give_up"))
+            return Decision("ask_currency", self._mention)
+
+        self._currency = currency
+        if currency != "AED" and not self._vocabulary.rate.usable:
+            # Honest refusal rather than a converted figure nobody vouched for.
+            return self._settle(Decision("cannot_convert", self._mention, currency))
+        return self._settle(Decision("none", self._mention, currency))
+
+    def _settle(self, decision: Decision) -> Decision:
+        self._settled = True
+        self._awaiting = False
+        return decision
