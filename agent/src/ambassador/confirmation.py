@@ -248,6 +248,28 @@ class ConfirmationCoordinator:
 
         The most recent question is the one a person would take an answer to be
         about, which is the whole of the ownership rule.
+
+        ## The recency preference is unreachable today, deliberately kept
+
+        Mutating the `_last_asked` line away leaves the whole suite green, and
+        that is not a missing test. With exactly two questionable policies the
+        ordering it disambiguates cannot occur:
+
+        - A project question opens only from a fresh mention, and the fresh
+          pass skips any policy that already has a question open. So the
+          project question can only open while the budget's is closed.
+        - Once the budget's question opens after it, the budget is the newer of
+          the two by construction.
+        - A settled budget never reopens, so the pair cannot swap back.
+
+        Therefore whenever both are open the budget is the more recent, and
+        recency agrees with `_FRESH_ORDER` in every state `observe` can produce.
+        The rule is kept rather than collapsed to "budget first" because the
+        moment a third question exists - or one that can reopen - the
+        difference becomes visible, and a `_FRESH_ORDER` fallback that had
+        quietly become the rule is exactly how the ordering bug this module
+        replaced got in. `test_ownership_is_recency_and_not_precedence` sets
+        `_last_asked` directly and says why.
         """
         open_now = [
             name for name in _FRESH_ORDER if self._pending(name) is not None
