@@ -369,6 +369,50 @@ async def test_the_shutdown_path_closes_the_llm_http_client():
     assert "session_end" in buf.getvalue()
 
 
+async def test_the_shutdown_path_closes_the_events_bridge(tmp_path):
+    """The session owns the bridge, so the session's teardown has to close it.
+
+    Written against the real `shutdown_session` signature rather than the
+    bridge alone, because the defect this catches is a wiring one: `agent.py`
+    has `from __future__ import annotations`, so an unimported `EventsBridge`
+    stays a lazy string in the signature and only fails when `entrypoint`
+    actually runs - which no test reaches. Ruff caught it once; a test should
+    be able to.
+    """
+    from adapter.events_bridge import EventsBridge
+
+    buf = StringIO()
+    log = EventLog("sess_test", stream=buf, verbose=False)
+    agent = AmbassadorAgent(settings=make_settings(), log=log)
+    built = build_llm(make_settings(), agent.note_usage)
+
+    handshake = tmp_path / "bridge.json"
+    bridge = EventsBridge(log, handshake_path=handshake)
+    await bridge.start()
+    reader, writer = await asyncio.open_connection("127.0.0.1", bridge.port)
+    writer.write(bridge.token.encode() + b"\n")
+    await writer.drain()
+    # Read one event before tearing down, so the client is provably in the
+    # fan-out. Without this the test races the handshake and asserts nothing.
+    log.emit("session_start", config={})
+    assert json.loads(await asyncio.wait_for(reader.readline(), 2))["event"] == (
+        "session_start"
+    )
+
+    await shutdown_session(
+        agent=agent, log=log, llm=built, stt_node=None, bridge=bridge
+    )
+
+    # The credential on disk goes with it: a handshake file outliving its
+    # session is a token for a socket nobody is listening on, and the next
+    # reader to find it learns the shape of the thing it protects.
+    assert not handshake.exists()
+
+    # The surface still sees the session end before the socket goes away.
+    assert json.loads(await asyncio.wait_for(reader.readline(), 2))["event"] == "session_end"
+    writer.close()
+
+
 async def test_the_shutdown_path_drains_the_event_log():
     buf = StringIO()
     log = EventLog("sess_test", stream=buf, verbose=False)
