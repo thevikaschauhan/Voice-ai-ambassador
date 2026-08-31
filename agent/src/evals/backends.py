@@ -87,6 +87,26 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
+# What each tool returns to the model, mirrored from the `@function_tool`
+# methods on `adapter.agent.AmbassadorAgent`. The framework hands a tool's
+# return value back and runs a SECOND inference, which is where the speech for a
+# tool-using turn comes from - so a harness that skips that round trip records
+# an escalation as a turn that said nothing.
+#
+# Only the second turn's phrasing depends on these strings; no assertion reads
+# them. `offer_booking`'s echoes the slot, which this harness does not track, so
+# it is generic - the booking tool is not asserted on by any category.
+TOOL_RESULTS: dict[str, str] = {
+    ESCALATE_TOOL: (
+        "An ambassador has been notified and will pick this up. "
+        "Tell the buyer a colleague will confirm this directly."
+    ),
+    BOOKING_TOOL: (
+        "Slot noted. Read it back to the buyer and ask them to confirm."
+    ),
+}
+
+
 @dataclass(frozen=True)
 class ModelReply:
     text: str
@@ -237,13 +257,82 @@ class LiveBackend:
                 f"{request.case.id}: unparseable live response: {exc}"
             ) from exc
 
+        calls = message.get("tool_calls") or []
         tools = tuple(
-            call.get("function", {}).get("name", "")
-            for call in (message.get("tool_calls") or [])
+            name
+            for name in (call.get("function", {}).get("name", "") for call in calls)
+            if name
         )
+        text = message.get("content") or ""
+
+        if calls and not text.strip():
+            # A tool-call-only reply. The framework hands each tool's return
+            # value back and runs a second inference, and THAT is the turn the
+            # buyer hears - so stopping here would record an escalation as a
+            # turn that said nothing, and every escalation category (five of the
+            # gated ten) would report silence. Measured live on an Arabic "I
+            # want to speak to a real person": the first inference returned
+            # escalate_to_human with empty content.
+            #
+            # One round trip only. A model that answers the tool result with
+            # another tool call has produced no speech for this turn, and the
+            # honest record of that is an empty reply, not a loop.
+            text = self._after_tool_calls(request, messages, message, calls)
+
         return ModelReply(
-            text=message.get("content") or "",
-            tools=tuple(name for name in tools if name),
+            text=text,
+            tools=tools,
             source="recorded",
             intent="compliant",
         )
+
+    def _after_tool_calls(
+        self,
+        request: ModelRequest,
+        messages: list[dict[str, Any]],
+        message: dict[str, Any],
+        calls: list[dict[str, Any]],
+    ) -> str:
+        """The second inference, with each tool's return value fed back."""
+        followup = [*messages, message]
+        for call in calls:
+            name = call.get("function", {}).get("name", "")
+            followup.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id", ""),
+                    "content": TOOL_RESULTS.get(
+                        name, "Done. Continue the conversation normally."
+                    ),
+                }
+            )
+        body: dict[str, Any] = {
+            "model": self._model,
+            "messages": followup,
+            "tools": TOOL_SCHEMAS,
+            "temperature": 0.0,
+        }
+        if self._thinking_disabled:
+            body["reasoning"] = {"enabled": False}
+        self.calls += 1
+        try:
+            response = self._client.post(
+                f"{self._base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                json=body,
+            )
+        except httpx.HTTPError as exc:
+            raise BackendError(
+                f"{request.case.id}: the post-tool-call inference failed: {exc}"
+            ) from exc
+        if response.status_code >= 400:
+            raise BackendError(
+                f"{request.case.id}: the post-tool-call inference returned "
+                f"{response.status_code}: {response.text[:300]}"
+            )
+        try:
+            return response.json()["choices"][0]["message"].get("content") or ""
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            raise BackendError(
+                f"{request.case.id}: unparseable post-tool-call response: {exc}"
+            ) from exc
