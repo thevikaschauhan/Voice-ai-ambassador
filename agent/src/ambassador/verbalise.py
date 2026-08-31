@@ -26,7 +26,11 @@ from typing import Any
 import yaml
 
 from .figures import extract_figures, normalise_digits
-from .schemas import FigureKind, SpeakableText, ValidatedSentence
+from .schemas import AllowedFigures, FigureKind, SpeakableText, ValidatedSentence
+
+# The one language this build team self-certifies (AGENTS.md), and so the
+# reference for what a complete table looks like.
+_REFERENCE_LANGUAGE = "en"
 
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
@@ -197,3 +201,60 @@ def verbalise(sentence: ValidatedSentence, forms: SpokenForms) -> SpeakableText:
         text = text[:start] + spoken + text[end:]
 
     return SpeakableText(text=text, language=sentence.language)
+
+
+def spoken_form_gaps(
+    forms: SpokenForms, allowed: AllowedFigures, language: str
+) -> dict[FigureKind, list[float]]:
+    """Allowed figures with no spoken form in this language, by kind.
+
+    ADR-009's claim is that the table is COMPLETE by construction: only allowed
+    figures can reach verbalisation, so the reachable figures are enumerable
+    and can all be authored once. Nothing enforced that, and it was not true -
+    seven allowed amounts had no English form and fell through to the digit
+    fallback.
+
+    The fallback is safe for a quantity and wrong for anything read as a
+    sequence. `80015` is Binghatti's hotline, spoken when routing to a human,
+    and TTS reads it as eighty thousand and fifteen. That is on the escalation
+    path, which AGENTS.md says gets the same polish as the happy path.
+
+    Years are excluded deliberately: they are spoken as digits correctly in
+    every language here, and quarters, which are not, are surface-keyed rather
+    than value-keyed and are checked separately by `quarter_surface_gaps`.
+
+    Checked against `currency_amounts`, not `amounts`. `amounts` also holds
+    square footages and the hotline number, and those SHOULD have no form: the
+    digit fallback reads a bare quantity correctly, while a currency-naming
+    form on one of them would make the buyer hear "four hundred and twenty
+    dirhams square feet". Reporting them as gaps would send whoever authors
+    the table straight into that.
+    """
+    gaps: dict[FigureKind, list[float]] = {}
+    for kind, values in (
+        ("amount", allowed.currency_amounts),
+        ("percent", allowed.percents),
+    ):
+        missing = sorted(
+            value
+            for value in values
+            if (language, kind, float(value)) not in forms.by_value
+        )
+        if missing:
+            gaps[kind] = missing  # type: ignore[index]
+    return gaps
+
+
+def quarter_surface_gaps(forms: SpokenForms, language: str) -> list[str]:
+    """Quarter surfaces authored in one language and missing in another.
+
+    Quarters have no enumerable source the way figures do - they come from
+    inventory handover dates as text - so completeness is defined against the
+    languages that DO have them rather than against a value set. English is
+    the reference because it is the language this team may author.
+    """
+    reference = {
+        surface for (lang, surface) in forms.by_surface if lang == _REFERENCE_LANGUAGE
+    }
+    present = {surface for (lang, surface) in forms.by_surface if lang == language}
+    return sorted(reference - present)

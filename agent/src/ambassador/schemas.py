@@ -75,6 +75,14 @@ class AllowedFigures:
     amounts: frozenset[float]
     percents: frozenset[float]
     years: frozenset[int]
+    # The subset of `amounts` that is MONEY. The guardrail never needs this - a
+    # number is a number when you are asking whether it was invented - but
+    # verbalisation does, because only a currency amount may take a spoken form
+    # that names a currency and swallows an adjacent "AED". `amounts` also
+    # holds square footages and the hotline number, and a currency-naming form
+    # on one of those makes the buyer hear "four hundred and twenty dirhams
+    # square feet".
+    currency_amounts: frozenset[float] = frozenset()
 
 
 # --- Guardrail results ----------------------------------------------------
