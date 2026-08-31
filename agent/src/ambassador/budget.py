@@ -78,9 +78,9 @@ _PUNCTUATION = re.compile(r"[,.;:!?]")
 _CLAUSE_BREAK = re.compile(r"[;.!?]")
 
 # Multiplier words that make a bare number a budget on their own: nobody says
-# "two crore" about a bedroom count. Kept in step with figures._MULTIPLIERS,
-# minus the ones too small to imply money. Longest alternatives first, or
-# "lakhs" matches as "lakh" and fails the boundary.
+# "two crore" about a bedroom count. Kept in step with the multiplier table
+# in data/numerals.yaml, minus the ones too small to imply money. Longest
+# alternatives first, or "lakhs" matches as "lakh" and fails the boundary.
 _BUDGET_UNITS = re.compile(
     r"\b(thousand|million|lakhs|lakh|lacs|lac|crores|crore|k|m)\b", re.IGNORECASE
 )

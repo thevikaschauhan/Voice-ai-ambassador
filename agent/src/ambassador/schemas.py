@@ -75,13 +75,20 @@ class AllowedFigures:
     amounts: frozenset[float]
     percents: frozenset[float]
     years: frozenset[int]
-    # The subset of `amounts` that is MONEY. The guardrail never needs this - a
-    # number is a number when you are asking whether it was invented - but
-    # verbalisation does, because only a currency amount may take a spoken form
-    # that names a currency and swallows an adjacent "AED". `amounts` also
-    # holds square footages and the hotline number, and a currency-naming form
-    # on one of those makes the buyer hear "four hundred and twenty dirhams
-    # square feet".
+    # The subset of `amounts` that is MONEY, and the set a PRICE is checked
+    # against. Two consumers need it. Verbalisation, because only a currency
+    # amount may take a spoken form that names a currency and swallows an
+    # adjacent "AED": `amounts` also holds square footages and the hotline
+    # number, and a currency-naming form on one of those makes the buyer hear
+    # "four hundred and twenty dirhams square feet". And the numeric guardrail,
+    # because a figure with a currency token beside it is claiming a price -
+    # checking those against the untyped `amounts` let "It starts at AED 380"
+    # validate against a square footage and "It starts at AED 80015" against
+    # the hotline number.
+    #
+    # It defaults to empty, and empty means every currency-adjacent figure is
+    # blocked. That is the safe direction on purpose: an under-populated set
+    # blocks sentences, it never speaks an unverified figure.
     currency_amounts: frozenset[float] = frozenset()
 
 

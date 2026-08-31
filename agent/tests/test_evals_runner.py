@@ -297,27 +297,30 @@ def test_the_bridge_hands_the_buyer_to_nobody(harness):
     assert not observed.escalated
 
 
-def test_a_year_followed_by_a_comma_is_blocked(harness):
-    """FINDING, pinned as current behaviour so the fix is visible when it lands.
+def test_a_year_followed_by_a_comma_is_spoken(harness):
+    """The FINDING this test was written to pin, now inverted because it is fixed.
 
-    `figures.py`'s number pattern captures a trailing comma into the surface
-    ("2026,"), and `_classify` refuses to call a comma-bearing surface a year.
-    So an ALLOWED handover year is reclassified as an unallowed AMOUNT and a
-    correct, grounded sentence is blocked - the buyer hears the fallback instead
-    of the handover date. Amounts and counts are unaffected, because the comma is
-    stripped before their value is read; only the year branch checks the surface.
+    It pinned an over-block on the happy path: `figures.py`'s number pattern
+    captured a trailing comma into the surface ("2026,"), and `_classify`
+    refuses to call a comma-bearing surface a year, so an ALLOWED handover year
+    was reclassified as an unallowed AMOUNT and a correct, grounded sentence was
+    blocked. The buyer heard the fallback instead of the handover date.
+
+    The fix is upstream of classification and does not loosen extraction: a
+    group separator only joins DIGITS now, so a trailing comma never enters the
+    surface and there is nothing to strip. Both punctuations are asserted here,
+    because "the comma one blocks and the full stop one does not" was the shape
+    of the defect.
     """
     backend = ScriptedBackend(
         ModelReply("Handover is Q4 2026, and the plan runs to then."),
-        ModelReply("Handover is Q4 2026, as listed."),
     )
     observed = run_case(case("When is handover?"), harness, backend)
-    assert spoken(observed) == COPY.fallback["en"]
-    assert observed.blocked[0].figures[0].surface == "2026,"
-    assert observed.blocked[0].figures[0].kind == "amount"
+    assert not observed.blocked
+    assert spoken(observed) == (
+        "Handover is the fourth quarter of 2026, and the plan runs to then."
+    )
 
-    # The same sentence with a full stop passes, which is what makes this a
-    # punctuation defect rather than a missing whitelist entry.
     ok = run_case(
         case("When is handover?"),
         harness,

@@ -16,18 +16,42 @@ The word "before" carries the claim, and in voice it is physics, not UX: played 
 
 Two rules about where a match may begin are load-bearing, and both were learned from a live bypass: extraction never starts **inside** a number (after a digit, comma or decimal point), and an adjacent **letter never blocks it**. With letters blocked, `AED750,000` extracted nothing at all and went unchecked; worse, `AED1,985,000` restarted after the comma, extracted the embedded and genuinely allowed `985,000`, and so validated a fabricated price as a real one before speaking it. Erring toward extracting more is the safe direction here: an over-extracted figure blocks a sentence, an under-extracted figure speaks an unverified one.
 
-**Normalisation.** Reduce to canonical value before comparison: `975,000`, `975000`, `975k`, `0.975 million`, `٩٧٥٬٠٠٠` all normalise to `975000`. Multiplier words: k, thousand, million, m, lakh (1e5), crore (1e7). Table-driven, unit tested per shipped language. (Beware the class of error this catches even in humans: AED 2,400,000 is 24 lakh, not 2.4 crore.)
+**Surfaces covered.** All of the following extract to one value, and each was a reachable bypass until it did (issue #8):
+
+| Surface | Value | Was |
+|---|---|---|
+| `985,000` `985000` `985k` `0.985 million` `٩٨٥٬٠٠٠` | 985,000 | already covered |
+| `.8 million` | 800,000 | no match at all |
+| `8e5` | 800,000 | exempt counts 8 and 5 |
+| `8-million` | 8,000,000 | exempt count 8 |
+| `380 000` with U+202F, U+00A0 or U+2009 | 380,000 | allowed 380 plus exempt 000 |
+| `-985,000`, `−20%` | negative | the positive counterpart, which is allowed |
+| `2026,` (a year before a comma) | 2026, still a year | an unallowed amount, so a correct sentence was BLOCKED |
+
+The ordinary ASCII space is deliberately not a group separator: making it one would fuse "3 bedrooms and 2 towers" into one figure. A group separator only ever joins digits, which is also why a trailing comma no longer reaches the classifier - the over-block in the last row is fixed upstream of classification rather than by stripping punctuation afterwards.
+
+**Normalisation.** Reduce to canonical value before comparison. Multiplier words, percent words and currency tokens live in `data/numerals.yaml`, not in code, because the magnitude and the kind usually sit in the token beside the digits and that token is a word. (Beware the class of error this catches even in humans: AED 2,400,000 is 24 lakh, not 2.4 crore.)
 
 **Policy.**
 
 | Kind | Rule |
 |---|---|
 | Amounts and bare numbers > 12 | Must be in the allowed set |
+| Amounts with a currency token beside them | Must be in the **currency** subset of the allowed set |
 | Percentages | Must be in the allowed set |
 | Years (1900-2099, standalone) | Must be in the allowed set - a wrong handover year is the evidence exhibit |
-| Integers 0-12, non-percent | Exempt as conversational counts ("three bedrooms", "one question"). A deliberate, documented hole; small integers cannot state a price or a year |
+| Integers 0-12, non-percent, **no currency token** | Exempt as conversational counts ("three bedrooms", "one question"). A deliberate, documented hole |
+| Figures joined by `×`, `*`, `^`, `·` or a superscript digit | Blocked on sight, never computed |
 
-**Allowed set: global (ADR-008).** Union of every figure in inventory (source + computed) plus `data/whitelist.yaml`. Cannot false-positive on a real figure; catches every invented one. Per-referenced-project scoping is the documented next tier.
+**A currency token voids the exemptions.** The old policy line said a small integer "cannot state a price". The sentence "It starts at AED 12" disproves it, and so does "It starts at AED 2026", where a figure that is an allowed handover year was checked against the year set and spoken as a price. A currency token adjacent to a figure - either side, with or without a space, symbol or Latin word - now makes it an amount, so it is checked rather than exempted. Over-blocking is the free direction: a blocked sentence is recoverable, a spoken price is not.
+
+**Composed arithmetic is refused, not evaluated.** `8 × 10^5` is three integers that are each individually exempt and together state 800,000. The system does no arithmetic (invariant 2) and will not do the model's either, so an operator adjacent to a figure is a violation on its face. The prompt already forbids that syntax, so this costs nothing real. Latin `x` is excluded on purpose: it is the ordinary dimension separator ("2 x 3 metres"), and the caret still catches `8 x 10^5`.
+
+**Allowed set: global (ADR-008), and typed by kind.** Union of every figure in inventory (source + computed) plus `data/whitelist.yaml`. A PRICE is checked against the money subset alone (`AllowedFigures.currency_amounts`): the untyped set also holds square footages and Binghatti's hotline number, so `It starts at AED 380` validated against a size and `It starts at AED 80015` against a phone number. A figure with no currency token beside it still validates against the untyped set, because stating a size or reading the hotline out are things the agent legitimately does. Per-referenced-project scoping is the documented next tier.
+
+**What is still open, in Arabic and Hindi script.** The numeric guarantee rests on digits, and digits normalise in all three scripts. The magnitude and the kind often do not: `٨ مليون درهم` says eight million dirhams, and with `ar` word lists empty in `data/numerals.yaml` the extractor reads a bare 8, classifies it as an exempt count, and the sentence is spoken. The percent SIGN (`٪`, `％`, `﹪`) is language-neutral punctuation and is covered now, as are the Latin-script tokens a model writes whatever language it is speaking (`AED`, `dirhams`, `lakh`, `crore`) - which is the Dubai code-switched register and the common case. What is not covered is a magnitude or currency word written wholly in Arabic or Devanagari script.
+
+This is the same shape of gap as the English-only prohibited patterns below, disclose it the same way, and it closes the same way: a native speaker fills the `VERIFY:` lists in `data/numerals.yaml`. Nobody on the build team may fill them (AGENTS.md), and the mechanism is already proved by tests that inject the words as fixture data, so the fix is a data edit and not a code change. `figures.languages_covered()` reports which languages actually have words, so the true coverage is queryable rather than assumed.
 
 **False positives are the operational risk.** A validator that blocks correct replies gets disabled by the first engineer who hits it on a Friday. Log every violation with the extracted figure and the allowed set; review during the build week; tune the normaliser rather than loosening the check.
 
@@ -41,7 +65,7 @@ Two rules about where a match may begin are load-bearing, and both were learned 
 
 Both halves of that are now verified by execution rather than asserted, and each has a wrinkle worth carrying into the room:
 
-- **The numeric claim genuinely holds across scripts.** `figures.py` normalises Arabic-Indic, extended Arabic-Indic and Devanagari digits along with the Arabic separators `٬` and `٫`, one character to one so verbalisation spans stay valid, and sentence splitting already breaks on `؟` and `।`. A fabricated price written `١٬٢٥٠٬٠٠٠` is caught and an allowed `٩٨٥٬٠٠٠` passes. This is the half a tech lead will expect to be broken.
+- **The numeric claim holds across scripts for digits, and only for digits.** `figures.py` normalises Arabic-Indic, extended Arabic-Indic and Devanagari digits along with the Arabic separators `٬` and `٫`, one character to one so verbalisation spans stay valid, and sentence splitting already breaks on `؟` and `।`. A fabricated price written `١٬٢٥٠٬٠٠٠` is caught and an allowed `٩٨٥٬٠٠٠` passes. This is the half a tech lead will expect to be broken. The wrinkle is the one disclosed above: where the magnitude lives in a native WORD rather than the digits (`٨ مليون`), it is not read yet, and the figure keeps its small-integer exemption.
 - **The stylistic layer does cover code-switching, which is the register that matters.** Every pattern runs against every sentence whatever language the call is in, so a reply in Arabic that slips into English to say "guaranteed returns" is caught. `language` on a pattern is provenance - the competence its author needed - and is deliberately never used for routing, because routing by the call's language would give exactly this up. What is not covered is a violation written wholly in Arabic or Devanagari script.
 
 The `prohibited_coverage` event at session start reports which languages actually have patterns, so the demo record states the real coverage instead of implying uniform protection.
