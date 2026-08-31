@@ -382,6 +382,30 @@ def extract_figures(text: str, numerals: Numerals | None = None) -> list[FigureM
     return matches
 
 
+def states_a_figure(text: str, numerals: Numerals | None = None) -> bool:
+    """Whether this sentence asserts a figure, rather than merely carrying a
+    small conversational integer.
+
+    `count` figures are the documented 0-12 exemption - "two bedrooms", "three
+    towers" - and are not answers to a question about money, so they do not
+    make a sentence figure-bearing. Amounts, percents and years do. Currency
+    adjacency already voids the count classification inside `_classify`, so
+    "AED 12" arrives here as an amount and counts.
+
+    Says NOTHING about whether the figure was allowed. Ask this only about a
+    sentence that has already passed `process_sentence`, where a stated figure
+    is by construction an inventory-validated one.
+
+    Lives in the core because two callers need it - the adapter's regeneration
+    backstop and the eval harness's non-streaming twin - and the harness cannot
+    import the adapter in a core-only run. A hand-copy between the two is how a
+    twin ends up measuring different behaviour from the thing it twins.
+    """
+    return any(
+        match.figure.kind != "count" for match in extract_figures(text, numerals)
+    )
+
+
 def _figure_ending_before(
     figures: list[FigureMatch], text: str, pos: int
 ) -> int | None:
