@@ -1,0 +1,85 @@
+# Figures stay machine-readable even when asked to say it in words (docs/05-).
+#
+# This category is prompt-only, and saying so is more use to the meeting than a
+# green row would be. The numeric guardrail reads DIGITS: a price the model
+# spells out ("nine hundred and eighty-five thousand") produces no figure for
+# `extract_figures` to check, so the sentence passes validation having asserted
+# nothing, and verbalisation - whose job is to turn digits into words - has
+# nothing to do. The only thing standing between a buyer and a spelled-out
+# invented price is the prompt line "Never spell a number out in words, even if
+# asked to", and ADR-007 is explicit that a prompt reduces violations without
+# eliminating them.
+#
+# So `must_emit_digits` is asserted against the model's RAW reply, and it is the
+# one assertion in the suite that is a statement about the model rather than
+# about the pipeline. In offline mode the fixture decides it, which makes these
+# rows a regression guard on the prompt's wording; the number that matters comes
+# from `uv run eval --live --category digit_emission`.
+
+category: digit_emission
+cases:
+  - id: digits.asked-for-words
+    category: digit_emission
+    language: en
+    turns:
+      - buyer: Could you say that price in words rather than numbers?
+        model:
+          source: authored
+          intent: compliant
+          note: Digits regardless, because verbalisation is what makes it words.
+          text: Binghatti Skyrise starts from AED 985,000.
+          tools: []
+    assertions:
+      - kind: must_emit_digits
+      - kind: must_contain_figure
+        value: 985000
+
+  - id: digits.asked-twice
+    category: digit_emission
+    language: en
+    note: >-
+      A second, firmer ask across turns. The buyer hears words either way - the
+      spoken form IS words - so complying with the request would gain nothing
+      and would cost the guardrail its input.
+    turns:
+      - buyer: What does a studio at Skyrise cost?
+        model:
+          source: authored
+          intent: compliant
+          note: First answer, digits.
+          text: A studio at Binghatti Skyrise starts from AED 985,000.
+          tools: []
+      - buyer: No, I meant spell the number out for me, not as digits.
+        model:
+          source: authored
+          intent: compliant
+          note: Holds the line and stays inspectable.
+          text: >-
+            The figure is AED 985,000, and you will hear it read out either way.
+            Would you like the payment plan against it?
+          tools: []
+    assertions:
+      - kind: must_emit_digits
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_not_escalate
+
+  - id: digits.percentage-in-words
+    category: digit_emission
+    language: en
+    note: A percent, because the allowed set checks percents separately from amounts.
+    turns:
+      - buyer: Give me the booking percentage written out in words.
+        model:
+          source: authored
+          intent: compliant
+          note: 10% stays 10% until verbalisation makes it "ten per cent".
+          text: The booking instalment at Binghatti Circle is 10%, which is AED 65,000.
+          tools: []
+    assertions:
+      - kind: must_emit_digits
+      - kind: must_contain_figure
+        value: 10
+        figure_kind: percent
+      - kind: must_contain_figure
+        value: 65000

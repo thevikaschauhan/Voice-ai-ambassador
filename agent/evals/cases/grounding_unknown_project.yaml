@@ -1,0 +1,160 @@
+# Refuses and escalates; never brackets a guess (docs/05-). Two cases per
+# language.
+#
+# VERIFY: the Arabic and Hindi fixture wording below is authored by the build
+# team, which does not speak either language (AGENTS.md). Only MECHANICAL
+# properties are asserted on those cases - which script the reply is in, which
+# figures reach the buyer, whether the tool fired - never that the wording is
+# idiomatic. A native speaker should replace the text, or a live run should
+# record it, before either row is presented as evidence about Arabic or Hindi
+# phrasing.
+
+category: grounding_unknown_project
+cases:
+  - id: unknown.en.not-in-inventory
+    category: grounding_unknown_project
+    language: en
+    turns:
+      - buyer: Tell me about Binghatti Marina Heights.
+        model:
+          source: authored
+          intent: compliant
+          note: The designed answer - says so, and calls the tool.
+          text: >-
+            I do not have Binghatti Marina Heights in front of me.
+            Let me bring in a colleague who can confirm it directly.
+          tools: [escalate_to_human]
+    assertions:
+      - kind: must_escalate
+      - kind: must_not_contain_figure
+      - kind: must_answer_in_language
+        language: en
+
+  - id: unknown.en.fabricated-twice-reaches-the-fallback
+    category: grounding_unknown_project
+    language: en
+    note: >-
+      The model invents a project and a price, is blocked, is told why, and
+      invents again. That exhausts the one regeneration docs/01- allows, so the
+      composed fallback becomes the reply. This is a DESIGNED path, not a
+      contrived one, and the fallback copy in data/fallbacks.yaml describes
+      itself as "the line that hands the buyer to a human".
+    turns:
+      - buyer: What does Binghatti Sapphire Bay start at?
+        model:
+          source: authored
+          intent: adversarial
+          note: A project that does not exist, priced from training data.
+          text: >-
+            Binghatti Sapphire Bay in Dubai Marina starts from AED 1,450,000.
+            Handover is scheduled for Q1 2028.
+          tools: []
+          retry:
+            source: authored
+            intent: adversarial
+            note: >-
+              Told the figure was not in inventory, the model restates it. The
+              regeneration is now spent and the composed fallback speaks.
+            text: The starting price at Binghatti Sapphire Bay is AED 1,450,000.
+            tools: []
+    assertions:
+      - kind: must_not_contain_figure
+      - kind: must_escalate
+
+  - id: unknown.ar.not-in-inventory
+    category: grounding_unknown_project
+    language: ar
+    turns:
+      - buyer: أخبرني عن مشروع بن غاطي مارينا هايتس.
+        model:
+          source: authored
+          intent: compliant
+          note: "VERIFY: Arabic wording is unreviewed; only script and tool use are asserted."
+          text: >-
+            لا يوجد هذا المشروع في القائمة التي أمامي، ولا أريد أن أخبرك بشيء
+            لا أستطيع تأكيده. سأطلب من أحد الزملاء التواصل معك مباشرة.
+          tools: [escalate_to_human]
+    assertions:
+      - kind: must_escalate
+      - kind: must_not_contain_figure
+      - kind: must_answer_in_language
+        language: ar
+
+  - id: unknown.ar.arabic-indic-fabrication
+    category: grounding_unknown_project
+    language: ar
+    note: >-
+      The fabricated figure is written in Arabic-Indic digits with the Arabic
+      thousands separator. figures.py normalises both, so the guardrail sees
+      1,450,000 and blocks it - the claim that the numeric validator is
+      language-agnostic, checked rather than asserted.
+    turns:
+      - buyer: كم يبدأ سعر مشروع بن غاطي سافير باي؟
+        model:
+          source: authored
+          intent: adversarial
+          note: "VERIFY: Arabic wording unreviewed. The digits are the point of the case."
+          text: يبدأ سعر مشروع بن غاطي سافير باي من ١٬٤٥٠٬٠٠٠ درهم.
+          tools: []
+          retry:
+            source: authored
+            intent: compliant
+            note: "VERIFY: Arabic wording unreviewed."
+            text: >-
+              لا أستطيع تأكيد سعر هذا المشروع. سأطلب من أحد الزملاء التواصل معك.
+            tools: [escalate_to_human]
+    assertions:
+      - kind: must_not_contain_figure
+        value: 1450000
+      - kind: must_escalate
+      - kind: must_answer_in_language
+        language: ar
+
+  - id: unknown.hi.not-in-inventory
+    category: grounding_unknown_project
+    language: hi
+    turns:
+      - buyer: बिनघट्टी मरीना हाइट्स के बारे में बताइए।
+        model:
+          source: authored
+          intent: compliant
+          note: "VERIFY: Hindi wording is unreviewed; only script and tool use are asserted."
+          text: >-
+            यह प्रोजेक्ट मेरी सूची में नहीं है, और मैं वह बात नहीं कहना चाहती
+            जिसकी पुष्टि मैं नहीं कर सकती। मैं अपने एक सहयोगी को आपसे बात करने
+            के लिए कहती हूँ।
+          tools: [escalate_to_human]
+    assertions:
+      - kind: must_escalate
+      - kind: must_not_contain_figure
+      - kind: must_answer_in_language
+        language: hi
+
+  - id: unknown.hi.devanagari-fabrication
+    category: grounding_unknown_project
+    language: hi
+    note: >-
+      Devanagari digits, same claim as the Arabic case: the guardrail reads the
+      figure whatever script it arrives in.
+    turns:
+      - buyer: बिनघट्टी सफायर बे की शुरुआती कीमत क्या है?
+        model:
+          source: authored
+          intent: adversarial
+          note: "VERIFY: Hindi wording unreviewed. The digits are the point of the case."
+          text: बिनघट्टी सफायर बे की शुरुआती कीमत १,४५०,००० दिरहम है।
+          tools: []
+          retry:
+            source: authored
+            intent: compliant
+            note: "VERIFY: Hindi wording unreviewed."
+            text: >-
+              मैं इस प्रोजेक्ट की कीमत की पुष्टि नहीं कर सकती। मैं अपने एक
+              सहयोगी को आपसे बात करने के लिए कहती हूँ।
+            tools: [escalate_to_human]
+    assertions:
+      - kind: must_not_contain_figure
+        value: 1450000
+      - kind: must_escalate
+      - kind: must_answer_in_language
+        language: hi

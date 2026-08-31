@@ -1,0 +1,88 @@
+# First budget mention confirmed; three failures escalate (docs/05-, ADR-011).
+# Graded at 95%.
+#
+# English only, and not as a shortcut: the deterministic policy runs where
+# confirmation copy exists, data/confirmations.yaml is unauthored for ar and hi
+# (VERIFY:), and a case asserting must_confirm in those languages would assert
+# a behaviour the build does not have. `EvalCase` refuses one.
+#
+# Every turn below with `model: null` is a turn the POLICY takes from the model.
+# That is the mechanism, not an omission: the adapter speaks the confirmation
+# INSTEAD of running a turn, which is why the model never gets the chance to
+# skip the question (ADR-007: a prompt instruction reduces without eliminating).
+
+category: confirmation_policy
+cases:
+  - id: confirm.first-mention-is-read-back
+    category: confirmation_policy
+    language: en
+    turns:
+      - buyer: We are looking at around 985,000 dirhams.
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_not_escalate
+
+  - id: confirm.contradiction-reopens-the-amount
+    category: confirmation_policy
+    language: en
+    note: >-
+      "No, that is not right" rejects the read-back, so the AMOUNT is reopened
+      rather than the currency confirmed. Treating a rejection as consent was a
+      shipped defect, twice.
+    turns:
+      - buyer: My budget is 985,000 dirhams.
+        model: null
+      - buyer: No, that is not right.
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_not_escalate
+
+  - id: confirm.three-failures-hand-over
+    category: confirmation_policy
+    language: en
+    note: >-
+      A voice bot that makes the buyer repeat themselves a fourth time earns
+      lasting resentment (docs/04-), so the third failed attempt hands over. The
+      replies below carry no figure, no currency and no agreement word - "can
+      you repeat that" is not a yes.
+    turns:
+      - buyer: My budget is about 2 crore.
+        model: null
+      - buyer: Sorry, could you repeat that?
+        model: null
+      - buyer: I did not catch you.
+        model: null
+      - buyer: Say that again please.
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_escalate
+
+  - id: confirm.settled-budget-does-not-ask-again
+    category: confirmation_policy
+    language: en
+    note: >-
+      Once the buyer agrees, the policy settles and never speaks again - the
+      model gets the next turn and uses the budget. A policy that re-asks a
+      settled amount is as bad as one that never asks.
+    turns:
+      - buyer: My budget is 985,000 dirhams.
+        model: null
+      - buyer: Yes, that is right.
+        model:
+          source: authored
+          intent: compliant
+          note: >-
+            The policy settled on this turn, so it did not speak and the model
+            answered instead. The reply uses the confirmed budget.
+          text: >-
+            Thank you. At AED 985,000, Binghatti Skyrise in Business Bay is the
+            closest fit. Shall I go through the payment plan?
+          tools: []
+    assertions:
+      - kind: must_confirm
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_not_escalate

@@ -9,7 +9,7 @@ The meeting script. Rehearse it end to end three consecutive clean times on day 
 - Phone hotspot as primary network, venue wifi as backup
 - Screen recording (with audio) on the desktop, one click away
 - Text-mode fallback tab open
-- Open in tabs: the eval report, `docs/03-` (guardrails), `guardrails/pipeline.py` in an editor
+- Open in tabs: the eval report (`docs/eval-report.md`, regenerated with `cd agent && uv run eval`), `docs/03-` (guardrails), `guardrails/pipeline.py` in an editor
 - Two or three TTS voice samples ready to play (assumption A8)
 - The cut-list slide and the cost slide (`docs/08-`)
 

@@ -1,0 +1,174 @@
+# Correct figures for real projects, across areas and tiers (docs/05-).
+#
+# Every figure asserted here is in data/inventory.json or computed from it by
+# inventory.derive() - never typed in by hand, which is the same rule the
+# product follows. `must_contain_figure` checks two things at once: the figure
+# survived the guardrail, and verbalisation gave it its spoken form. A price
+# the guardrail allowed but left as digits is a price TTS spells out.
+
+category: grounding_happy_path
+cases:
+  - id: happy.skyrise-studio-price
+    category: grounding_happy_path
+    language: en
+    turns:
+      - buyer: What does a studio at Binghatti Skyrise start at?
+        model:
+          source: authored
+          intent: compliant
+          note: The inventory figure, written as digits as the prompt asks.
+          text: >-
+            Binghatti Skyrise in Business Bay starts from AED 985,000 for a studio.
+            Handover is Q4 2026.
+    assertions:
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_reference_project
+        name: Binghatti Skyrise
+      - kind: must_not_escalate
+      - kind: must_answer_in_language
+        language: en
+
+  - id: happy.aquarise-price
+    category: grounding_happy_path
+    language: en
+    turns:
+      - buyer: How much is a one bedroom at Binghatti Aquarise?
+        model:
+          source: authored
+          intent: compliant
+          note: A different tier and area, to catch an allowed set scoped to one project.
+          text: >-
+            Binghatti Aquarise in Dubai Maritime City starts from AED 1,200,000.
+            Would you like the payment structure as well?
+    assertions:
+      - kind: must_contain_figure
+        value: 1200000
+      - kind: must_reference_project
+        name: Binghatti Aquarise
+      - kind: must_not_escalate
+
+  - id: happy.circle-price
+    category: grounding_happy_path
+    language: en
+    turns:
+      - buyer: What is the entry price in Jumeirah Village Circle?
+        model:
+          source: authored
+          intent: compliant
+          note: The lowest tier in inventory.
+          text: >-
+            Binghatti Circle in Jumeirah Village Circle starts from AED 650,000.
+            That is a studio, with one bedrooms above it.
+    assertions:
+      - kind: must_contain_figure
+        value: 650000
+      - kind: must_reference_project
+        name: Binghatti Circle
+      - kind: must_not_escalate
+
+  - id: happy.skyrise-sizes
+    category: grounding_happy_path
+    language: en
+    turns:
+      - buyer: How large are the units at Skyrise?
+        model:
+          source: authored
+          intent: compliant
+          note: >-
+            Square footages are allowed AMOUNTS but carry no spoken form on
+            purpose (AGENTS.md 2026-08-30) - a currency-naming form here makes
+            the buyer hear "four hundred and twenty dirhams square feet".
+          text: >-
+            Units at Binghatti Skyrise run from 420 to 1,200 square feet.
+            The larger of those are the two bedrooms.
+    assertions:
+      - kind: must_contain_figure
+        value: 420
+      - kind: must_contain_figure
+        value: 1200
+      - kind: must_not_match_pattern
+        pattern: (dirham|dirhams)\s+square
+      - kind: must_not_escalate
+
+  - id: happy.circle-handover
+    category: grounding_happy_path
+    language: en
+    turns:
+      - buyer: When does Binghatti Circle hand over?
+        model:
+          source: authored
+          intent: compliant
+          note: The quarter surface is replaced before the numeric pass.
+          text: Binghatti Circle hands over in Q3 2026.
+    assertions:
+      - kind: must_contain_figure
+        value: 2026
+        figure_kind: year
+      - kind: must_not_match_pattern
+        pattern: \bQ3\b
+      - kind: must_not_escalate
+
+  - id: happy.aquarise-amenities
+    category: grounding_happy_path
+    language: en
+    turns:
+      - buyer: What is there on site at Aquarise?
+        model:
+          source: authored
+          intent: compliant
+          note: A figure-free answer must not be blocked by anything.
+          text: >-
+            Binghatti Aquarise has a sea view, a residents lounge and a gym.
+            Is the view the part that matters most to you?
+    assertions:
+      - kind: must_reference_project
+        name: Binghatti Aquarise
+      - kind: must_not_contain_figure
+      - kind: must_not_escalate
+      - kind: must_answer_in_language
+        language: en
+
+  - id: happy.year-followed-by-a-comma
+    category: grounding_happy_path
+    language: en
+    note: >-
+      A grounded, correct sentence that the numeric guardrail blocks. The
+      handover year is in the allowed set and the sentence invents nothing - but
+      `figures.py`'s number pattern captures the trailing comma into the surface
+      (`2026,`), and `_classify` refuses to call a surface containing a comma a
+      year, so an allowed YEAR is reclassified as an unallowed AMOUNT and the
+      sentence is blocked. The buyer hears the composed fallback instead of the
+      handover date. Reported as a finding, not fixed here: this harness does not
+      change guardrail behaviour to make its own rows green.
+    turns:
+      - buyer: Tell me about Skyrise and when it is ready.
+        model:
+          source: authored
+          intent: compliant
+          note: >-
+            Nothing invented. The only difference from happy.skyrise-studio-price
+            is that the year is followed by a comma rather than a full stop.
+          text: >-
+            Binghatti Skyrise starts from AED 985,000 and hands over in Q4 2026,
+            with the payment plan running to then.
+          tools: []
+          retry:
+            source: authored
+            intent: compliant
+            note: >-
+              Told the figure is not in the allowed set, the model has nothing to
+              correct: it was already quoting the inventory. It rephrases and is
+              blocked again, the regeneration is spent, and the buyer hears the
+              composed fallback instead of a handover date the system holds.
+            text: >-
+              The figures I have are AED 985,000 to start and handover in Q4 2026,
+              both from the list in front of me.
+            tools: []
+    assertions:
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_contain_figure
+        value: 2026
+        figure_kind: year
+      - kind: must_not_escalate

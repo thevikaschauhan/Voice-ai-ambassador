@@ -47,6 +47,22 @@ These are unit tests, not model evals, and they gate every commit:
 - **Normaliser**: `975k`, `0.975 million`, `٩٧٥٬٠٠٠`, `24 lakh`, `2.4 crore` all canonicalise correctly (and 24 lakh ≠ 2.4 crore).
 - **Whitelist discipline**: every whitelist entry has a `why`.
 
+## Running it
+
+The harness lives in `agent/src/evals/`; the cases are `agent/evals/cases/*.yaml` and the table above is restated as data in `agent/evals/categories.yaml`, so a category the doc gates and the harness does not is a test failure rather than a discovery.
+
+```sh
+uv run eval                                     # the whole matrix, offline
+uv run eval --category prompt_injection         # one row
+uv run eval --live --category digit_emission    # the real model, per category
+```
+
+Exit status is 1 when a gated category fails, so CI and the demo checklist read one signal.
+
+**Two modes, and they support different claims.** Offline is the default and needs no key, no network and no spend: each case replays a model reply recorded or authored beside it and asks what the buyer actually heard, which measures the PIPELINE - the guardrails, the recovery policy, verbalisation. Live calls the real model behind the real ambassador prompt and measures the MODEL; it costs money, so it requires `--category` and will not run the whole matrix. The report states which mode produced it and tallies, per category, how many fixtures were recorded off the wire, authored by hand, or involve no model at all (the deterministic budget policy). An offline pass is not a claim about the model and must never be reported as one.
+
 ## Reporting
 
-`uv run eval` (day 2+) prints per-category pass rates and writes a one-page report. **Bring the report to the meeting** - a page showing case counts and pass rates with the injection and guarantee-pressure rows visible does more for credibility than any slide. It is the difference between showing a demo and showing an engineering practice.
+`uv run eval` prints per-category pass rates and writes `docs/eval-report.md`. **Bring the report to the meeting** - a page showing case counts and pass rates with the injection and guarantee-pressure rows visible does more for credibility than any slide. It is the difference between showing a demo and showing an engineering practice.
+
+The page never hides a row: a human-verified category appears as outstanding rather than absent (a row missing from a meeting page reads as a row that passed), a case that could not run counts as a failure rather than dropping out of the denominator, and every failing case prints the assertion that failed beside what the buyer actually heard.

@@ -26,7 +26,6 @@ quietly repair anything.
 
 from __future__ import annotations
 
-import re
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
@@ -42,6 +41,7 @@ from ambassador.schemas import (
     Language,
     SpeakableText,
 )
+from ambassador.sentences import split_sentences
 from ambassador.verbalise import SpokenForms
 
 from .fallbacks import load_fallback_copy
@@ -59,21 +59,10 @@ _COPY = load_fallback_copy()
 BRIDGE_COPY: dict[Language, str] = _COPY.bridge
 FALLBACK_COPY: dict[Language, str] = _COPY.fallback
 
-# A boundary is terminal punctuation followed by whitespace. Requiring the
-# whitespace is what keeps "AED 1.5 million" and "Q4 2026" intact while the
-# stream is still arriving; the trailing fragment is flushed when the stream
-# ends.
-_BOUNDARY = re.compile(r"(?<=[.!?؟।])\s+")
-
-
-def split_sentences(buffer: str) -> tuple[list[str], str]:
-    """Split a streaming buffer into completed sentences plus the remainder."""
-    if not buffer:
-        return [], ""
-    parts = _BOUNDARY.split(buffer)
-    remainder = parts.pop() if parts else ""
-    complete = [p.strip() for p in parts if p.strip()]
-    return complete, remainder
+# `split_sentences` lives in the core (`ambassador.sentences`) because the
+# eval harness replays replies through the same boundaries headless and must
+# not import the voice stack. Re-exported here: this module is where the
+# streaming caller and its tests look for it.
 
 
 def _with_separator(text: str) -> str:
