@@ -52,7 +52,10 @@ failures want opposite orders.
    settles the name AND asks the currency - the answer is honoured first and
    the new mention still gets its question.
 4. **A reply that answers nothing is a failed attempt** on the owner. Three of
-   those hand over. Consent is never inferred from a reply nobody claimed.
+   those hand over. Consent is never inferred from a reply nobody claimed - and
+   "nobody claimed" means no policy ACTED on it, which is not the same as no
+   policy spoke: a confident project name is accepted silently, and charging
+   the owner for it turned a valid project selection into a hand-over.
 5. **A suspended question is still owed** and is re-asked once its turn comes,
    having consumed nothing. The model never takes a turn while a confirmation
    is open, which is the property ADR-011 exists to hold.
@@ -113,6 +116,37 @@ class Step:
     def speaks(self) -> bool:
         decision = self.budget or self.project or self.recognition
         return decision is not None and decision.speaks
+
+    @property
+    def claimed(self) -> bool:
+        """Whether this reading ACTED on the utterance.
+
+        Not the same question as `speaks`, and conflating the two was a defect:
+        a confident project name is accepted SILENTLY, so the policy that
+        claimed the turn had nothing to say about it, and the owner's failure
+        path then charged the same utterance as an unanswered reply. A turn can
+        be claimed without a word being spoken.
+
+        A recognition step is never a claim. Classifying a turn as heard is not
+        acting on what it said, and an unheard turn returns long before any of
+        this.
+        """
+        if self.recognition is not None:
+            return False
+        if self.budget is not None:
+            # `currency is not None` is the budget's silent settle. Mutating it
+            # away leaves the suite green, and that is not a missing test: a
+            # FRESH budget read never settles silently (with no question open,
+            # `_first_mention` either finds a budget and speaks or returns
+            # nothing), and the owner path that does settle silently is already
+            # excluded by the owner half of the charging condition below. The
+            # branch is kept because "did the budget act on this utterance" is
+            # the question being asked, and the answer must not depend on which
+            # of two conditions happens to catch it first - see the note there.
+            return self.budget.speaks or self.budget.currency is not None
+        if self.project is not None:
+            return self.project.speaks or self.project.settled
+        return False
 
     @property
     def hands_over(self) -> bool:
@@ -207,10 +241,40 @@ class ConfirmationCoordinator:
             if steps[-1].speaks:
                 return self._closing(steps)
 
-        if owner is not None and not any(step.policy == owner for step in steps):
-            # Nobody claimed the reply, so it answered nothing. Consent is
+        if (
+            owner is not None
+            and not any(step.policy == owner for step in steps)
+            and not any(step.claimed for step in steps)
+        ):
+            # NOBODY claimed the reply, so it answered nothing. Consent is
             # never inferred from that; it is a failed attempt, and three of
             # them hand the buyer to a person.
+            #
+            # Both halves of that condition are load-bearing. Asking only
+            # whether the owner had read the turn let a fresh policy accept the
+            # utterance and the owner charge it anyway: "Binghatti Skyrise",
+            # offered while a currency question was open, confirmed the project
+            # AND spent the budget's third attempt, ending the call with a
+            # hand-over the buyer had done nothing to earn.
+            #
+            # This cannot stall the owner indefinitely. A claim requires a
+            # policy to act, and each acting policy narrows what it can act on
+            # again - a confirmed project name is excluded from matching - so
+            # the free turns a buyer can draw this way are bounded by the
+            # inventory rather than unbounded.
+            #
+            # The two halves currently IMPLY each other, and each is kept
+            # anyway. Mutating either one away leaves the suite green: the owner
+            # reads the turn only when `answers()` is true, and it then either
+            # speaks (returning above) or settles, which is itself a claim - so
+            # "the owner read it but claimed nothing" is unreachable, and the
+            # halves mask one another. They are not the same statement, which
+            # is why both stay: one says a policy never reads one utterance
+            # twice, the other says who pays for a reply. Reading the same
+            # utterance twice is the exact class that has now blocked this
+            # change three times, and collapsing the pair would leave the
+            # surviving condition carrying an argument it was not written to
+            # make.
             steps.append(self._read(owner, utterance))
             if steps[-1].speaks:
                 return self._closing(steps)

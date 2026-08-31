@@ -259,3 +259,70 @@ def test_ownership_is_recency_and_not_precedence(parts):
     assert policies._owner() == "budget"
     policies._last_asked = "project"
     assert policies._owner() == "project"
+
+
+# --- the re-review's finding ------------------------------------------------
+
+
+def test_a_silently_settled_fresh_mention_is_a_claim_not_a_free_turn(parts):
+    """A confident project name, offered while a budget question is open, was
+    accepted by the project policy AND charged to the budget as a failed
+    answer.
+
+    The fallback asked only whether the OWNER had produced a step, so a fresh
+    policy that settles silently - which is what a confident name does - left
+    execution falling through to the owner's failure path. At two attempts that
+    third charge is a terminal false handover from a valid project selection,
+    and it contradicts this module's own rule: only a reply NOBODY claims is
+    charged to the owner.
+    """
+    policies = coordinator(parts)
+    said(policies, "My budget is 2 crore.")
+    for _ in range(2):
+        said(policies, "What?")
+    assert policies._budget._attempts == 2
+
+    steps = policies.observe("Binghatti Skyrise.")
+    assert policies._project.confirmed == frozenset({SKYRISE})
+    # The claim is the point: the budget keeps its last attempt and nobody is
+    # handed over.
+    assert policies._budget._attempts == 2
+    assert not policies.quiesced
+    assert not any(step.hands_over for step in steps)
+    # And the currency question is still owed, so it is asked again for free.
+    spoke = [step for step in steps if step.speaks]
+    assert len(spoke) == 1
+    assert spoke[0].policy == "budget"
+    assert spoke[0].action == "ask_currency"
+    assert spoke[0].reask
+
+
+def test_a_reply_that_claims_nothing_still_costs_the_owner_its_attempt(parts):
+    """The symmetric half, so the fix cannot become "the owner is never
+    charged". A reply no policy acts on is still a failed attempt."""
+    policies = coordinator(parts)
+    said(policies, "My budget is 2 crore.")
+    for _ in range(2):
+        said(policies, "What?")
+    assert policies._budget._attempts == 2
+
+    step = said(policies, "Sorry, say that again?")
+    assert step is not None
+    assert step.action == "give_up"
+    assert policies.quiesced
+
+
+def test_a_project_name_already_confirmed_claims_nothing_a_second_time(parts):
+    """What stops the claim rule becoming an unbounded stall: a confirmed name
+    is excluded from matching, so repeating it is no longer a claim and the
+    owner's attempts resume. The number of free turns a buyer can draw this way
+    is bounded by the inventory."""
+    policies = coordinator(parts)
+    said(policies, "My budget is 2 crore.")
+    said(policies, "Binghatti Skyrise.")
+    assert policies._project.confirmed == frozenset({SKYRISE})
+    assert policies._budget._attempts == 0
+
+    for expected in (1, 2):
+        said(policies, "Binghatti Skyrise.")
+        assert policies._budget._attempts == expected

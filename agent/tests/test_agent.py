@@ -2516,3 +2516,35 @@ async def test_a_crash_in_the_policies_themselves_hands_over():
 
     await log.aclose()
     assert '"escalation"' in buf.getvalue()
+
+
+async def test_a_fresh_project_name_does_not_hand_the_buyer_over(monkeypatch):
+    """The re-review's transcript, through llm_node.
+
+    A confident project name offered while a budget question is open was
+    accepted by the project policy and ALSO charged to the budget as its third
+    failure, so a valid project selection ended the call with a hand-over. Only
+    a reply nobody claims may be charged to the owner.
+    """
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])  # a model call would raise IndexError
+
+    assert "dirhams or in rupees" in spoken(
+        await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    )
+    for reply in ("What?", "Sorry?"):
+        agent._tracker = None
+        assert "dirhams or in rupees" in spoken(
+            await run_llm_node(agent, user_ctx(reply))
+        )
+
+    agent._tracker = None
+    heard = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrise.")))
+    assert "ambassadors" not in heard, "a valid project name handed the buyer over"
+    assert "dirhams or in rupees" in heard
+    assert agent._project.confirmed == frozenset({"binghatti-skyrise"})
+    assert not agent._policies.quiesced
+    assert "escalate_to_human" not in agent.tracker.actions
+
+    await log.aclose()
+    assert '"escalation"' not in buf.getvalue()
