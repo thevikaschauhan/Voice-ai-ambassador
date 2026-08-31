@@ -42,6 +42,7 @@ from livekit.agents.voice import SpeechHandle  # noqa: E402
 
 from adapter.agent import AmbassadorAgent, shutdown_session  # noqa: E402
 from adapter.config import Settings  # noqa: E402
+from adapter.confirmations import ConfirmationCopy  # noqa: E402
 from adapter.disclosure import UncertifiedLanguageError  # noqa: E402
 from adapter.events import EventLog  # noqa: E402
 from adapter.interception import FALLBACK_COPY  # noqa: E402
@@ -788,3 +789,365 @@ async def test_the_respelling_is_applied_to_the_text_handed_to_tts(monkeypatch):
     joined = "".join(handed_to_tts)
     assert "bin-GAH-tee" in joined, joined
     assert "Binghatti" not in joined, joined
+
+
+# --- ADR-011: the confirmation takes the turn away from the model ----------
+#
+# Prompt constraint 8 already asked the model to confirm a budget, and ADR-007
+# is explicit that asking reduces violations without eliminating them. What
+# makes this deterministic is that the model never runs on the turn where a
+# confirmation is owed.
+
+
+def _budget_agent(**overrides):
+    buf = StringIO()
+    log = EventLog("sess_test", stream=buf, verbose=False)
+    agent = AmbassadorAgent(settings=make_settings(**overrides), log=log)
+    return agent, log, buf
+
+
+async def test_an_ambiguous_budget_is_confirmed_and_the_model_never_runs():
+    """The twenty-times error, stopped before it can be made.
+
+    "2 crore" is INR 2 crore (about AED 880k) or AED 2 crore (20 million).
+    The SpyLLM would raise IndexError if it were called, so this also proves
+    no LLM request was made.
+    """
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])  # any call pops from an empty list
+
+    reply = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+
+    assert "2 crore" in reply
+    assert "dirhams or in rupees" in reply
+
+
+async def test_the_confirmation_is_not_repeated_once_the_budget_is_settled():
+    """A policy that asks every turn is one the operator switches off."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    first = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "dirhams or in rupees" in first
+
+    agent._tracker = None
+    second = spoken(await run_llm_node(agent, user_ctx("Dirhams.")))
+    # Settled, so the model gets this turn. Asserting on its words rather than
+    # on GROUNDED: the reply is verbalised on the way out, so the digits are
+    # already gone by here.
+    assert "A studio is" in second
+    assert "dirhams or in rupees" not in second
+
+
+async def test_a_non_aed_budget_hands_over_rather_than_converting():
+    """No confirmed exchange rate ships, and a converted figure derived from a
+    guess is the same class of error as a fabricated price."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    agent._tracker = None
+    reply = spoken(await run_llm_node(agent, user_ctx("Rupees.")))
+
+    assert "ambassadors" in reply
+    assert "convert" in reply.lower()
+
+
+async def test_the_buyers_budget_never_reaches_the_emitted_stream():
+    """The leak this test exists for was real.
+
+    The confirmation was first routed through `record_fallback`, whose event
+    carries its text in the clear - safe for fixed copy from a data file, and
+    not safe for a line that interpolates the buyer's own budget. docs/03-
+    validator 4 keeps buyer-derived content off stdout and the file sink
+    entirely.
+    """
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    await log.aclose()
+
+    emitted = buf.getvalue()
+    assert "2 crore" not in emitted, emitted
+    assert "dirhams or in rupees" not in emitted, emitted
+    # The fact of it is still auditable.
+    assert "budget_confirmation" in emitted
+
+
+async def test_the_audit_still_records_what_the_buyer_heard():
+    """Keeping it off the stream must not blind the in-process record, which
+    is what the ambassador view and the audit read."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+
+    chunks = [c.text for c in agent.tracker.spoken_chunks]
+    assert any("2 crore" in c for c in chunks), chunks
+
+
+async def test_a_language_with_no_confirmation_copy_does_not_speak_english():
+    """Better to skip the policy than to answer an Arabic buyer in English."""
+    agent, _, _ = _budget_agent(language="ar", allow_uncertified_language=True)
+    agent._llm = SpyLLM([HealthyStream(["مرحبا. "])])
+
+    reply = spoken(await run_llm_node(agent, user_ctx("2 crore")))
+    assert "dirhams or in rupees" not in reply
+
+
+# --- the rework the blocking review demanded --------------------------------
+#
+# The first version shipped eight defects behind green tests because every
+# test named a currency on turn two or repeated the figure verbatim, and
+# asserted on Decision objects rather than on what the buyer hears. These
+# drive whole exchanges through llm_node and assert on the spoken text.
+
+
+async def test_a_reply_that_answers_nothing_is_reasked_not_handed_to_the_model():
+    """The fail-open defect. The re-ask composes against the transcript the
+    mention CAME FROM; checking it against the current turn made every re-ask
+    fail its own echo guard and silently gave the model the turn."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])  # any model call would raise IndexError
+
+    first = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "dirhams or in rupees" in first
+
+    agent._tracker = None
+    second = spoken(
+        await run_llm_node(agent, user_ctx("I did not catch that, can you repeat?"))
+    )
+    assert "2 crore" in second
+    assert "dirhams or in rupees" in second
+
+
+async def test_no_to_a_read_back_asks_for_the_amount_out_loud():
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    first = spoken(
+        await run_llm_node(agent, user_ctx("My budget is 5 million dirhams."))
+    )
+    assert "have I got that right" in first
+
+    agent._tracker = None
+    second = spoken(await run_llm_node(agent, user_ctx("No, that's wrong.")))
+    assert "what is the budget" in second
+
+
+async def test_a_handover_actually_notifies_a_human():
+    """`hands_over` was a log field with no consequence: the buyer heard "let
+    me put you through" and nobody was put through - the exact anti-pattern
+    escalate_to_human's own docstring names."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    agent._tracker = None
+    reply = spoken(await run_llm_node(agent, user_ctx("Rupees.")))
+    assert "ambassadors" in reply
+
+    assert "escalate_to_human" in agent.tracker.actions
+    await log.aclose()
+    emitted = buf.getvalue()
+    assert '"escalation"' in emitted
+    assert "human_ambassador" in emitted
+
+
+async def test_giving_up_notifies_a_human_too():
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    for reply in ("What?", "Sorry?"):
+        agent._tracker = None
+        await run_llm_node(agent, user_ctx(reply))
+    agent._tracker = None
+    final = spoken(await run_llm_node(agent, user_ctx("Lovely weather.")))
+    assert "ambassadors" in final
+
+    assert "escalate_to_human" in agent.tracker.actions
+    await log.aclose()
+    assert '"escalation"' in buf.getvalue()
+
+
+async def test_denying_dirhams_is_not_recorded_as_dirhams():
+    """"Not dirhams" settled AED and went permanently silent. There are two
+    currencies, so the denial names rupees - which without a confirmed rate
+    is a handover, not a conversion."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    agent._tracker = None
+    reply = spoken(await run_llm_node(agent, user_ctx("Not dirhams.")))
+
+    assert "ambassadors" in reply
+    assert agent._budget.currency == "INR"
+
+
+async def test_no_llm_request_is_logged_on_a_confirmation_turn():
+    """The audit meters model calls off the event stream; a request line with
+    no llm_ttft or llm_usage behind it over-counts them."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    await log.aclose()
+    assert "llm_request" not in buf.getvalue()
+
+
+async def test_a_tool_split_turn_reads_the_policy_once():
+    """One buyer utterance, two llm_node invocations (a tool call splits the
+    turn). The second read must not burn a second attempt on the same reply."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    first = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "dirhams or in rupees" in first
+    assert agent._budget._attempts == 0
+
+    # Same tracker, same turn: the second half of a tool-using turn.
+    second = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "dirhams or in rupees" not in second
+    assert agent._budget._attempts == 0
+
+
+async def test_a_broken_template_hands_over_rather_than_freeing_the_model():
+    """The failure direction, pinned. A confirmation that cannot be composed
+    must go to a human; returning the turn to the model is the fail-open
+    defect the review caught. `{ammount}` is the reviewer's own example of a
+    translator typo the old `except ValueError` did not even catch."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])
+    agent._confirmations = ConfirmationCopy(
+        by_language={
+            "en": {
+                "ask_currency": "{ammount} - dirhams or rupees?",
+                "confirm_amount": "{amount} - right?",
+                "ask_amount": "What is the budget?",
+                "cannot_convert": "An ambassador will help.",
+                "give_up": "Let me put you through to one of our ambassadors.",
+            }
+        }
+    )
+
+    reply = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+
+    assert "ambassadors" in reply
+    assert agent._budget.settled
+    assert "escalate_to_human" in agent.tracker.actions
+    await log.aclose()
+    assert '"escalation"' in buf.getvalue()
+
+
+async def test_settling_emits_its_own_event_name():
+    """`budget_settled`, not `budget_confirmed`: the brief extractor puts a
+    model-inferred `budget.confirmed` on the same stream, and the two must
+    not share a name."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    agent._tracker = None
+    await run_llm_node(agent, user_ctx("Dirhams."))
+    await log.aclose()
+    assert '"budget_settled"' in buf.getvalue()
+
+
+async def test_guardrail_timing_is_unmeasured_not_zero_on_a_confirmation_turn():
+    """events.py's own rule: a missing measurement and a zero-latency stage
+    must not look the same on the meter. No guardrail runs on a turn the
+    policy takes."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    record = agent.tracker.finish()
+    assert record.timings_ms.guardrail is None
+
+
+def test_the_prompt_keeps_the_model_confirming_where_the_policy_is_off():
+    """Telling the model "the system owns confirmation" in a language whose
+    copy is unauthored left NOBODY asking - a regression from the prompt-only
+    days. The old wording survives exactly there."""
+    on = AmbassadorAgent(
+        settings=make_settings(),
+        log=EventLog("sess_test", stream=StringIO(), verbose=False),
+    )
+    assert "The budget confirmation is handled by the system" in on.instructions
+
+    off = AmbassadorAgent(
+        settings=make_settings(language="ar", allow_uncertified_language=True),
+        log=EventLog("sess_test", stream=StringIO(), verbose=False),
+    )
+    assert "confirm the amount AND the currency" in off.instructions
+    assert "The budget confirmation is handled by the system" not in off.instructions
+
+
+# --- the second independent review's seam findings, pinned ------------------
+
+
+def test_every_format_failure_is_unspeakable_not_an_escape():
+    """str.format raises more than ValueError and KeyError: "{amount.foo}"
+    is an AttributeError and "{amount[x]}" a TypeError, and both escaped the
+    first curated except into a silent turn."""
+    from adapter.confirmations import UnspeakableConfirmation
+    from adapter.confirmations import compose as compose_confirmation
+
+    for template in ("{amount.foo} - dirhams or rupees?", "{amount[x]} - right?"):
+        with pytest.raises(UnspeakableConfirmation):
+            compose_confirmation(template, echoed="2 crore", said="2 crore budget")
+
+
+async def test_a_template_attribute_error_still_hands_over_out_loud():
+    """The full fail-closed path for an exception class the curated catch
+    missed: the turn must speak the give-up line, notify a human, and never
+    fall through to the model - including on a same-turn second invocation."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    agent._confirmations = ConfirmationCopy(
+        by_language={
+            "en": {
+                "ask_currency": "{amount.foo} - dirhams or rupees?",
+                "confirm_amount": "{amount} - right?",
+                "ask_amount": "What is the budget?",
+                "cannot_convert": "An ambassador will help.",
+                "give_up": "Let me put you through to one of our ambassadors.",
+            }
+        }
+    )
+
+    reply = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "ambassadors" in reply
+    assert agent._budget.settled
+    assert "escalate_to_human" in agent.tracker.actions
+
+    # The same-turn retry (the observe-once gate) must not reach the model
+    # with the budget unconfirmed - the policy is settled and escalated, so
+    # the model turn that follows is a normal post-handover turn.
+    second = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "{" not in second
+
+    await log.aclose()
+    assert '"escalation"' in buf.getvalue()
+
+
+def test_the_give_up_line_may_carry_no_slot_of_any_kind(tmp_path):
+    """give_up is spoken verbatim on the failure path, so any format slot in
+    it - not just a well-formed {amount} - is a loader error."""
+    from adapter.confirmations import load_confirmations
+
+    bad = tmp_path / "confirmations.yaml"
+    bad.write_text(
+        "en:\n"
+        '  ask_currency: "{amount} - dirhams or rupees?"\n'
+        '  confirm_amount: "{amount} - right?"\n'
+        '  ask_amount: "What is the budget?"\n'
+        '  cannot_convert: "An ambassador will help."\n'
+        '  give_up: "Let me put you through {amount.foo}."\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="give_up"):
+        load_confirmations(bad)

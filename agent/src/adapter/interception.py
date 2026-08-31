@@ -287,7 +287,9 @@ async def guarded_stream(
 
         # Audio already played, or the retry has been spent: composed speech.
         bridging = spoken_anything
-        text = BRIDGE_COPY[guard.language] if bridging else FALLBACK_COPY[guard.language]
+        text = (
+            BRIDGE_COPY[guard.language] if bridging else FALLBACK_COPY[guard.language]
+        )
         composed = guard.compose(text)
         if bridging:
             if sink.on_bridge:

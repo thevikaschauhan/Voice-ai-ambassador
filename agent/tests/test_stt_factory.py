@@ -54,3 +54,26 @@ def test_describe_never_carries_a_key():
     node = build_stt(make_settings(stt_enabled=True, stt_provider="openrouter"))
     assert "fake" not in repr(describe(node)).lower()
     assert not any("key" in str(k).lower() for k in describe(node))
+
+
+def test_deepgram_is_built_with_numerals_on(monkeypatch):
+    """ADR-011's blindness pin, at the right end. Budget detection needs
+    digits in the transcript; a recogniser configured to spell numbers out
+    silently blinds the whole confirmation policy. test_budget pins that
+    word-form figures are invisible; this pins that the session actually
+    asks Deepgram for digits."""
+    deepgram = pytest.importorskip("livekit.plugins.deepgram")
+
+    captured: dict = {}
+
+    def recorder(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(deepgram, "STT", recorder)
+    build_stt(
+        make_settings(
+            stt_enabled=True, stt_provider="deepgram", deepgram_api_key="fake-key"
+        )
+    )
+    assert captured["numerals"] is True

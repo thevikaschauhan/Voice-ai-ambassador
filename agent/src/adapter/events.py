@@ -167,6 +167,19 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "session_start": "the already-redacted config summary: model names, modes, booleans",
     "session_end": "a turn count",
     "disclosure": "two language codes and a boolean, all from configuration",
+    "budget_policy": "language codes and booleans, all from configuration",
+    # An enum action, a currency code and booleans - and deliberately NOT the
+    # text. A confirmation echoes the buyer's own budget, so its text is
+    # buyer-derived free content; `record_confirmation` keeps it in the
+    # in-memory TurnRecord, where the audit and the ambassador view need it,
+    # and never puts it on the emitted stream.
+    "budget_confirmation": "an enum action, a currency code and booleans",
+    # "Settled", not "confirmed": the brief extractor's model-inferred record
+    # carries its own `budget.confirmed` field on the same stream, and the two
+    # must not share a name - this one is the deterministic policy's verdict
+    # and wins wherever they disagree.
+    "budget_settled": "a turn index and a currency code",
+    "budget_confirmation_spoken": "a turn index and an enum action, never the text",
     "lexicon": "language codes and a boolean, all from a static data file",
     "prohibited_coverage": "language codes, a boolean and a pattern count",
     "stt_enabled": "the STT model and provider names",
@@ -180,6 +193,10 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "turn_complete": "timings, counts, booleans and the list of tool names fired",
     "bridge": "fixed composed copy from data/fallbacks.yaml (bridge), never generated",
     "fallback": "fixed composed copy from data/fallbacks.yaml (fallback), plus an enum reason",
+    # Both of the above are clear ONLY because their text is fixed copy from a
+    # data file. Anything that interpolates the buyer - the budget
+    # confirmation did, through record_fallback, until this was caught - must
+    # not be routed through them. Use record_confirmation instead.
     "brief_retry": "an attempt number, a delay in seconds, an HTTP status",
     "brief_stale_dropped": "turn indexes and a fixed literal reason",
     "event_log_backpressure": "a dropped-line count and the queue bound",
@@ -430,7 +447,10 @@ class TurnTracker:
         self.llm_ttft: float | None = None
         self.llm_first_sentence: float | None = None
         self.tts_first_audio: float | None = None
-        self.guardrail_total: float = 0.0
+        # None until the guardrail actually runs. A confirmation turn never
+        # runs it, and events.py's own rule is that a missing measurement and
+        # a zero-latency stage must not look the same on the meter.
+        self.guardrail_total: float | None = None
 
         self.generated_sentences: list[str] = []
         self.spoken_chunks: list[SpokenChunk] = []
@@ -492,7 +512,7 @@ class TurnTracker:
         Emitted for passes as well as violations: the claim is that every
         sentence is inspected, and only a per-sentence record can evidence it.
         """
-        self.guardrail_total += guardrail_ms
+        self.guardrail_total = (self.guardrail_total or 0.0) + guardrail_ms
         self.generated_sentences.append(raw)
         if violation is not None:
             self.violations.append(violation)
@@ -538,6 +558,22 @@ class TurnTracker:
         reply (docs/01-). There is nothing to bridge from."""
         self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
         self._log.emit("fallback", turn=self.turn_index, text=text, reason=reason)
+
+    def record_confirmation(self, text: str, action: str) -> None:
+        """A deterministic confirmation spoken instead of running the turn.
+
+        Shaped like `record_fallback` and emitted differently on purpose. That
+        event carries its text in the clear, which is safe for fixed copy out
+        of a data file and NOT safe here: a confirmation interpolates the
+        buyer's own budget, and routing it through `record_fallback` put a
+        buyer-derived figure onto stdout and the file sink. The chunk still
+        goes into the in-memory record, which is what the audit and the
+        ambassador view read.
+        """
+        self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
+        self._log.emit(
+            "budget_confirmation_spoken", turn=self.turn_index, action=action
+        )
 
     def mark_interrupted(self) -> None:
         """Barge-in: the last chunk handed to TTS may not have finished
@@ -610,7 +646,11 @@ class TurnTracker:
             actions=self.actions,
             timings_ms=Timings(
                 llm_first_sentence=_ms(self.llm_first_sentence),
-                guardrail=round(self.guardrail_total, 2),
+                guardrail=(
+                    None
+                    if self.guardrail_total is None
+                    else round(self.guardrail_total, 2)
+                ),
                 tts_first_audio=_ms(self.tts_first_audio),
                 total=_ms(total),
             ),
@@ -625,7 +665,11 @@ class TurnTracker:
             turn=self.turn_index,
             llm_ttft_ms=_ms(self.llm_ttft),
             llm_first_sentence_ms=_ms(self.llm_first_sentence),
-            guardrail_ms=round(self.guardrail_total, 2),
+            guardrail_ms=(
+                None
+                if self.guardrail_total is None
+                else round(self.guardrail_total, 2)
+            ),
             tts_first_audio_ms=_ms(self.tts_first_audio),
             total_ms=_ms(total),
             sentences=len(self.generated_sentences),

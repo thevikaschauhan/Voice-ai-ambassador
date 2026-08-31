@@ -127,7 +127,10 @@ class BriefExtractor:
 
     def _accept(self, brief: LeadBrief, turn_index: int) -> bool:
         """Advance the last good brief, unless this result is stale."""
-        if self._last_accepted_turn is not None and turn_index < self._last_accepted_turn:
+        if (
+            self._last_accepted_turn is not None
+            and turn_index < self._last_accepted_turn
+        ):
             return False
         self._last_good = brief
         self._last_accepted_turn = turn_index
@@ -142,7 +145,9 @@ class BriefExtractor:
 
     # -- scheduling -------------------------------------------------------
 
-    def schedule(self, transcript: list[dict[str, str]], turn_index: int) -> asyncio.Task[None]:
+    def schedule(
+        self, transcript: list[dict[str, str]], turn_index: int
+    ) -> asyncio.Task[None]:
         """Fire and forget. The caller must not await this - that is the whole
         point of putting the brief on its own channel.
 
@@ -151,7 +156,8 @@ class BriefExtractor:
         to overwrite the newer brief.
         """
         task = asyncio.create_task(
-            self._run(transcript, turn_index), name=f"brief_extraction_turn_{turn_index}"
+            self._run(transcript, turn_index),
+            name=f"brief_extraction_turn_{turn_index}",
         )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -171,9 +177,7 @@ class BriefExtractor:
         if unknown:
             # docs/03- validator 3: an unresolvable id is a guardrail failure,
             # never a silent drop.
-            raise ValueError(
-                f"shortlist_ids not in inventory: {', '.join(unknown)}"
-            )
+            raise ValueError(f"shortlist_ids not in inventory: {', '.join(unknown)}")
         return brief
 
     async def _run(self, transcript: list[dict[str, str]], turn_index: int) -> None:

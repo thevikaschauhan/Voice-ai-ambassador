@@ -198,7 +198,9 @@ class OpenRouterSTT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        lang = language if isinstance(language, str) and language else self._opts.language
+        lang = (
+            language if isinstance(language, str) and language else self._opts.language
+        )
         audio_bytes, audio_format = encode_utterance(buffer)
         body = build_request_body(
             model=self._opts.model,

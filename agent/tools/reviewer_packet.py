@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from adapter.confirmations import load_confirmations  # noqa: E402
 from adapter.disclosure import load_disclosures  # noqa: E402
 from adapter.fallbacks import load_fallback_copy  # noqa: E402
 from adapter.lexicon import load_lexicon  # noqa: E402
@@ -123,6 +124,7 @@ def main(language: str) -> None:
     fallbacks = load_fallback_copy()
     lexicon = load_lexicon()
     patterns = load_patterns()
+    confirmations = load_confirmations()
 
     out: list[str] = []
     w = out.append
@@ -212,6 +214,65 @@ def main(language: str) -> None:
     )
     w("")
     w(bullet("currency tokens:"))
+    w("")
+    w("## 3b. Checking a buyer's budget back to them")
+    w("")
+    w(
+        "Before recommending anything, the system reads a stated budget back. "
+        'It never guesses a currency: "two crore" is about AED 880,000 if '
+        "the buyer meant rupees and AED 20 million if they meant dirhams, and "
+        "guessing wrong recommends a property twenty times off."
+    )
+    w("")
+    w('`{amount}` is replaced with what the buyer said, e.g. "2 crore".')
+    w("")
+    for key, gloss in (
+        ("ask_currency", "they gave a number but no currency"),
+        ("confirm_amount", "they gave both; we read it back to catch a mishearing"),
+        (
+            "ask_amount",
+            "they said the read-back was wrong; ask for the figure afresh "
+            "(no {amount} slot - repeating the rejected number reads badly)",
+        ),
+        (
+            "cannot_convert",
+            "their budget is not in dirhams and we will not guess a rate",
+        ),
+        ("give_up", "they have been asked three times; hand to a person warmly"),
+    ):
+        w(f"**{key}** - {gloss}")
+        w(f"English: > {confirmations.line('en', key)}")
+        w(bullet(f"{name}:"))
+        w("")
+    w("### The currency words a buyer might say")
+    w("")
+    w(
+        "Every way a buyer could name dirhams or rupees out loud, so the system "
+        f"hears it. Different from the list above: that one is what the agent "
+        f"says, this is what a {name} speaker says to it."
+    )
+    w("")
+    w(bullet("dirhams:"))
+    w(bullet("rupees:"))
+    w("")
+    w(
+        "And the words that mark a number as a budget rather than a bedroom "
+        'count - the equivalents of "budget", "spend", "afford", "up to".'
+    )
+    w("")
+    w(bullet("budget words:"))
+    w("")
+    w(
+        "The system also reads a buyer's PUSH-BACK, so a rejected read-back is "
+        "never recorded as agreement. Two lists: words that deny the currency "
+        'they sit in front of (the equivalents of "not", as in "not dirhams"), '
+        "and words that contradict what was just read back (the equivalents "
+        'of "no", "wrong", "you misheard").'
+    )
+    w("")
+    w(bullet("denial words (like \"not\"):"))
+    w(bullet("contradiction words (like \"no\" / \"wrong\"):"))
+    w(bullet("agreement words (like \"yes\" / \"correct\"):"))
     w("")
     w("## 4. How these names should sound")
     w("")

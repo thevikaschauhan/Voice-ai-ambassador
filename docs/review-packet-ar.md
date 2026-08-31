@@ -68,6 +68,49 @@ List every written form of the currency your phrases above already say aloud - t
 
 - [ ] currency tokens:
 
+## 3b. Checking a buyer's budget back to them
+
+Before recommending anything, the system reads a stated budget back. It never guesses a currency: "two crore" is about AED 880,000 if the buyer meant rupees and AED 20 million if they meant dirhams, and guessing wrong recommends a property twenty times off.
+
+`{amount}` is replaced with what the buyer said, e.g. "2 crore".
+
+**ask_currency** - they gave a number but no currency
+English: > {amount} - is that in dirhams or in rupees?
+- [ ] Arabic:
+
+**confirm_amount** - they gave both; we read it back to catch a mishearing
+English: > {amount} - have I got that right?
+- [ ] Arabic:
+
+**ask_amount** - they said the read-back was wrong; ask for the figure afresh (no {amount} slot - repeating the rejected number reads badly)
+English: > Apologies - what is the budget, then?
+- [ ] Arabic:
+
+**cannot_convert** - their budget is not in dirhams and we will not guess a rate
+English: > I would rather not convert that myself and risk being wrong. Let me put you through to one of our ambassadors.
+- [ ] Arabic:
+
+**give_up** - they have been asked three times; hand to a person warmly
+English: > Let me put you through to one of our ambassadors who can go through the numbers with you properly.
+- [ ] Arabic:
+
+### The currency words a buyer might say
+
+Every way a buyer could name dirhams or rupees out loud, so the system hears it. Different from the list above: that one is what the agent says, this is what a Arabic speaker says to it.
+
+- [ ] dirhams:
+- [ ] rupees:
+
+And the words that mark a number as a budget rather than a bedroom count - the equivalents of "budget", "spend", "afford", "up to".
+
+- [ ] budget words:
+
+The system also reads a buyer's PUSH-BACK, so a rejected read-back is never recorded as agreement. Two lists: words that deny the currency they sit in front of (the equivalents of "not", as in "not dirhams"), and words that contradict what was just read back (the equivalents of "no", "wrong", "you misheard").
+
+- [ ] denial words (like "not"):
+- [ ] contradiction words (like "no" / "wrong"):
+- [ ] agreement words (like "yes" / "correct"):
+
 ## 4. How these names should sound
 
 (Respellings exist today for: en.)

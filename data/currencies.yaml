@@ -1,0 +1,97 @@
+# Buyer-side currency recognition and conversion (ADR-011, docs/04-).
+#
+# This is INPUT recognition - the words a buyer says next to a number - and is
+# a different list from `currency_tokens` in spoken-forms.yaml, which is the
+# written tokens the OUTPUT swallows. A buyer says "rupees"; the agent never
+# writes it.
+#
+# Why any of this exists: "do crore ka budget hai" is two crore of WHAT. INR
+# 2 crore is roughly AED 880k; AED 2 crore is 20 million. Guessing wrong
+# recommends a property off by up to 20x, in a warm confident voice.
+
+# THE RATE IS NOT SET, AND THAT IS DELIBERATE.
+#
+# A made-up exchange rate spoken to a buyer is the same class of error as a
+# made-up price: a specific, checkable, wrong number said with confidence.
+# While `confirmed` is false the agent does not convert at all - it confirms
+# the currency and hands a non-AED budget to a human, which is the honest
+# answer and one worth showing.
+#
+# To switch conversion on, an operator sets a real rate, dates it, and flips
+# `confirmed`. Nothing else changes.
+rate:
+  inr_per_aed: null
+  as_of: null
+  confirmed: false
+  # VERIFY: with Binghatti's finance contact - the rate they quote buyers, and
+  # how often it is refreshed. A stale rate is a wrong rate.
+
+# Per language, because a buyer says the currency in the language they are
+# speaking. Matched case-insensitively as whole words against the transcript.
+words:
+  en:
+    AED: [aed, dirham, dirhams, dhs, dh]
+    INR: [inr, rupee, rupees, rs]
+  ar:
+    AED: []
+    INR: []
+    # VERIFY: native-authored. Until these exist, an Arabic buyer naming a
+    # currency reads as unstated, so the agent asks - which is the safe
+    # direction, and no worse than not asking.
+  hi:
+    AED: []
+    INR: []
+    # VERIFY: native-authored. Same rule.
+
+# Symbols are language-neutral: a transcript carries them whatever is spoken.
+symbols:
+  AED: []
+  INR: ["₹"]
+
+# Words that mark a number as a BUDGET rather than a bedroom count or a floor.
+# Without these "three bedrooms" reads as a budget mention. A number carrying a
+# currency or a lakh/crore/million multiplier needs no keyword - those say it
+# on their own. Matched within a short window of the figure, not across the
+# whole utterance, and kept to words that are ABOUT money: "around" and
+# "looking at" were in this list once, and "I'm around floor 15" read as a
+# budget of 15.
+budget_keywords:
+  en: [budget, spend, spending, afford, price range, up to, maximum, max]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# Negators: a currency these directly precede is being DENIED, not named.
+# "Not dirhams" and "not in dirhams" deny dirhams; punctuation breaks the
+# bind, so "no, dirhams" affirms them. A negator that is not denying a
+# currency ("I'm not sure") reads as a contradiction of the read-back.
+# "no" is quoted because YAML 1.1 reads it as a boolean, and a False in this
+# list is silently unmatched rather than an error.
+negators:
+  en: ["not", "no", "never", "don't", "dont", "isn't", "isnt", "wasn't", "wasnt"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# Contradictions: the buyer pushing back on what was read to them. A read-back
+# answered with one of these is never consent - the policy asks for the
+# amount again instead of settling it.
+contradictions:
+  en: ["no", "nope", "nah", "wrong", "incorrect", "mistake", "misheard"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# Affirmations: explicit agreement with a read-back. Consent is never
+# inferred from the absence of an objection - "can you repeat that?" is not
+# a yes - so a read-back settles only on one of these (or on a currency
+# word). A contradiction in the same reply wins over any of them.
+affirmations:
+  en: ["yes", "yeah", "yep", "yup", "correct", "right", "exactly", "indeed", "sure", "ok", "okay", "fine", "perfect", "absolutely"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
