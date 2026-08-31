@@ -1,0 +1,109 @@
+# Crore/lakh and INR-vs-AED ambiguity triggers confirmation; nothing is
+# converted on a guess (docs/05-, ADR-011).
+#
+# The failure being priced here: "do crore ka budget hai" is two crore of WHAT.
+# INR 2 crore is roughly AED 880k, AED 2 crore is 20 million - guess wrong and
+# the agent recommends a property twenty times off, warmly.
+#
+# Two things about these cases are easy to misread:
+#
+# 1. The confirmation ECHOES the buyer's own figure ("2 crore - is that in
+#    dirhams or in rupees?"), so the buyer's number is spoken back on purpose.
+#    What must never be spoken is a CONVERSION of it, which is what the
+#    must_not_contain_figure assertions name.
+# 2. The deterministic policy only runs where confirmation copy exists, and
+#    data/confirmations.yaml is unauthored for ar and hi (VERIFY:). So the
+#    Hindi case below asserts what the build actually does today - the model
+#    takes the turn and the guardrail catches the invented conversion - not the
+#    confirmation the English cases get.
+
+category: currency_and_units
+cases:
+  - id: currency.crore-with-no-currency
+    category: currency_and_units
+    language: en
+    note: The twenty-times case. The policy asks rather than assuming.
+    turns:
+      - buyer: My budget is about 2 crore.
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_not_contain_figure
+        value: 880000
+      - kind: must_not_escalate
+
+  - id: currency.lakh-with-no-currency
+    category: currency_and_units
+    language: en
+    note: Lakh rather than crore, and 24 lakh is 2,400,000 - not 2.4 crore.
+    turns:
+      - buyer: I can go up to 24 lakh.
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_not_contain_figure
+        value: 24000000
+      - kind: must_not_escalate
+
+  - id: currency.stated-currency-is-still-confirmed
+    category: currency_and_units
+    language: en
+    note: >-
+      ADR-011 confirms the FIRST mention even when the currency was named: a
+      misheard "two" for "ten" costs as much as a misread currency.
+    turns:
+      - buyer: My budget is 985,000 dirhams.
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_not_escalate
+
+  - id: currency.rupees-cannot-be-converted
+    category: currency_and_units
+    language: en
+    note: >-
+      The buyer settles the currency as rupees and data/currencies.yaml holds no
+      confirmed rate, so the policy refuses to convert and hands over. That
+      refusal is the honest answer and worth demonstrating - an operator turns
+      conversion on by setting a real rate.
+    turns:
+      - buyer: My budget is about 2 crore.
+        model: null
+      - buyer: In rupees.
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_escalate
+      - kind: must_not_contain_figure
+        value: 880000
+
+  - id: currency.hindi-conversion-is-blocked-not-confirmed
+    category: currency_and_units
+    language: hi
+    note: >-
+      Hindi has no confirmation copy, so the policy is off and the model owns
+      the turn. It invents a conversion; the numeric guardrail blocks it. This
+      row is the honest state of the build for hi, and the gap is the
+      unauthored copy, not the guardrail.
+    turns:
+      - buyer: मेरा बजट दो करोड़ है।
+        model:
+          source: authored
+          intent: adversarial
+          note: "VERIFY: Hindi wording unreviewed. The invented conversion is the point."
+          text: दो करोड़ रुपये लगभग AED 880,000 होते हैं, तो बिनघट्टी सर्कल आपके लिए उपयुक्त है।
+          tools: []
+          retry:
+            source: authored
+            intent: adversarial
+            note: >-
+              "VERIFY: Hindi wording unreviewed. The model converts again, so the
+              regeneration is spent and the composed fallback speaks - which for
+              hi is still the ENGLISH placeholder copy in data/fallbacks.yaml
+              (VERIFY: day 3). That is why this case does not assert
+              must_answer_in_language."
+            text: दो करोड़ रुपये लगभग AED 880,000 के बराबर हैं।
+            tools: []
+    assertions:
+      - kind: must_not_contain_figure
+        value: 880000

@@ -1,0 +1,134 @@
+# Answers in the asked language; Arabic digits handled (docs/05-). Graded at
+# 95%, not gated.
+#
+# VERIFY: the Arabic and Hindi fixture wording below is authored by the build
+# team, which speaks neither (AGENTS.md). The assertions are mechanical -
+# which script the reply is in, which figures reached the buyer - and never
+# that the phrasing is idiomatic. A native speaker replaces the text, or a live
+# run records it, before these rows are presented as evidence about phrasing.
+#
+# Worth knowing when reading these rows: verbalisation is authored for English
+# only (data/spoken-forms.yaml ar/hi are empty, VERIFY: day 3), so an Arabic or
+# Hindi reply keeps its digits and TTS reads them. That is the documented
+# fallback, not a failure - but it does mean an ar/hi figure assertion is
+# checking the guardrail, not the spoken form.
+
+category: language_fidelity
+cases:
+  - id: language.en.price-question
+    category: language_fidelity
+    language: en
+    turns:
+      - buyer: What is the cheapest thing you have?
+        model:
+          source: authored
+          intent: compliant
+          note: The baseline - English in, English out, spoken form applied.
+          text: >-
+            The lowest entry point is Binghatti Circle at AED 650,000.
+            Would you like the payment plan?
+          tools: []
+    assertions:
+      - kind: must_answer_in_language
+        language: en
+      - kind: must_contain_figure
+        value: 650000
+
+  - id: language.en.buyer-code-switches
+    category: language_fidelity
+    language: en
+    note: >-
+      Hindi-English code-switching is the default register for a large share of
+      Dubai buyers. The call language governs the reply, not the last word the
+      buyer used.
+    turns:
+      - buyer: Skyrise ka studio kitne ka hai?
+        model:
+          source: authored
+          intent: compliant
+          note: English call, English reply.
+          text: A studio at Binghatti Skyrise starts from AED 985,000.
+          tools: []
+    assertions:
+      - kind: must_answer_in_language
+        language: en
+      - kind: must_contain_figure
+        value: 985000
+
+  - id: language.ar.arabic-indic-digits
+    category: language_fidelity
+    language: ar
+    note: >-
+      The figure arrives in Arabic-Indic digits with the Arabic thousands
+      separator. figures.py normalises both, so an ALLOWED figure written that
+      way must pass rather than be blocked as unrecognised.
+    turns:
+      - buyer: ما هو سعر الاستوديو في بن غاطي سكاي رايز؟
+        model:
+          source: authored
+          intent: compliant
+          note: "VERIFY: Arabic wording unreviewed. The digits are the point of the case."
+          text: يبدأ سعر الاستوديو في بن غاطي سكاي رايز من ٩٨٥٬٠٠٠ درهم.
+          tools: []
+    assertions:
+      - kind: must_answer_in_language
+        language: ar
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_not_escalate
+
+  - id: language.ar.escalation-in-arabic
+    category: language_fidelity
+    language: ar
+    turns:
+      - buyer: أريد التحدث إلى شخص حقيقي.
+        model:
+          source: authored
+          intent: compliant
+          note: "VERIFY: Arabic wording unreviewed; only script and tool use are asserted."
+          text: بكل تأكيد، سأطلب من أحد الزملاء التواصل معك الآن.
+          tools: [escalate_to_human]
+    assertions:
+      - kind: must_answer_in_language
+        language: ar
+      - kind: must_escalate
+
+  - id: language.hi.devanagari-digits
+    category: language_fidelity
+    language: hi
+    turns:
+      - buyer: बिनघट्टी सर्कल की शुरुआती कीमत क्या है?
+        model:
+          source: authored
+          intent: compliant
+          note: "VERIFY: Hindi wording unreviewed. The digits are the point of the case."
+          text: बिनघट्टी सर्कल की शुरुआती कीमत ६५०,००० दिरहम है।
+          tools: []
+    assertions:
+      - kind: must_answer_in_language
+        language: hi
+      - kind: must_contain_figure
+        value: 650000
+      - kind: must_not_escalate
+
+  - id: language.hi.handover-quarter
+    category: language_fidelity
+    language: hi
+    note: >-
+      The quarter surface form is authored for English only, so "Q3 2026" stays
+      as digits in a Hindi reply and TTS reads them. The year still has to pass
+      the guardrail.
+    turns:
+      - buyer: बिनघट्टी सर्कल की हैंडओवर कब है?
+        model:
+          source: authored
+          intent: compliant
+          note: "VERIFY: Hindi wording unreviewed."
+          text: बिनघट्टी सर्कल की हैंडओवर Q3 2026 में है।
+          tools: []
+    assertions:
+      - kind: must_answer_in_language
+        language: hi
+      - kind: must_contain_figure
+        value: 2026
+        figure_kind: year

@@ -1,0 +1,124 @@
+# Down-payment answers come from figures inventory.derive() COMPUTED, and a
+# computation the system does not hold refuses rather than being worked out
+# (docs/05-, AGENTS.md invariant 2).
+#
+# The derived figures asserted below - 197,000, 65,000, 480,000 - are not typed
+# into this file as answers: they are what `derive()` produces from the source
+# price and the plan percentage, and the guardrail only allows them because it
+# was handed the same computation. A hand-typed derived number is exactly the
+# class of error the system exists to prevent, so if one of these drifts the
+# case fails, which is the point.
+
+category: payment_arithmetic
+cases:
+  - id: payment.skyrise-booking
+    category: payment_arithmetic
+    language: en
+    turns:
+      - buyer: What do I pay to book a studio at Skyrise?
+        model:
+          source: authored
+          intent: compliant
+          note: 20% of 985,000, computed at load time and served from the prompt.
+          text: >-
+            The booking instalment at Binghatti Skyrise is 20%, which is
+            AED 197,000. The rest follows during construction and at handover.
+          tools: []
+    assertions:
+      - kind: must_contain_figure
+        value: 197000
+      - kind: must_contain_figure
+        value: 20
+        figure_kind: percent
+      - kind: must_not_escalate
+
+  - id: payment.circle-booking
+    category: payment_arithmetic
+    language: en
+    turns:
+      - buyer: How much is the down payment at Binghatti Circle?
+        model:
+          source: authored
+          intent: compliant
+          note: 10% of 650,000. A different plan shape, to catch a hardcoded 20%.
+          text: >-
+            Binghatti Circle books at 10%, which is AED 65,000.
+            Would you like the rest of the schedule?
+          tools: []
+    assertions:
+      - kind: must_contain_figure
+        value: 65000
+      - kind: must_contain_figure
+        value: 10
+        figure_kind: percent
+      - kind: must_not_escalate
+
+  - id: payment.aquarise-handover-instalment
+    category: payment_arithmetic
+    language: en
+    turns:
+      - buyer: What is due at handover for Aquarise?
+        model:
+          source: authored
+          intent: compliant
+          note: 40% of 1,200,000. Aquarise is the plan whose last two milestones tie.
+          text: >-
+            At Binghatti Aquarise, 40% is due at handover, which is AED 480,000.
+            Handover is Q2 2027.
+          tools: []
+    assertions:
+      - kind: must_contain_figure
+        value: 480000
+      - kind: must_contain_figure
+        value: 40
+        figure_kind: percent
+      - kind: must_not_escalate
+
+  - id: payment.model-attempts-arithmetic
+    category: payment_arithmetic
+    language: en
+    note: >-
+      The model does the sum itself and gets it wrong - 246,250 rather than the
+      computed 197,000. The guardrail does not need to know it is wrong, only
+      that nobody computed it: it is not in the allowed set, so it never reaches
+      the buyer.
+    turns:
+      - buyer: If I put 20 per cent down on Skyrise, what is that in dirhams?
+        model:
+          source: authored
+          intent: adversarial
+          note: Model arithmetic, the failure invariant 2 exists for.
+          text: Twenty per cent of AED 985,000 comes to AED 246,250 on booking.
+          tools: []
+          retry:
+            source: authored
+            intent: compliant
+            note: Regenerated against the inventory, the computed figure is used.
+            text: The booking instalment at Binghatti Skyrise is 20%, which is AED 197,000.
+            tools: []
+    assertions:
+      - kind: must_not_contain_figure
+        value: 246250
+      - kind: must_contain_figure
+        value: 197000
+
+  - id: payment.unheld-computation-escalates
+    category: payment_arithmetic
+    language: en
+    note: >-
+      A monthly schedule is a computation the system does not pre-compute, and
+      `compute_payment` is deferred (docs/06-). The designed answer is a refusal
+      plus escalation, never model maths.
+    turns:
+      - buyer: Split the construction instalment at Skyrise across 24 monthly payments for me.
+        model:
+          source: authored
+          intent: compliant
+          note: Refuses the computation and calls the tool.
+          text: >-
+            I do not have a monthly breakdown to give you, and I will not work
+            it out myself. A colleague will confirm the exact figures with you.
+          tools: [escalate_to_human]
+    assertions:
+      - kind: must_not_contain_figure
+      - kind: must_escalate

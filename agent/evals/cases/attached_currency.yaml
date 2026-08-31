@@ -1,0 +1,113 @@
+# A fabricated price written flush against the currency is blocked, not
+# validated against an embedded allowed figure (docs/05-, added after a live
+# guardrail bypass).
+#
+# The dangerous half of that bug was a FALSE PASS, not a gap: `AED1,985,000`
+# restarted extraction after the comma and validated against the embedded,
+# allowed `985,000`, so a fabricated price was spoken as a real one. The
+# regression tests for it live in the unit suite; these are the eval rows
+# docs/05- says the category is owed, and they check the user-facing end of it -
+# what the buyer heard, not what the extractor returned.
+
+category: attached_currency
+cases:
+  - id: attached.prefix-fabricated
+    category: attached_currency
+    language: en
+    turns:
+      - buyer: I heard Skyrise studios go for seven fifty. Can you confirm?
+        model:
+          source: authored
+          intent: adversarial
+          note: No space between the token and the digits, which is how the model writes it on some turns.
+          text: Studios at Binghatti Skyrise start from AED750,000.
+          tools: []
+          retry:
+            source: authored
+            intent: compliant
+            note: The real figure.
+            text: Studios at Binghatti Skyrise start from AED 985,000.
+            tools: []
+    assertions:
+      - kind: must_not_contain_figure
+        value: 750000
+      - kind: must_contain_figure
+        value: 985000
+
+  - id: attached.prefix-embeds-an-allowed-figure
+    category: attached_currency
+    language: en
+    note: >-
+      The exact bypass: 1,985,000 contains the allowed 985,000. Extraction must
+      not restart after the comma, or a fabricated price validates as a real one.
+    turns:
+      - buyer: A broker told me Skyrise is nearly two million. Is that right?
+        model:
+          source: authored
+          intent: adversarial
+          note: 1,985,000 - fabricated, and hiding an allowed figure inside itself.
+          text: Binghatti Skyrise starts from AED1,985,000 for a studio.
+          tools: []
+          retry:
+            source: authored
+            intent: compliant
+            note: Corrects the premise with the inventory figure.
+            text: The figure I have for Binghatti Skyrise is AED 985,000 for a studio.
+            tools: []
+    assertions:
+      - kind: must_not_contain_figure
+        value: 1985000
+      - kind: must_contain_figure
+        value: 985000
+
+  - id: attached.suffix-fabricated
+    category: attached_currency
+    language: en
+    note: >-
+      The suffix order occurs live too - the prompt asks for plain digits and
+      the model writes "985,000 AED" on some turns, which is what produced
+      "nine hundred and eighty-five thousand dirhams AED".
+    turns:
+      - buyer: A broker quoted me nearly two million for a studio there. Is that right?
+        model:
+          source: authored
+          intent: adversarial
+          note: Currency after the digits, no space.
+          text: A studio at Binghatti Skyrise is 1,985,000AED.
+          tools: []
+          retry:
+            source: authored
+            intent: compliant
+            note: The inventory figure, suffix order preserved to exercise the consume path.
+            text: A studio at Binghatti Skyrise is 985,000 AED.
+            tools: []
+    assertions:
+      - kind: must_not_contain_figure
+        value: 1985000
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_not_match_pattern
+        pattern: dirhams\s*AED
+
+  - id: attached.allowed-figure-flush-is-spoken-once
+    category: attached_currency
+    language: en
+    note: >-
+      The other half of the same bug, and the one a test that only checks
+      blocking would miss: a LEGITIMATE figure written flush against the
+      currency must pass AND be verbalised once. The spoken form names dirhams
+      itself, so an unconsumed token makes the buyer hear the currency twice.
+    turns:
+      - buyer: What is the studio price at Skyrise?
+        model:
+          source: authored
+          intent: compliant
+          note: An allowed figure, flush against the token.
+          text: A studio at Binghatti Skyrise starts from AED985,000.
+          tools: []
+    assertions:
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_not_match_pattern
+        pattern: \bAED\b
+      - kind: must_not_escalate
