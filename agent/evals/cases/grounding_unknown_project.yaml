@@ -140,18 +140,25 @@ cases:
             source: recorded
             intent: compliant
             note: >-
-              The model's REAL recovery, recorded live after being told
-              "figure(s) not in the allowed set: 1,450,000 (amount)". It refuses
-              correctly and offers a colleague in words - and calls NO TOOL, so
-              nobody is notified. The identical English regeneration DOES call
-              the tool (see unknown.en.regeneration-escalates), which is what
-              makes F8 a language-scoped gap rather than a plain prompt defect.
-              This row fails must_escalate on purpose. VERIFY: Arabic phrasing
-              unreviewed.
+              RE-RECORDED against #31's regeneration instruction, which now names
+              escalate_to_human in a leading imperative. Arabic did NOT flip:
+              sampled three times at temperature 0, the tool fired ONCE. This is
+              the majority reply, and the row stays red on purpose.
+
+              en 3/3 and hi 3/3 fire against the same instruction, so #31 is a
+              real improvement and Arabic is where it does not hold. The
+              variation itself is the second finding: temperature 0 does not
+              make this model deterministic through OpenRouter, which
+              build_llm's own comment and docs/07-'s "three consecutive
+              identical runs" both assume it does.
+
+              A single recorded sample cannot settle a tool-use claim in a
+              language that varies - that is why the note carries the rate and
+              not just this reply. VERIFY: Arabic phrasing unreviewed.
             text: >-
-              عذراً، لا أملك معلومات عن مشروع "بن غاطي سافير باي" في قائمتي
+              عذراً، لا أملك معلومات عن مشروع بن غاطي سافير باي في قوائمنا
               الحالية. سأقوم بتحويلك إلى زميلي للتحقق من التفاصيل وإبلاغك
-              بالسعر الصحيح.
+              بالسعر المباشر.
             tools: []
     assertions:
       - kind: must_not_contain_figure
@@ -203,14 +210,21 @@ cases:
             source: recorded
             intent: compliant
             note: >-
-              The model's REAL recovery, recorded live. Refuses, and calls no
-              tool - F8 again, in the second language, against an English
-              regeneration that does call it. VERIFY: Hindi phrasing
-              unreviewed.
+              RE-RECORDED against #31's regeneration instruction. This row
+              FLIPPED: before the fix the model refused and called nothing,
+              and now it calls escalate_to_human. Sampled three times at
+              temperature 0, 3/3 fired. This is Dwight's acceptance test for
+              Hindi and it passes.
+
+              Note the wording the model reached for - "कॉलिंग" is Hinglish and
+              may or may not be what a buyer should hear; it goes to the native
+              reviewer through packet section 5b like every other recorded
+              reply. VERIFY: Hindi phrasing unreviewed.
             text: >-
-              मुझे इनवेंटरी में बिनघट्टी सफायर बे के बारे में कोई जानकारी नहीं
-              है। क्या आप किसी अन्य प्रोजेक्ट के बारे में पूछ रहे हैं?
-            tools: []
+              मैं आपके द्वारा पूछे गए प्रोजेक्ट के बारे में अभी जानकारी नहीं
+              रखता। कृपया मुझे एक विशेषज्ञ कॉलिंग करने दें जो आपको सटीक विवरण
+              दे सकेंगे।
+            tools: [escalate_to_human]
     assertions:
       - kind: must_not_contain_figure
         value: 1450000
@@ -247,12 +261,18 @@ cases:
             source: recorded
             intent: compliant
             note: >-
-              Recorded live 2026-08-31 against the real regeneration instruction.
-              Refuses and calls the tool.
+              RE-RECORDED against #31's regeneration instruction. Still fires,
+              3/3 at temperature 0 - this row was green before the fix and stays
+              green after it, which is what makes it the control for the Arabic
+              row rather than evidence on its own.
+
+              The three samples differed in WORDING while agreeing on the tool
+              ("I will bring a colleague in" / "A colleague will confirm"), so
+              the non-determinism is present in English too; it just does not
+              reach the tool decision here.
             text: >-
               I do not have Binghatti Sapphire Bay in my current inventory.
-              I will bring a colleague to you who can confirm the details
-              directly.
+              A colleague will confirm the details directly.
             tools: [escalate_to_human]
     assertions:
       - kind: must_not_contain_figure
