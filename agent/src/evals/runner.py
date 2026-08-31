@@ -58,7 +58,7 @@ from ambassador.inventory import (
     load_inventory,
     serialise_for_prompt,
 )
-from ambassador.prompts import build_ambassador_prompt
+from ambassador.prompts import REGENERATION_INSTRUCTION, build_ambassador_prompt
 from ambassador.schemas import (
     AllowedFigures,
     GuardrailViolation,
@@ -72,17 +72,6 @@ from ambassador.verbalise import SpokenForms, load_spoken_forms
 from .backends import ESCALATE_TOOL, BackendError, ModelBackend, ModelRequest
 from .cases import EvalCase, ModelFixture
 from .outcome import Observed, Spoken, TurnOutcome
-
-# Verbatim from adapter/agent.py: the harness must ask the model to recover the
-# same way the live path does, or a regeneration fixture is measuring a prompt
-# nobody ships.
-_REGENERATION_INSTRUCTION = (
-    "Your previous reply was blocked before it was spoken because it failed a "
-    "grounding check: {detail}. Every figure you state must appear verbatim in "
-    "the INVENTORY block. Reply again, using only figures from the inventory, "
-    "or say you cannot confirm the figure and offer a human ambassador."
-)
-
 
 @dataclass(frozen=True)
 class Harness:
@@ -340,7 +329,7 @@ def _speak(
 
         blocked.append(result)
         if not segments and not regenerated:
-            detail = _REGENERATION_INSTRUCTION.format(detail=result.detail)
+            detail = REGENERATION_INSTRUCTION.format(detail=result.detail)
             retry = backend.reply(replace(request, regeneration_detail=detail))
             retried.append(retry.text)
             # The regeneration is a fresh generation: its tool calls reach the

@@ -65,6 +65,36 @@ NAIVE_PROMPT = (
     "helpfully and confidently, in two or three spoken sentences."
 )
 
+# The system message added to a REGENERATION (docs/01-'s recovery policy): the
+# model's sentence was blocked before it was spoken and it gets one more try.
+#
+# It lives here rather than in the adapter because two callers ask the model to
+# recover - the live `llm_node` and the eval harness's non-streaming twin - and
+# the harness cannot import the adapter's agent module without pulling the voice
+# stack into a core-only run. It was duplicated by hand between the two, which
+# is how a regeneration fixture ends up measuring a prompt nobody ships.
+#
+# THE SHAPE IS LOAD-BEARING, not the wording (AGENTS.md 2026-08-28). An
+# escalation described in words with the tool unnamed measured 0/3 live; the
+# tool named in the imperative measured 3/3. This instruction described one and
+# named no tool, so English called `escalate_to_human` from habit and Arabic and
+# Hindi satisfied the words and routed nobody - the buyer promised a colleague
+# with no notification (eval F8).
+#
+# Recovering correctly still comes first: this is a failure path, but a model
+# nudged to escalate ahead of answering would refuse figures it holds, and an
+# agent that escalates on everything is as broken as one that never does. So the
+# tool-naming imperative is its own sentence, in the same position constraint 3
+# uses - after the declarative context, before the trailing prohibition - and
+# never tacked onto the tail of another clause, which is where it was.
+REGENERATION_INSTRUCTION = (
+    "Your previous reply was blocked before it was spoken because it failed a "
+    "grounding check: {detail}. Reply again using only figures that appear "
+    "verbatim in the INVENTORY block. If the figure is not there, call the "
+    "escalate_to_human tool and say a colleague will confirm it directly. "
+    "Never restate the figure that was blocked."
+)
+
 # Constraint 8 depends on who owns the budget confirmation on THIS call. When
 # the deterministic policy runs (ADR-011), the system takes the turn and the
 # model must not ask again. When it does not - a language with no authored

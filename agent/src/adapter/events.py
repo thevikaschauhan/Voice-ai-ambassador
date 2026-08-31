@@ -151,6 +151,9 @@ _REDACTED_FIELDS: Final[dict[str, tuple[str, ...]]] = {
     "tool_call": ("args",),
     # A model paraphrase of what the buyer complained about.
     "escalation": ("reason",),
+    # The same paraphrase, from a second path asking for a human on a turn that
+    # is already handing over.
+    "escalation_suppressed": ("reason",),
     # "The slot in the buyer's own words", by the tool's own docstring.
     "booking_offered": ("slot",),
     # `detail` is `str(exc)` on a provider error, so it can carry a response
@@ -527,6 +530,9 @@ class TurnTracker:
         self.spoken_chunks: list[SpokenChunk] = []
         self.violations: list[GuardrailViolation] = []
         self.actions: list[str] = []
+        # One handover per turn, however many paths ask for one. See
+        # `record_escalation`.
+        self.handed_over: bool = False
         self.regenerated: bool = False
         self.reasoning_tokens: int | None = None
         self.prompt_tokens: int | None = None
@@ -703,6 +709,36 @@ class TurnTracker:
         self._log.emit("interrupted", turn=self.turn_index)
 
     # -- hook 2: tools ----------------------------------------------------
+
+    def record_escalation(self, reason: str) -> bool:
+        """Hand the buyer to a human, at most once this turn.
+
+        Returns True when THIS call is the one that handed over.
+
+        The REQUEST is recorded by the caller either way (`record_tool`), because
+        which path asked for a human and when is the hook-2 claim. It is the
+        NOTIFICATION that must not repeat: the STUB behind it is a CRM write, and
+        two writes for one buyer turn is two tasks in an ambassador's queue.
+
+        Two paths genuinely collide, and naming `escalate_to_human` in the
+        regeneration instruction (eval F8) made the collision expected rather
+        than rare: a retry that calls the tool AND still states an unallowed
+        figure gets the composed fallback as well, so the fallback routes while
+        the stream is unwinding and the framework executes the model's tool call
+        afterwards. Both are real requests; only the first hands anyone over.
+
+        Per TURN, not per session. A buyer who needs a human twice in one call
+        has to be handed over twice, or the second ask vanishes - which is why
+        the flag lives on the tracker rather than on the agent.
+        """
+        if self.handed_over:
+            self._log.emit(
+                "escalation_suppressed", turn=self.turn_index, reason=reason
+            )
+            return False
+        self.handed_over = True
+        self._log.emit("escalation", reason=reason, routed_to="human_ambassador")
+        return True
 
     def record_tool(self, name: str, **args: Any) -> None:
         self.actions.append(name)

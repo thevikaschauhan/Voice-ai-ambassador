@@ -145,6 +145,7 @@ class SpyLLM(lk_llm.LLM):
         super().__init__()
         self._streams = list(streams)
         self.conn_options: list[APIConnectOptions] = []
+        self.chat_ctxs: list[lk_llm.ChatContext] = []
 
     def chat(  # type: ignore[override]
         self,
@@ -157,6 +158,7 @@ class SpyLLM(lk_llm.LLM):
         extra_kwargs: Any = NOT_GIVEN,
     ) -> Any:
         self.conn_options.append(conn_options)
+        self.chat_ctxs.append(chat_ctx)
         return self._streams.pop(0)
 
 
@@ -1559,3 +1561,125 @@ async def test_the_escalation_belongs_to_the_turn_that_fell_back():
     await log.aclose()
     assert [r.actions for r in log.turns] == [["escalate_to_human"], []]
     assert [e["turn"] for e in json_lines(buf) if e["event"] == "tool_call"] == [1]
+
+
+# --- eval F8: the regeneration names the tool, and pages one human -------
+#
+# `REGENERATION_INSTRUCTION` told a blocked model to "offer a human ambassador"
+# and never named `escalate_to_human`. English called the tool from habit;
+# Arabic and Hindi satisfied the words and routed nobody, so the buyer was
+# promised a colleague on the regeneration path with no notification - the same
+# promise-without-routing shape as F2, one layer up from the fallback copy.
+#
+# Naming the tool there makes the double-page combination expected rather than
+# rare: a retry that calls the tool AND still states an unallowed figure gets
+# the composed fallback too, so two paths ask for a human in one turn. The
+# STUB behind `_route_to_human` is a CRM write, and two writes for one buyer
+# turn is two tasks in an ambassador's queue.
+
+
+async def test_the_regeneration_instruction_names_the_tool_it_wants_called():
+    """The wording shape is a pipeline fact and belongs here; whether the model
+    obeys it is Pam's live measurement, not this suite's."""
+    agent, _, _, spy = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay is AED {FABRICATED}. "]),
+            HealthyStream([f"A studio at Skyrise is AED {GROUNDED}. "]),
+        ]
+    )
+
+    await run_llm_node(agent, user_ctx())
+
+    # The retry is the second call, and the instruction rides on it as a system
+    # message appended to a copy of the context.
+    assert len(spy.chat_ctxs) == 2
+    added = [
+        item.text_content or ""
+        for item in spy.chat_ctxs[1].items
+        if getattr(item, "role", None) == "system"
+    ]
+    assert len(added) == 1
+    instruction = added[0]
+    assert "call the escalate_to_human tool" in instruction
+    # Not the trailing position that measured 0/3 live.
+    assert not instruction.rstrip().endswith("tool.")
+    assert instruction.rstrip().endswith("Never restate the figure that was blocked.")
+    # Recovering correctly still comes first, or the model refuses figures it holds.
+    assert instruction.index("Reply again") < instruction.index("escalate_to_human")
+
+
+async def test_two_paths_asking_for_a_human_hand_over_once():
+    """The order the framework produces: the composed fallback routes while the
+    stream is still unwinding, and the model's tool call executes after it."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay is AED {FABRICATED}. "]),
+            HealthyStream([f"Still AED {FABRICATED}. "]),
+        ]
+    )
+
+    assert FALLBACK_COPY["en"] in spoken(await run_llm_node(agent, user_ctx()))
+    await agent.escalate_to_human(None, "the figure is not in the inventory")
+
+    await log.aclose()
+    # One handover for the turn, and the second attempt is visible rather than
+    # dropped silently.
+    assert len(escalations(buf)) == 1
+    suppressed = [ln for ln in json_lines(buf) if ln["event"] == "escalation_suppressed"]
+    assert [ln["turn"] for ln in suppressed] == [1]
+    assert suppressed[0]["reason"] == "[redacted]"
+
+    # But BOTH requests are still recorded: which path asked for a human and
+    # when is the hook-2 claim, and the model really did call the tool.
+    assert agent.tracker is not None
+    assert agent.tracker.actions == ["escalate_to_human", "escalate_to_human"]
+
+
+async def test_the_model_calling_the_tool_first_still_leaves_one_handover():
+    """The mirror order, in case the framework ever executes tools earlier. The
+    property is one handover per turn, not one per source."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay is AED {FABRICATED}. "]),
+            HealthyStream([f"Still AED {FABRICATED}. "]),
+        ]
+    )
+
+    ctx = user_ctx()
+    agent._ensure_tracker(ctx)
+    await agent.escalate_to_human(None, "the figure is not in the inventory")
+    assert FALLBACK_COPY["en"] in spoken(await run_llm_node(agent, ctx))
+
+    await log.aclose()
+    assert len(escalations(buf)) == 1
+    assert escalations(buf)[0]["reason"] == "[redacted]"
+    assert len([ln for ln in json_lines(buf) if ln["event"] == "escalation_suppressed"]) == 1
+
+
+async def test_a_later_turn_can_hand_over_again():
+    """The guard is per turn, not per session. A buyer who needs a human twice
+    in one call has to be handed over twice, or the second ask vanishes."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay is AED {FABRICATED}. "]),
+            HealthyStream([f"Still AED {FABRICATED}. "]),
+            HealthyStream([f"Marina Heights is AED {FABRICATED}. "]),
+            HealthyStream([f"Still AED {FABRICATED}. "]),
+        ]
+    )
+
+    for buyer in ("What does Sapphire Bay cost?", "And Marina Heights?"):
+        ctx = user_ctx(buyer)
+        assert FALLBACK_COPY["en"] in spoken(await run_llm_node(agent, ctx))
+        handle = SpeechHandle.create()
+        agent.note_speech_handle(handle)
+        agent.finish_turn(ctx)
+        handle._mark_done()
+        await settle()
+
+    await log.aclose()
+    assert len(escalations(buf)) == 2
+    assert [r.actions for r in log.turns] == [
+        ["escalate_to_human"],
+        ["escalate_to_human"],
+    ]

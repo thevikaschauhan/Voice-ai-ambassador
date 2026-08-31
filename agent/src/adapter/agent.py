@@ -64,7 +64,11 @@ from ambassador.inventory import (
     load_inventory,
     serialise_for_prompt,
 )
-from ambassador.prompts import NAIVE_PROMPT, build_ambassador_prompt
+from ambassador.prompts import (
+    NAIVE_PROMPT,
+    REGENERATION_INSTRUCTION,
+    build_ambassador_prompt,
+)
 from ambassador.verbalise import load_spoken_forms
 
 from .brief import BriefExtractor
@@ -81,14 +85,6 @@ from .stt_factory import build_stt, describe
 from .tts_pool import connection_state, reprewarm
 
 logger = logging.getLogger("ambassador.agent")
-
-_REGENERATION_INSTRUCTION = (
-    "Your previous reply was blocked before it was spoken because it failed a "
-    "grounding check: {detail}. Every figure you state must appear verbatim in "
-    "the INVENTORY block. Reply again, using only figures from the inventory, "
-    "or say you cannot confirm the figure and offer a human ambassador."
-)
-
 
 @dataclass
 class _PendingTurn:
@@ -563,7 +559,7 @@ class AmbassadorAgent(Agent):
             return stream
 
         async def regenerate(detail: str) -> AsyncIterable[Any]:
-            return await open_stream(_REGENERATION_INSTRUCTION.format(detail=detail))
+            return await open_stream(REGENERATION_INSTRUCTION.format(detail=detail))
 
         # ADR-011, before the model is given the turn at all. Asking the model
         # to confirm is what constraint 8 already did; this takes the turn away
@@ -743,17 +739,26 @@ class AmbassadorAgent(Agent):
 
     def _route_to_human(self, reason: str) -> None:
         """Notify a human ambassador. The one escalation mechanism, shared by
-        the model's tool call and the budget policy's terminal actions - a
-        hands_over decision that only wrote a log field left the buyer hearing
-        "let me put you through" with nobody put through."""
-        if self._tracker is not None:
-            self._tracker.record_tool("escalate_to_human", reason=reason)
-        else:
+        the model's tool call, the budget policy's terminal actions and the
+        composed fallback - a hands_over decision that only wrote a log field
+        left the buyer hearing "let me put you through" with nobody put through.
+
+        At most one handover per turn, however many of those paths ask for one.
+        The request is always recorded; only the notification is deduplicated.
+        `TurnTracker.record_escalation` owns that rule and says why.
+        """
+        tracker = self._tracker
+        if tracker is None:
+            # No open turn to deduplicate within, and nothing to attribute the
+            # request to either.
             self._log.emit(
                 "tool_call", tool="escalate_to_human", args={"reason": reason}
             )
+            self._log.emit("escalation", reason=reason, routed_to="human_ambassador")
+            return
+        tracker.record_tool("escalate_to_human", reason=reason)
         # STUB: the CRM/routing write is a console log behind this interface.
-        self._log.emit("escalation", reason=reason, routed_to="human_ambassador")
+        tracker.record_escalation(reason)
 
     @function_tool
     async def offer_booking(self, context: RunContext, slot_description: str) -> str:
