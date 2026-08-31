@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from io import StringIO
@@ -37,7 +38,9 @@ pytest.importorskip("livekit.agents", reason="voice dependency group not install
 
 from livekit.agents import Agent, APIConnectOptions  # noqa: E402
 from livekit.agents import llm as lk_llm  # noqa: E402
+from livekit.agents.metrics import EOUMetrics, TTSMetrics  # noqa: E402
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN  # noqa: E402
+from livekit.agents.utils import ConnectionPool  # noqa: E402
 from livekit.agents.voice import SpeechHandle  # noqa: E402
 
 from adapter.agent import AmbassadorAgent, shutdown_session  # noqa: E402
@@ -184,6 +187,10 @@ def user_ctx(text: str = "What does a studio cost?") -> lk_llm.ChatContext:
 
 def spoken(chunks: list[Any]) -> str:
     return " ".join(c for c in chunks if isinstance(c, str))
+
+
+def json_lines(buf: StringIO) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
 
 
 # --- the tool's triggers match the prompt's constraints -------------------
@@ -1151,3 +1158,239 @@ def test_the_give_up_line_may_carry_no_slot_of_any_kind(tmp_path):
     )
     with pytest.raises(ValueError, match="give_up"):
         load_confirmations(bad)
+
+
+# --- issue #18: the Fish socket a barge-in discards ------------------------
+#
+# The mechanism itself is proven against the framework's own ConnectionPool in
+# test_tts_pool.py. What is under test here is the wiring: that the adapter
+# reaches the hook at the one moment the framework has settled that the
+# interruption was real, and nowhere else. The failure this guards is silent -
+# every turn still speaks, the ones after a barge-in are just slower - so
+# nothing but an assertion on the pool's own state catches it.
+
+
+class PooledTTS:
+    """Shaped like `fishaudio.TTS` where the adapter touches it: a real
+    `ConnectionPool`, built with the plugin's own arguments, over fake sockets."""
+
+    def __init__(self) -> None:
+        self.opened: list[object] = []
+        self._pool: ConnectionPool[object] = ConnectionPool(
+            connect_cb=self._connect,
+            close_cb=self._close,
+            max_session_duration=300,
+            mark_refreshed_on_get=True,
+        )
+
+    async def _connect(self, timeout: float) -> object:
+        sock = object()
+        self.opened.append(sock)
+        return sock
+
+    async def _close(self, sock: object) -> None:
+        pass
+
+
+async def until(predicate, *, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out waiting for the pool")
+        await asyncio.sleep(0.005)
+
+
+async def attach_warm_tts(agent: AmbassadorAgent) -> PooledTTS:
+    """A TTS in the state `AgentActivity.start` leaves it in: prewarmed once."""
+    tts = PooledTTS()
+    agent._tts = tts  # the session normally supplies this
+    tts._pool.prewarm()
+    await until(lambda: len(tts.opened) == 1)
+    return tts
+
+
+async def synthesise_and_barge_in(tts: PooledTTS) -> None:
+    """`SynthesizeStream._run` holding the pooled socket, cancelled mid-audio."""
+    holding = asyncio.Event()
+
+    async def synthesise() -> None:
+        async with tts._pool.connection(timeout=1.0):
+            holding.set()
+            await asyncio.sleep(3600)
+
+    task = asyncio.create_task(synthesise())
+    await holding.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_the_utterance_after_a_barge_in_speaks_off_a_pooled_socket():
+    """The user-facing claim: interrupting the agent does not make its next
+    reply wait on a TCP + TLS + WebSocket handshake to Fish."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    tts = await attach_warm_tts(agent)
+    ctx = user_ctx()
+    await run_llm_node(agent, ctx)
+    await synthesise_and_barge_in(tts)
+
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(ctx)
+    handle.interrupt()
+    handle._mark_done()
+    await settle()
+
+    # The replacement is opened during the silence, not on the next reply.
+    await until(lambda: len(tts.opened) == 2)
+    await tts._pool.get(timeout=1.0)
+    assert tts._pool.last_connection_reused is True
+    assert len(tts.opened) == 2, "the post-barge-in turn still paid a connect"
+
+    await log.aclose()
+    reprewarms = [ln for ln in json_lines(buf) if ln["event"] == "tts_pool_reprewarm"]
+    assert [ln["outcome"] for ln in reprewarms] == ["requested"]
+    assert reprewarms[0]["turn"] == 1
+
+
+async def test_a_turn_that_played_out_does_not_touch_the_pool():
+    """The pool did not lose anything, so nothing should be asked of it. A hook
+    that fired on every turn would look identical on a live call and quietly
+    open a socket per turn."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    tts = await attach_warm_tts(agent)
+    ctx = user_ctx()
+    await run_llm_node(agent, ctx)
+
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(ctx)
+    handle._mark_done()
+    await settle()
+    await asyncio.sleep(0.05)
+
+    await log.aclose()
+    assert len(tts.opened) == 1
+    emitted = [ln["event"] for ln in json_lines(buf)]
+    # The turn did seal, so the absence below is a fact about the stream rather
+    # than a fact about an undrained buffer.
+    assert "turn_complete" in emitted
+    assert "tts_pool_reprewarm" not in emitted
+
+
+async def test_teardown_mid_barge_in_does_not_open_a_socket_for_a_dead_call():
+    """`finalise_pending_turn` seals an interrupted turn at shutdown. Opening a
+    Fish connection there races `tts.aclose()` and pays for a call nobody is
+    on."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    tts = await attach_warm_tts(agent)
+    ctx = user_ctx()
+    await run_llm_node(agent, ctx)
+    await synthesise_and_barge_in(tts)
+
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(ctx)
+    handle.interrupt()  # confirmed, but the handle never resolves
+    agent.finalise_pending_turn()
+    await asyncio.sleep(0.05)
+
+    assert len(log.turns) == 1  # the turn is still sealed
+    assert log.turns[0].spoken_chunks[-1].completed is False
+    assert len(tts.opened) == 1
+
+    await log.aclose()
+    emitted = [ln["event"] for ln in json_lines(buf)]
+    assert "interrupted" in emitted  # the seal ran; the hook was the part skipped
+    assert "tts_pool_reprewarm" not in emitted
+
+
+async def test_first_audio_records_whether_the_socket_was_pooled(monkeypatch):
+    """Issue #18 asks for the measurement before the fix, and the framework
+    cannot supply it: `livekit-plugins-fishaudio` 1.7.0 never fills in
+    `TTSMetrics.acquire_time`, so it is a constant 0.0 on this stack. This is
+    the line a human reads off a live call instead."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    tts = await attach_warm_tts(agent)
+    await run_llm_node(agent, user_ctx())
+
+    async def one_frame(agent_, text, model_settings):
+        async for _ in text:
+            pass
+        yield object()
+
+    monkeypatch.setattr(Agent.default, "tts_node", staticmethod(one_frame))
+
+    async def source():
+        yield "A studio is nine hundred and eighty five thousand dirhams. "
+
+    # A cold connect, the way the turn after a barge-in gets one.
+    await synthesise_and_barge_in(tts)
+    await tts._pool.get(timeout=1.0)
+    assert [frame async for frame in agent.tts_node(source(), None)] != []
+    await log.aclose()
+
+    line = [ln for ln in json_lines(buf) if ln["event"] == "tts_connection"][-1]
+    assert line["turn"] == 1
+    assert line["reused"] is False
+    assert isinstance(line["connect_ms"], float)
+
+
+# --- issue #7: the endpointing measurement --------------------------------
+
+
+async def test_the_frameworks_end_of_utterance_metrics_land_on_the_turn():
+    """Endpointing happens before `on_user_turn_completed`, which is where the
+    tracker's clock starts, so the adapter cannot time it and does not try."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    ctx = user_ctx()
+    await run_llm_node(agent, ctx)
+
+    agent.note_metrics(
+        EOUMetrics(
+            timestamp=time.time(),
+            end_of_utterance_delay=0.44,
+            transcription_delay=0.29,
+            on_user_turn_completed_delay=0.001,
+        )
+    )
+
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(ctx)
+    handle._mark_done()
+    await settle()
+
+    await log.aclose()
+    assert log.turns[0].timings_ms.endpoint == 440.0
+    assert log.turns[0].timings_ms.stt == 290.0
+    emitted = [ln for ln in json_lines(buf) if ln["event"] == "endpointing"]
+    assert emitted[0]["after_transcript_ms"] == 150.0
+
+
+async def test_metrics_that_are_not_end_of_utterance_are_left_alone():
+    """`metrics_collected` carries every stage. The others are already recorded
+    from closer to the source, and taking them twice would double-count."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    ctx = user_ctx()
+    await run_llm_node(agent, ctx)
+
+    agent.note_metrics(
+        TTSMetrics(
+            timestamp=time.time(),
+            request_id="req",
+            ttfb=0.3,
+            duration=1.0,
+            audio_duration=1.0,
+            cancelled=False,
+            characters_count=10,
+            streamed=True,
+            label="fish",
+        )
+    )
+    await log.aclose()
+    emitted = [ln["event"] for ln in json_lines(buf)]
+    assert "llm_request" in emitted
+    assert "endpointing" not in emitted
+    assert agent.tracker is not None
+    assert agent.tracker.endpoint is None
