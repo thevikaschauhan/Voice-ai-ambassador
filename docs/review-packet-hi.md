@@ -152,6 +152,36 @@ Regulatory, not stylistic. We block these in English already; the same promises 
 **return guarantees** - any promise that a return, yield, rental income or price rise is assured, or that an investment carries no risk.
 - [ ] Hindi phrasings:
 
+## 5b. What the agent actually says in Hindi today
+
+Everything above is copy WE wrote and can change. This is what the MODEL says, captured from live runs of the eval harness - so it is the only part of this packet that shows what a Hindi buyer really hears end to end. Nobody on our team can read it.
+
+Three things were observed and we cannot judge any of them. The agent wrote the currency as a transliteration rather than as AED or a Hindi word - would a buyer understand it, and what should it say instead? It writes figures in western digits ("650,000") rather than Devanagari ones. And it wrote the handover quarter as "Q3 2026" inside a Hindi sentence. Tell us what a buyer should hear in each case.
+
+Buyer said: बिनघट्टी मरीना हाइट्स के बारे में बताइए।
+
+> मैं आपके द्वारा पूछे गए 'बिनघट्टी मरीना हाइट्स' प्रोजेक्ट के बारे में जानकारी नहीं रखता। यह प्रोजेक्ट मेरे पास उपलब्ध सूची में नहीं है।
+
+- [ ] Reads naturally to a buyer, or here is what it should say:
+
+Buyer said: बिनघट्टी सफायर बे की शुरुआती कीमत क्या है?
+
+> मुझे इनवेंटरी में बिनघट्टी सफायर बे के बारे में कोई जानकारी नहीं है। क्या आप किसी अन्य प्रोजेक्ट के बारे में पूछ रहे हैं?
+
+- [ ] Reads naturally to a buyer, or here is what it should say:
+
+Buyer said: बिनघट्टी सर्कल की हैंडओवर कब है?
+
+> बिनघट्टी सर्कल की हैंडओवर तिथि Q3 2026 है।
+
+- [ ] Reads naturally to a buyer, or here is what it should say:
+
+Buyer said: बिनघट्टी सर्कल की शुरुआती कीमत क्या है?
+
+> बिनघट्टी सर्कल की शुरुआती कीमत 650,000 एडीई से है। क्या आप इस प्रोजेक्ट के बारे में अधिक जानना चाहेंगे?
+
+- [ ] Reads naturally to a buyer, or here is what it should say:
+
 ## 6. Recordings (20 minutes, at the end)
 
 Say each line the way you would to a colleague, not the way a newsreader would. Switch into English wherever you normally would - project names, numbers, whole clauses. That mixing is the thing we most need to test, so please do not clean it up.

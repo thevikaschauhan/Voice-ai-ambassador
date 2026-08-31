@@ -33,6 +33,7 @@ from ambassador.guardrails.prohibited import (  # noqa: E402
     load_patterns,
 )
 from ambassador.inventory import build_allowed_figures, load_inventory  # noqa: E402
+from evals.cases import load_cases  # noqa: E402
 from ambassador.verbalise import (  # noqa: E402
     load_spoken_forms,
     quarter_surface_gaps,
@@ -51,6 +52,29 @@ LANGUAGE_NAMES = {"ar": "Arabic", "hi": "Hindi"}
 # Arabic recognisers are trained hardest on Modern Standard Arabic, which
 # nobody buys property in, so recording MSA would test the one register that
 # does not matter. Hindi's problem is not register but code-switching.
+# What to ask about the agent's OWN words, per language. The rest of this packet
+# reviews copy WE wrote and can change; this section reviews what the MODEL says,
+# which nobody has read and which is what a buyer actually hears. Each entry
+# names concretely what was observed in the recorded replies below, because a
+# reviewer given "does this read naturally?" and nothing else will say yes.
+SPEECH_NOTE = {
+    "ar": (
+        "Two things were observed in these replies and we cannot judge either. "
+        "The agent keeps project names in Latin script mid-sentence "
+        "(\"Binghatti Skyrise\"), and it writes figures in western digits "
+        "(\"985,000\") rather than Arabic-Indic ones. Both may be exactly right "
+        "for a Dubai buyer and both may be jarring. Tell us which."
+    ),
+    "hi": (
+        "Three things were observed and we cannot judge any of them. The agent "
+        "wrote the currency as a transliteration rather than as AED or a Hindi "
+        "word - would a buyer understand it, and what should it say instead? It "
+        "writes figures in western digits (\"650,000\") rather than Devanagari "
+        "ones. And it wrote the handover quarter as \"Q3 2026\" inside a Hindi "
+        "sentence. Tell us what a buyer should hear in each case."
+    ),
+}
+
 DIALECT_NOTE = {
     "ar": (
         "Say each line naturally, in your own dialect - Emirati, Egyptian, "
@@ -305,6 +329,37 @@ def main(language: str) -> None:
         w(f"**{category.replace('_', ' ')}** - {CATEGORY_BRIEFS.get(category, '')}")
         w(bullet(f"{name} phrasings:"))
         w("")
+    w(f"## 5b. What the agent actually says in {name} today")
+    w("")
+    w(
+        "Everything above is copy WE wrote and can change. This is what the "
+        "MODEL says, captured from live runs of the eval harness - so it is the "
+        f"only part of this packet that shows what a {name} buyer really hears "
+        "end to end. Nobody on our team can read it."
+    )
+    w("")
+    w(SPEECH_NOTE[language])
+    w("")
+    recorded = _recorded_replies(language)
+    if not recorded:
+        # Stated rather than left blank: an empty section reads as "nothing to
+        # review here", and the truth is that nobody has recorded this language
+        # yet, which is itself the finding.
+        w(
+            "**Nothing recorded yet for this language.** Run "
+            "`uv run eval --live --category <name>` and regenerate this packet "
+            "before the session, or this page asks a reviewer to bless copy "
+            "the product may not even produce."
+        )
+        w("")
+    for buyer, reply in recorded:
+        w(f"Buyer said: {buyer}")
+        w("")
+        w(f"> {reply}")
+        w("")
+        w(bullet("Reads naturally to a buyer, or here is what it should say:"))
+        w("")
+
     w("## 6. Recordings (20 minutes, at the end)")
     w("")
     w(DIALECT_NOTE[language])
@@ -313,6 +368,32 @@ def main(language: str) -> None:
         w(bullet(prompt))
     w("")
     print("\n".join(out))
+
+
+def _recorded_replies(language: str) -> list[tuple[str, str]]:
+    """(buyer utterance, model reply) for every RECORDED fixture in this language.
+
+    Recorded only, deliberately. An authored fixture is text the build team
+    invented to stand for a model behaviour, and asking a native speaker to
+    judge our invented Arabic would waste the scarcest time in the project on
+    something no buyer will ever hear. A recorded reply is the product speaking.
+
+    Read from the eval cases rather than pasted here, so re-recording a fixture
+    updates the packet instead of leaving it a stale snapshot.
+    """
+    replies: list[tuple[str, str]] = []
+    for case in load_cases():
+        if case.language != language:
+            continue
+        for turn in case.turns:
+            fixture = turn.model
+            while fixture is not None:
+                if fixture.source == "recorded" and fixture.text.strip():
+                    entry = (turn.buyer.strip(), " ".join(fixture.text.split()))
+                    if entry not in replies:
+                        replies.append(entry)
+                fixture = fixture.retry
+    return replies
 
 
 def _terms() -> list[str]:
