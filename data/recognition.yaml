@@ -1,0 +1,37 @@
+# What an unusable buyer turn sounds like (ADR-011, docs/04-).
+#
+# ADR-011 escalates after three consecutive failed recognitions. That needs a
+# definition of "failed" that does not depend on a vendor confidence score,
+# because streaming confidence is often absent or uncalibrated - which is the
+# reason the whole confirmation policy is deterministic.
+#
+# Two shapes, and only the second one needs this file:
+#
+#   1. EMPTY - the transcript carries no letter and no digit in any script.
+#      Language-neutral, enforced in code, works today in en/ar/hi.
+#   2. GARBAGE - every token is one of the fillers below: the sound a
+#      recogniser returns for breath, a cough, or a corridor.
+#
+# A language with no list never classifies a turn as garbage. That is the safe
+# direction: the worst case is that we keep answering a buyer we cannot hear,
+# which is exactly the behaviour before this file existed.
+#
+# NOT a list of words to ignore inside a sentence. A turn fails only when
+# EVERY token in it is here, so "um, what is the price" is a real question.
+# Anything the buyer actually said - "what?", "no", "sorry" - is a recognition
+# and gets answered, never counted.
+
+noise:
+  # Quoted, all of them. YAML 1.1 reads bare no/yes/on/off/y/n as booleans and
+  # the loader rejects a non-string rather than coercing it, because a coerced
+  # boolean is a word that can never match. None of the English fillers are
+  # boolean-shaped today; the quotes are here so that adding "eh"'s neighbours
+  # cannot become a silent hole.
+  en: ["uh", "uhh", "um", "umm", "uhm", "hmm", "hm", "mm", "mmm", "mhm", "ah", "aah", "eh", "er", "erm", "huh"]
+
+  ar: []
+  # VERIFY: native-authored. The Arabic fillers a recogniser emits for
+  # non-speech. Until these exist an Arabic call catches only the empty half.
+
+  hi: []
+  # VERIFY: native-authored. Same rule.

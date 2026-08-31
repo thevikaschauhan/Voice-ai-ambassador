@@ -135,6 +135,12 @@ def bullet(item: str) -> str:
     return f"- [ ] {item}"
 
 
+def article(word: str) -> str:
+    """"an Arabic", "a Hindi". The packet is the first thing a native reviewer
+    reads, and it is generated - so the grammar has to be generated too."""
+    return "an" if word[:1].upper() in "AEIOU" else "a"
+
+
 def main(language: str) -> None:
     if language not in LANGUAGE_NAMES:
         raise SystemExit(f"usage: reviewer_packet.py {'|'.join(LANGUAGE_NAMES)}")
@@ -273,7 +279,7 @@ def main(language: str) -> None:
     w(
         "Every way a buyer could name dirhams or rupees out loud, so the system "
         f"hears it. Different from the list above: that one is what the agent "
-        f"says, this is what a {name} speaker says to it."
+        f"says, this is what {article(name)} {name} speaker says to it."
     )
     w("")
     w(bullet("dirhams:"))
@@ -297,6 +303,71 @@ def main(language: str) -> None:
     w(bullet("denial words (like \"not\"):"))
     w(bullet("contradiction words (like \"no\" / \"wrong\"):"))
     w(bullet("agreement words (like \"yes\" / \"correct\"):"))
+    w("")
+    w(
+        "Those last three lists are used for project names too, so they only "
+        "need writing once."
+    )
+    w("")
+    w("## 3c. Checking WHICH project the buyer meant")
+    w("")
+    w(
+        "Speech recognisers mangle the client's own name - \"Binghatti\" has "
+        "come back as \"Bint Jbeil\" and \"Binghati\" - and two of the "
+        "towers are Skyrise and Aquarise, which differ by one syllable and "
+        "cost different amounts. When the system is not sure which project was "
+        "said, it asks."
+    )
+    w("")
+    w(
+        "`{project}` is replaced with the project's name exactly as it appears "
+        "in our inventory, in the Latin script it is registered in. Please "
+        "leave the name in Latin script inside your sentence: buyers say these "
+        "names in English mid-sentence, and section 4 below is where the "
+        "PRONUNCIATION of them is handled."
+    )
+    w("")
+    for key, gloss in (
+        (
+            "confirm_project",
+            "we think we heard a project name and want to check which one",
+        ),
+        (
+            "ask_project",
+            "they said that was not it; ask which project afresh (no slot - "
+            "naming the one they just rejected reads badly)",
+        ),
+        (
+            "project_give_up",
+            "asked three times and still not settled; hand to a person warmly",
+        ),
+    ):
+        w(f"**{key}** - {gloss}")
+        w(f"English: > {confirmations.line('en', key)}")
+        w(bullet(f"{name}:"))
+        w("")
+    w("## 3d. When we cannot hear the buyer at all")
+    w("")
+    w(
+        "After three turns in a row that carry no speech - silence, or only "
+        "filler sounds - the system stops guessing and brings in a person. One "
+        "line, spoken warmly, and never repeated."
+    )
+    w("")
+    w("**recognition_escalation**")
+    w(f"English: > {confirmations.line('en', 'recognition_escalation')}")
+    w(bullet(f"{name}:"))
+    w("")
+    w(
+        "And the filler sounds themselves: the noises a recogniser writes down "
+        f"when {article(name)} {name} speaker has not actually said a word - "
+        "the equivalents "
+        'of "uh", "um", "hmm", "er". A turn counts as unheard only when EVERY '
+        "word in it is one of these, so please do not include anything a buyer "
+        'might mean ("no", "what", "sorry").'
+    )
+    w("")
+    w(bullet("filler sounds:"))
     w("")
     w("## 4. How these names should sound")
     w("")

@@ -96,7 +96,7 @@ English: > Let me put you through to one of our ambassadors who can go through t
 
 ### The currency words a buyer might say
 
-Every way a buyer could name dirhams or rupees out loud, so the system hears it. Different from the list above: that one is what the agent says, this is what a Arabic speaker says to it.
+Every way a buyer could name dirhams or rupees out loud, so the system hears it. Different from the list above: that one is what the agent says, this is what an Arabic speaker says to it.
 
 - [ ] dirhams:
 - [ ] rupees:
@@ -110,6 +110,38 @@ The system also reads a buyer's PUSH-BACK, so a rejected read-back is never reco
 - [ ] denial words (like "not"):
 - [ ] contradiction words (like "no" / "wrong"):
 - [ ] agreement words (like "yes" / "correct"):
+
+Those last three lists are used for project names too, so they only need writing once.
+
+## 3c. Checking WHICH project the buyer meant
+
+Speech recognisers mangle the client's own name - "Binghatti" has come back as "Bint Jbeil" and "Binghati" - and two of the towers are Skyrise and Aquarise, which differ by one syllable and cost different amounts. When the system is not sure which project was said, it asks.
+
+`{project}` is replaced with the project's name exactly as it appears in our inventory, in the Latin script it is registered in. Please leave the name in Latin script inside your sentence: buyers say these names in English mid-sentence, and section 4 below is where the PRONUNCIATION of them is handled.
+
+**confirm_project** - we think we heard a project name and want to check which one
+English: > Just to be sure - did you mean {project}?
+- [ ] Arabic:
+
+**ask_project** - they said that was not it; ask which project afresh (no slot - naming the one they just rejected reads badly)
+English: > Apologies - which project was that?
+- [ ] Arabic:
+
+**project_give_up** - asked three times and still not settled; hand to a person warmly
+English: > Let me put you through to one of our ambassadors who can find the right project with you.
+- [ ] Arabic:
+
+## 3d. When we cannot hear the buyer at all
+
+After three turns in a row that carry no speech - silence, or only filler sounds - the system stops guessing and brings in a person. One line, spoken warmly, and never repeated.
+
+**recognition_escalation**
+English: > I am not hearing you clearly, and I would rather not guess at what you are asking. Let me bring in one of our ambassadors.
+- [ ] Arabic:
+
+And the filler sounds themselves: the noises a recogniser writes down when an Arabic speaker has not actually said a word - the equivalents of "uh", "um", "hmm", "er". A turn counts as unheard only when EVERY word in it is one of these, so please do not include anything a buyer might mean ("no", "what", "sorry").
+
+- [ ] filler sounds:
 
 ## 4. How these names should sound
 

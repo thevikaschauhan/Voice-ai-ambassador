@@ -28,7 +28,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from livekit import rtc
 from livekit.agents import (
@@ -57,7 +57,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice import SpeechHandle
 from livekit.plugins import fishaudio, silero
 
-from ambassador.budget import BudgetPolicy, load_currency_vocabulary
+from ambassador.budget import BudgetPolicy, Decision, load_currency_vocabulary
 from ambassador.guardrails.prohibited import languages_covered, load_patterns
 from ambassador.inventory import (
     build_allowed_figures,
@@ -69,12 +69,25 @@ from ambassador.prompts import (
     REGENERATION_INSTRUCTION,
     build_ambassador_prompt,
 )
+from ambassador.projects import (
+    ProjectDecision,
+    ProjectNamePolicy,
+    agreement_words,
+    build_name_index,
+)
+from ambassador.recognition import RecognitionMonitor, load_noise_words
 from ambassador.verbalise import load_spoken_forms
 
 from .brief import BriefExtractor
 from .config import Settings, load_settings
-from .confirmations import UnspeakableConfirmation, load_confirmations
+from .confirmations import (
+    PROJECT_KEYS,
+    RECOGNITION_KEYS,
+    UnspeakableConfirmation,
+    load_confirmations,
+)
 from .confirmations import compose as compose_confirmation
+from .confirmations import compose_project as compose_project_confirmation
 from .disclosure import load_disclosures, resolve_opening
 from .events import EventLog, TurnTracker
 from .events_bridge import EventsBridge, bridge_from_env
@@ -100,6 +113,20 @@ class _PendingTurn:
     handle: SpeechHandle | None
     chat_ctx: lk_llm.ChatContext | None
     sealed: bool = False
+
+
+@dataclass(frozen=True)
+class _OwedTurn:
+    """Copy one of the ADR-011 policies speaks INSTEAD of running the turn.
+
+    `policy` exists so the audit records the right thing: the three lines are
+    recorded by three tracker methods with three event names, because a
+    budget echo carries the buyer's own figure and the other two do not.
+    """
+
+    text: str
+    policy: Literal["budget", "project", "recognition"]
+    action: str
 
 
 def _unresolved(handle: SpeechHandle | None) -> bool:
@@ -130,10 +157,37 @@ class AmbassadorAgent(Agent):
         self._budget = BudgetPolicy(self._budget_vocabulary, settings.language)
         self._budget_policy_runs = confirmations.covers(settings.language)
         self._budget_last_action = "none"
-        # The turn the policy last read, so a tool call splitting one buyer
+
+        # ADR-011's other two triggers, built on the same seam: the project
+        # name confirmed when the fuzzy match against inventory is marginal,
+        # and the escalation after three consecutive turns nobody could hear.
+        # Each has its own copy group, so a language can run one and not the
+        # other, and each reports itself off rather than speaking English into
+        # a call that is not in English.
+        self._name_index = build_name_index(projects)
+        self._agreement_words = agreement_words(self._budget_vocabulary)
+        self._project = ProjectNamePolicy(
+            self._name_index, self._agreement_words, settings.language
+        )
+        self._project_policy_runs = confirmations.covers(
+            settings.language, PROJECT_KEYS
+        )
+        self._project_last_action = "none"
+
+        self._noise_words = load_noise_words()
+        self._recognition = RecognitionMonitor(self._noise_words, settings.language)
+        self._recognition_policy_runs = confirmations.covers(
+            settings.language, RECOGNITION_KEYS
+        )
+
+        # The turn the policies last read, so a tool call splitting one buyer
         # turn across two llm_node invocations cannot make the same utterance
-        # count as two of the buyer's three attempts.
-        self._budget_observed_turn: int | None = None
+        # count as two of the buyer's three attempts. One gate for all three
+        # policies: the reason is the framework's, not any one policy's.
+        self._policy_observed_turn: int | None = None
+        # Set by the recognition check each turn, read by the budget and
+        # project policies: a turn nobody could hear is not an answer.
+        self._turn_was_unheard = False
 
         instructions = (
             NAIVE_PROMPT
@@ -142,6 +196,7 @@ class AmbassadorAgent(Agent):
                 serialise_for_prompt(projects),
                 settings.language,
                 system_confirms_budget=self._budget_policy_runs,
+                system_confirms_project=self._project_policy_runs,
             )
         )
         super().__init__(instructions=instructions)
@@ -195,6 +250,36 @@ class AmbassadorAgent(Agent):
             logger.warning(
                 "budget confirmation policy is OFF for %r: no confirmation copy "
                 "authored, so a budget in this language is acted on unconfirmed",
+                settings.language,
+            )
+        log.emit(
+            "project_policy",
+            active=self._project_policy_runs,
+            call_language=settings.language,
+            copy_languages=sorted(confirmations.languages_covered(PROJECT_KEYS)),
+            agreement_languages=sorted(self._agreement_words.languages_covered()),
+            projects_indexed=len(self._name_index.names),
+        )
+        if not self._project_policy_runs:
+            logger.warning(
+                "project-name confirmation is OFF for %r: no confirmation copy "
+                "authored, so a marginal name match is acted on unconfirmed",
+                settings.language,
+            )
+        log.emit(
+            "recognition_policy",
+            active=self._recognition_policy_runs,
+            call_language=settings.language,
+            copy_languages=sorted(
+                confirmations.languages_covered(RECOGNITION_KEYS)
+            ),
+            noise_languages=sorted(self._noise_words.languages_covered()),
+        )
+        if not self._recognition_policy_runs:
+            logger.warning(
+                "failed-recognition escalation is OFF for %r: no escalation copy "
+                "authored, so three unheard turns in a row escalate only if the "
+                "model calls the tool",
                 settings.language,
             )
 
@@ -417,7 +502,147 @@ class AmbassadorAgent(Agent):
         """
         self._speech_handle = handle
 
-    # -- ADR-011: the deterministic budget confirmation --------------------
+    # -- ADR-011: the deterministic confirmation policies ------------------
+    #
+    # Three of ADR-011's four triggers share this one seam, and llm_node calls
+    # it before the model is given the turn at all. Asking the model to
+    # confirm is what prompt constraint 8 already did; taking the turn away
+    # from it is what makes the policy deterministic.
+    #
+    # The order below is load-bearing:
+    #
+    #   1. recognition. A turn nobody could hear is not an answer to anything,
+    #      so it must be classified before either policy reads it as a reply.
+    #   2. the budget. The twenty-times currency error is the most expensive
+    #      thing on the call, so it owns the turn whenever it has a question.
+    #   3. the project name.
+    #
+    # At most one policy speaks per turn, and a policy that does not speak
+    # this turn does not read it either. That is not a simplification, it is
+    # the fix for a defect class the budget half shipped twice: a reply meant
+    # for one question, read as an answer to another, records agreement that
+    # was never given. The cost is stated in docs/04- - a project named in the
+    # same breath as a budget is not confirmed until the buyer names it again.
+
+    def _deterministic_turn(self, tracker: TurnTracker) -> _OwedTurn | None:
+        """Copy to speak instead of running this turn, or None to carry on."""
+        if self._policy_observed_turn == tracker.turn_index:
+            # The second half of a tool-using turn. The policies already read
+            # this utterance; reading it again would burn a second attempt on
+            # one reply.
+            return None
+        self._policy_observed_turn = tracker.turn_index
+
+        unheard = self._recognition_check(tracker)
+        if unheard is not None:
+            return unheard
+        if self._turn_was_unheard:
+            return self._reask_open_question(tracker)
+
+        budget = self._budget_confirmation(tracker)
+        if budget is not None:
+            return _OwedTurn(budget, "budget", self._budget_last_action)
+        return self._project_confirmation(tracker)
+
+    def _fixed_line(self, key: str) -> str:
+        """A slotless, native-authored line, through the one public path.
+
+        `SentenceGuard.compose()` is `process_sentence`, and these lines carry
+        no figure for it to object to - so unlike the budget echo they have no
+        reason to leave the pipeline (see confirmations.py). If the copy fails
+        our own guardrails anyway that is a defect in the copy, and the
+        precedent set by `_terminal_failure_speech` applies: speak the raw
+        line. AGENTS.md is absolute that a turn never ends in silence, and a
+        blocked terminal line is not a reason to break that.
+
+        Non-empty by construction: a policy only runs when `covers()` says
+        every key in its group is authored.
+        """
+        raw = self._confirmations.line(self._settings.language, key)
+        try:
+            return self._guard.compose(raw)
+        except Exception:  # pragma: no cover - a defect in the copy itself
+            logger.warning(
+                "fixed confirmation copy %r failed its own guardrails", key,
+                exc_info=True,
+            )
+            return raw
+
+    # -- trigger 3: three consecutive failed recognitions ------------------
+
+    def _recognition_check(self, tracker: TurnTracker) -> _OwedTurn | None:
+        """Count an unusable turn, and hand over at the third in a row.
+
+        Also sets `_turn_was_unheard`, which is why this runs first: the other
+        two policies must not read a turn nobody heard as a reply to their
+        open question.
+
+        FAILURE DIRECTION, stated because a catch on a safety path always has
+        one: a crash here falls back to the behaviour that existed before this
+        trigger did - the turn is treated as heard and the model answers it.
+        Nothing unvalidated is spoken as a result, and the model still carries
+        `escalate_to_human` trigger 9 for the same situation. Handing over a
+        working call because a classifier raised would be the worse direction.
+        """
+        self._turn_was_unheard = False
+        if not self._recognition_policy_runs:
+            return None
+        try:
+            decision = self._recognition.observe(tracker.buyer_utterance)
+            self._turn_was_unheard = decision.failed
+            if decision.failed:
+                self._log.emit(
+                    "recognition_failed",
+                    turn=tracker.turn_index,
+                    consecutive=decision.consecutive,
+                    hands_over=decision.hands_over,
+                )
+            if not decision.speaks:
+                return None
+            text = self._fixed_line("recognition_escalation")
+            # Notified, not merely announced. Same routing as the tool.
+            self._route_to_human("three consecutive failed recognitions")
+            return _OwedTurn(text, "recognition", "escalate")
+        except Exception:
+            logger.error("recognition check failed; answering the turn", exc_info=True)
+            self._turn_was_unheard = False
+            return None
+
+    def _reask_open_question(self, tracker: TurnTracker) -> _OwedTurn | None:
+        """Re-speak whatever confirmation is still owed, counting nothing.
+
+        A turn nobody could hear answered nothing, so no attempt is consumed -
+        but a confirmation that was owed is still owed, and handing the turn
+        back to the model while one is open is precisely the property ADR-011
+        exists to hold. The buyer hears the question again, which is also what
+        a person would do.
+        """
+        pending = self._budget.pending if self._budget_policy_runs else None
+        if pending is not None:
+            try:
+                return _OwedTurn(
+                    self._speak_budget_decision(tracker, pending),
+                    "budget",
+                    pending.action,
+                )
+            except Exception:
+                logger.error("budget re-ask failed; handing over", exc_info=True)
+                return self._budget_handover(tracker)
+
+        owed = self._project.pending if self._project_policy_runs else None
+        if owed is not None:
+            try:
+                return _OwedTurn(
+                    self._speak_project_decision(tracker, owed),
+                    "project",
+                    owed.action,
+                )
+            except Exception:
+                logger.error("project re-ask failed; handing over", exc_info=True)
+                return self._project_handover(tracker)
+        return None
+
+    # -- trigger 1: the budget confirmation --------------------------------
 
     def _budget_confirmation(self, tracker: TurnTracker) -> str | None:
         """Copy to speak instead of running this turn, or None to carry on.
@@ -439,29 +664,31 @@ class AmbassadorAgent(Agent):
         """
         if not self._budget_policy_runs:
             return None
-        if self._budget_observed_turn == tracker.turn_index:
-            # The second half of a tool-using turn. The policy already read
-            # this utterance; reading it again would burn a second attempt on
-            # one reply.
-            return None
-        self._budget_observed_turn = tracker.turn_index
         try:
             return self._composed_confirmation(tracker)
         except Exception:
             logger.error("budget confirmation failed; handing over", exc_info=True)
-            self._budget.abandon()
-            self._route_to_human("budget confirmation failure")
-            self._budget_last_action = "give_up"
-            self._log.emit(
-                "budget_confirmation",
-                turn=tracker.turn_index,
-                action="give_up",
-                currency=None,
-                hands_over=True,
-            )
-            # Safe to speak verbatim: the loader guarantees give_up is
-            # non-empty for any language the policy runs in, and slot-free.
-            return self._confirmations.line(self._settings.language, "give_up")
+            return self._budget_handover(tracker).text
+
+    def _budget_handover(self, tracker: TurnTracker) -> _OwedTurn:
+        """The fail-closed end of every budget confirmation path."""
+        self._budget.abandon()
+        self._route_to_human("budget confirmation failure")
+        self._budget_last_action = "give_up"
+        self._log.emit(
+            "budget_confirmation",
+            turn=tracker.turn_index,
+            action="give_up",
+            currency=None,
+            hands_over=True,
+        )
+        # Safe to speak verbatim: the loader guarantees give_up is
+        # non-empty for any language the policy runs in, and slot-free.
+        return _OwedTurn(
+            self._confirmations.line(self._settings.language, "give_up"),
+            "budget",
+            "give_up",
+        )
 
     def _composed_confirmation(self, tracker: TurnTracker) -> str | None:
         """The happy path of `_budget_confirmation`; raises rather than
@@ -475,7 +702,12 @@ class AmbassadorAgent(Agent):
                     currency=decision.currency,
                 )
             return None
+        return self._speak_budget_decision(tracker, decision)
 
+    def _speak_budget_decision(
+        self, tracker: TurnTracker, decision: Decision
+    ) -> str:
+        """Compose one budget decision into speech. Raises on any failure."""
         template = self._confirmations.line(self._settings.language, decision.action)
         if decision.mention is not None:
             # Every mention-bearing decision goes through compose(), slot or
@@ -514,6 +746,101 @@ class AmbassadorAgent(Agent):
             turn=tracker.turn_index,
             action=decision.action,
             currency=decision.currency,
+            hands_over=decision.hands_over,
+        )
+        return text
+
+    # -- trigger 2: the project-name confirmation --------------------------
+
+    def _project_confirmation(self, tracker: TurnTracker) -> _OwedTurn | None:
+        """Confirm a marginal project-name match, or carry on.
+
+        Same failure direction as the budget policy and for the same reason: a
+        crash in the machinery that decides WHICH project the buyer means is
+        not something to shrug off and answer around.
+        """
+        if not self._project_policy_runs:
+            return None
+        try:
+            decision = self._project.observe(tracker.buyer_utterance)
+            if not decision.speaks:
+                if decision.settled:
+                    self._log.emit(
+                        "project_settled",
+                        turn=tracker.turn_index,
+                        project=decision.project_id,
+                        band=decision.band,
+                        similarity=(
+                            None
+                            if decision.similarity is None
+                            else round(decision.similarity, 3)
+                        ),
+                    )
+                return None
+            return _OwedTurn(
+                self._speak_project_decision(tracker, decision),
+                "project",
+                decision.action,
+            )
+        except Exception:
+            logger.error("project confirmation failed; handing over", exc_info=True)
+            return self._project_handover(tracker)
+
+    def _project_handover(self, tracker: TurnTracker) -> _OwedTurn:
+        """The fail-closed end of every project confirmation path."""
+        self._project.abandon()
+        self._route_to_human("project confirmation failure")
+        self._project_last_action = "project_give_up"
+        self._log.emit(
+            "project_confirmation",
+            turn=tracker.turn_index,
+            action="project_give_up",
+            project=None,
+            hands_over=True,
+        )
+        return _OwedTurn(
+            self._fixed_line("project_give_up"), "project", "project_give_up"
+        )
+
+    def _speak_project_decision(
+        self, tracker: TurnTracker, decision: ProjectDecision
+    ) -> str:
+        """Compose one project decision into speech. Raises on any failure."""
+        template = self._confirmations.line(self._settings.language, decision.action)
+        if decision.name is not None:
+            # Bound to inventory, not to the transcript: reading the buyer's
+            # own mangled words back would confirm nothing. Every
+            # name-bearing decision goes through compose_project(), slot or
+            # no slot, for the misspelled-slot reason above.
+            text = compose_project_confirmation(
+                template,
+                project=decision.name,
+                inventory_names=tuple(self._name_index.names.values()),
+            )
+        elif "{" in template:
+            raise UnspeakableConfirmation(
+                f"{decision.action!r} copy carries a slot and the decision "
+                "has nothing to fill it with"
+            )
+        else:
+            text = template
+        # And then the one public path, which this line has no reason to skip.
+        text = self._guard.compose(text)
+        if not text.strip():
+            raise UnspeakableConfirmation(
+                f"no confirmation copy composed for {decision.action!r}"
+            )
+
+        if decision.hands_over:
+            self._route_to_human(f"project confirmation: {decision.action}")
+
+        self._project_last_action = decision.action
+        self._log.emit(
+            "project_confirmation",
+            turn=tracker.turn_index,
+            action=decision.action,
+            project=decision.project_id,
+            band=decision.band,
             hands_over=decision.hands_over,
         )
         return text
@@ -565,13 +892,16 @@ class AmbassadorAgent(Agent):
         # to confirm is what constraint 8 already did; this takes the turn away
         # from it, so the question cannot be skipped, reworded or answered on
         # the buyer's behalf.
-        confirmation = self._budget_confirmation(tracker)
-        if confirmation is not None:
-            tracker.record_confirmation(confirmation, self._budget_last_action)
+        owed = self._deterministic_turn(tracker)
+        if owed is not None:
+            if owed.policy == "budget":
+                tracker.record_confirmation(owed.text, owed.action)
+            elif owed.policy == "project":
+                tracker.record_project_confirmation(owed.text, owed.action)
+            else:
+                tracker.record_recognition_escalation(owed.text)
             yield (
-                confirmation
-                if confirmation.endswith((" ", "\n"))
-                else (confirmation + " ")
+                owed.text if owed.text.endswith((" ", "\n")) else (owed.text + " ")
             )
             return
 

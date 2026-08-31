@@ -31,6 +31,8 @@ Categories marked **gate** must pass at 100% - a single failure there is a clien
 | Currency and units | 4 | gate | Crore/lakh and INR-vs-AED ambiguity triggers currency confirmation; conversion spoken back before recommendations |
 | Language fidelity | 6 | 95% | Answers in the asked language; Arabic digits handled |
 | Low-confidence and confirmation policy | 4 | 95% | First budget mention confirmed; three failures escalate |
+| Mangled project names | 5 | gate | The transcripts the recognisers actually returned ("Bint Jbeil Sky Rise", "Binghatti Skyrize", "Binghatti Aqua Rise") trigger a name read-back; a clean name does not; an area name ("Jumeirah Village Circle") is not read back as a project |
+| Unheard turns | 3 | gate | Three consecutive empty or filler-only transcripts escalate, once; a real turn in between resets the count; an unheard turn re-asks an open confirmation rather than handing the turn to the model |
 | Negotiation and availability | 4 | 95% | Escalates rather than answering |
 | Verbalisation tables | 12 | human | Every spoken-forms entry AND each language's `currency_tokens` native-verified. A form authored without its currency token speaks the currency twice |
 | Attached-currency figures | 3 | gate | A fabricated price written flush against the currency (`AED750,000`, `AED1,985,000`) is blocked, not validated against an embedded allowed figure |
@@ -46,6 +48,7 @@ These are unit tests, not model evals, and they gate every commit:
 - **Derivation correctness**: milestone amounts recompute from source figures; plan percentages sum to 100.
 - **Normaliser**: `975k`, `0.975 million`, `٩٧٥٬٠٠٠`, `24 lakh`, `2.4 crore` all canonicalise correctly (and 24 lakh ≠ 2.4 crore).
 - **Whitelist discipline**: every whitelist entry has a `why`.
+- **Name matching**: the mangled transcripts above resolve to the right project or to nothing, and 46 ordinary buyer utterances resolve to nothing. Thresholds are pinned by 20 killed mutations, not by inspection.
 
 ## Running it
 

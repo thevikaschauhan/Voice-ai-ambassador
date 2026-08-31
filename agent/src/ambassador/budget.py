@@ -558,6 +558,20 @@ class BudgetPolicy:
     def currency(self) -> Currency | None:
         return self._currency
 
+    @property
+    def pending(self) -> Decision | None:
+        """The question this policy is waiting on an answer to, if any.
+
+        Read-only and non-mutating, and that is the whole point: the caller
+        re-speaks it on a turn nobody could hear (recognition.py), and a turn
+        nobody could hear must not consume one of the buyer's three attempts.
+        Routing such a turn through `observe` instead would count it as a
+        reply that answered nothing, which is exactly what it was not.
+        """
+        if self._asked is None:
+            return None
+        return Decision(self._asked, self._mention)
+
     def observe(self, utterance: str) -> Decision:
         if self._settled:
             return Decision("none")

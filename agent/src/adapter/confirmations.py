@@ -30,6 +30,22 @@ echoed text is a literal substring of the utterance the mention was extracted
 from, so nothing that did not come out of the buyer's transcript can reach
 TTS through this path, and no model output passes through this module at all.
 
+## The project confirmation does NOT take the bypass
+
+Both reasons above are about digits, and a project name has none. "Just to be
+sure - did you mean Binghatti Skyrise?" carries no figure for the numeric
+guardrail to object to and nothing for verbalisation to rewrite, so it goes
+through `SentenceGuard.compose()` like the fallback copy does - the one public
+path, unweakened. `compose_project` still bounds its slot to inventory before
+that, so the closed-set property holds on both lines; the difference is that
+this one does not have to leave the pipeline to keep it.
+
+The consequence is worth stating: if a project name ever contains a digit, the
+numeric guardrail will block the line, because inventory figures are prices
+and sizes and a name's digits are in no allowed set. That is the correct
+outcome and it fails closed - the buyer is handed to a person - rather than
+speaking an unvalidated sentence.
+
 ## Failure direction
 
 Every error this module raises must be handled by FAILING CLOSED: speak the
@@ -42,6 +58,7 @@ no slot, so the terminal line every failure falls back to can always compose.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, get_args
@@ -53,30 +70,49 @@ from ambassador.schemas import Language
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 _LANGUAGES: Final[tuple[Language, ...]] = get_args(Language)
 
-# Every key the policy can ask for. A language missing any of them cannot run
-# the policy at all, so partial authoring is treated as none.
-_KEYS: Final = (
+# Every key a policy can ask for, grouped by the policy that owns it. A
+# language missing any key in a group cannot run THAT policy, so partial
+# authoring is treated as none - but the groups are independent, because a
+# reviewer who authors the budget lines and stops should not silently disable
+# the project confirmation too, nor the reverse.
+BUDGET_KEYS: Final = (
     "ask_currency",
     "confirm_amount",
     "ask_amount",
     "cannot_convert",
     "give_up",
 )
+PROJECT_KEYS: Final = (
+    "confirm_project",
+    "ask_project",
+    "project_give_up",
+)
+RECOGNITION_KEYS: Final = ("recognition_escalation",)
+
+_KEYS: Final = BUDGET_KEYS + PROJECT_KEYS + RECOGNITION_KEYS
+
+# The lines spoken VERBATIM on a failure path, without composing: whatever
+# broke, these still have to reach TTS. A format slot of any kind here - even
+# a malformed one - would be read out braces and all, so the loader refuses
+# it rather than trusting the author.
+_SLOTLESS: Final = ("give_up", "project_give_up", "recognition_escalation")
 
 
 @dataclass(frozen=True)
 class ConfirmationCopy:
     by_language: dict[Language, dict[str, str]]
 
-    def languages_covered(self) -> frozenset[Language]:
+    def languages_covered(
+        self, keys: tuple[str, ...] = BUDGET_KEYS
+    ) -> frozenset[Language]:
         return frozenset(
             language
             for language, copy in self.by_language.items()
-            if all(copy.get(key) for key in _KEYS)
+            if all(copy.get(key) for key in keys)
         )
 
-    def covers(self, language: Language) -> bool:
-        return language in self.languages_covered()
+    def covers(self, language: Language, keys: tuple[str, ...] = BUDGET_KEYS) -> bool:
+        return language in self.languages_covered(keys)
 
     def line(self, language: Language, key: str) -> str:
         return self.by_language.get(language, {}).get(key, "")
@@ -107,16 +143,17 @@ def load_confirmations(path: Path | None = None) -> ConfirmationCopy:
                     f"{type(value).__name__}, not text. It is spoken verbatim."
                 )
             copy[key] = value.strip()
-        if "{" in copy["give_up"]:
-            # Any brace, not just a well-formed {amount}: give_up is spoken
-            # VERBATIM on the failure path, without composing, so a malformed
-            # slot here would reach TTS braces and all.
-            raise ValueError(
-                f"{source.name}: {language!r}.give_up must not carry a format "
-                "slot of any kind. It is the terminal line every composition "
-                "failure falls back to, spoken verbatim, so it must always be "
-                "speakable with nothing to fill."
-            )
+        for key in _SLOTLESS:
+            if "{" in copy[key]:
+                # Any brace, not just a well-formed {amount}: these lines are
+                # spoken VERBATIM on the failure path, without composing, so a
+                # malformed slot here would reach TTS braces and all.
+                raise ValueError(
+                    f"{source.name}: {language!r}.{key} must not carry a "
+                    "format slot of any kind. It is a terminal line a "
+                    "composition failure falls back to, spoken verbatim, so it "
+                    "must always be speakable with nothing to fill."
+                )
         by_language[language] = copy
     return ConfirmationCopy(by_language=by_language)
 
@@ -130,10 +167,44 @@ class EchoNotInTranscript(ValueError):
     """
 
 
+class NameNotInInventory(ValueError):
+    """The project slot was handed a name that is not in `data/inventory.json`.
+
+    Raised rather than spoken, for the same reason as `EchoNotInTranscript`:
+    the bound on the slot is what makes fixed copy safe to synthesise, so a
+    value outside the bound is a defect to fail closed on, never something to
+    read out.
+    """
+
+
 class UnspeakableConfirmation(RuntimeError):
     """The template itself could not be filled - a bad slot name like
     `{ammount}`, or copy that filled to nothing. A defect in the data file,
     not in the buyer's reply; the caller must fail closed (hand over)."""
+
+
+def _fill(template: str, **slots: str) -> str:
+    """Format the template, turning every possible failure into one the caller
+    fails CLOSED on.
+
+    Deliberately every exception. `str.format` raises more than the obvious
+    ValueError and KeyError: "{amount.foo}" is an AttributeError and
+    "{amount[x]}" a TypeError, and the first version of this catch let both
+    escape the voice path entirely - a silent turn, then a fall-through to the
+    model on the same-turn retry.
+    """
+    try:
+        text = template.format(**slots)
+    except Exception as exc:
+        raise UnspeakableConfirmation(
+            f"confirmation template {template!r} could not be filled: {exc}"
+        ) from exc
+    if not text.strip():
+        raise UnspeakableConfirmation(
+            "confirmation template composed to nothing; an empty yield would "
+            "be a silent turn."
+        )
+    return text
 
 
 def compose(template: str, *, echoed: str, said: str) -> str:
@@ -150,21 +221,29 @@ def compose(template: str, *, echoed: str, said: str) -> str:
             "buyer's utterance, and this copy bypasses the guardrail pipeline "
             "precisely because it only ever echoes the transcript."
         )
-    try:
-        text = template.format(amount=echoed)
-    except Exception as exc:
-        # Deliberately every exception, converted to one the caller fails
-        # CLOSED on. str.format raises more than the obvious ValueError and
-        # KeyError: "{amount.foo}" is an AttributeError and "{amount[x]}" a
-        # TypeError, and the first version of this catch let both escape the
-        # voice path entirely - a silent turn, then a fall-through to the
-        # model on the same-turn retry.
-        raise UnspeakableConfirmation(
-            f"confirmation template {template!r} could not be filled: {exc}"
-        ) from exc
-    if not text.strip():
-        raise UnspeakableConfirmation(
-            "confirmation template composed to nothing; an empty yield would "
-            "be a silent turn."
+    return _fill(template, amount=echoed)
+
+
+def compose_project(
+    template: str, *, project: str, inventory_names: Collection[str]
+) -> str:
+    """Fill the project slot, refusing any name that is not in inventory.
+
+    The mirror image of `compose`'s bound, and the difference is the point.
+    The budget echo must be the BUYER'S surface, because verbalising it would
+    assert a currency they never named. A project name must be INVENTORY'S
+    surface, because reading the buyer's mangled words back ("did you mean
+    Bint Jbeil Sky Rise?") teaches them our mishearing and confirms nothing.
+
+    Either way the slot comes from a closed set that no model output can reach,
+    which is the property that makes deterministic copy safe to speak. Here
+    the closed set is `data/inventory.json` - invariant 1's single source of
+    project facts - so a name that is not in it is a defect, not a mishearing.
+    """
+    if not project or project not in inventory_names:
+        raise NameNotInInventory(
+            f"refusing to speak {project!r}: it is not a project name in "
+            "inventory, and this slot may only ever name one. Invariant 1 "
+            "allows exactly one source of project names."
         )
-    return text
+    return _fill(template, project=project)
