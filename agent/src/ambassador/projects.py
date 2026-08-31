@@ -82,14 +82,39 @@ _MIN_TOKEN = 3
 
 _TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 
-# Calibrated against a corpus of realistic buyer utterances (both the mangled
-# project names the recognisers actually returned in ADR-015 and 46 ordinary
-# non-project questions), and pinned by tests. The floor is where it is
-# because "budget" scores 0.615 against "bugatti": a lower floor turns the
-# budget policy's own opening line into a project question.
+# Calibrated against a corpus of realistic buyer utterances (the mangled
+# project names the recognisers actually returned in ADR-015, plus ordinary
+# non-project questions), and pinned by mutation.
+#
+# `_FLOOR` is where it is because "budget" scores 0.615 against "bugatti": a
+# lower floor turns the budget policy's own opening line into a project
+# question.
+#
+# `_FLOOR_SINGLE` is higher because one token is less evidence. A single word
+# scored against a single word has no context to be wrong about, and
+# SequenceMatcher is happy to call ordinary English a near-match: "arise"
+# scores 0.769 against "aquarise" and asked a buyer discussing prices about a
+# tower they never mentioned. The gap between the two floors is the whole
+# fix for that class, and it is safe because a recogniser that split a name
+# into two words is caught by token rejoining below rather than by a lower
+# floor.
 _FLOOR = 0.68
+_FLOOR_SINGLE = 0.80
 _CONFIDENT = 0.95
 _MARGIN = 0.12
+
+# How well one key token must match for it to count as evidence, and how many
+# such tokens a multi-word key needs.
+#
+# A mean lets one strong token carry a weak key: `residences` appears verbatim
+# in "what residences are available?", and one exact match plus two poor ones
+# averaged 0.682 - over the floor, on a question that names no project. So
+# evidence has to be DISTRIBUTED across the name rather than merely add up.
+# Two agreeing words is the smallest amount of distribution there is, and it
+# is what separates a real two-word mention from a common noun the name
+# happens to contain.
+_TOKEN_EVIDENCE = 0.60
+_MIN_EVIDENCE = 2
 
 Band = Literal["confident", "marginal"]
 
@@ -104,26 +129,90 @@ def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def _coverage(said: tuple[str, ...], key: tuple[str, ...]) -> float:
-    """The best contiguous alignment of `key` against `said`, summed over the
-    key's tokens.
+@dataclass(frozen=True)
+class _Alignment:
+    """How well a key fits the utterance, and where.
+
+    `coverage` is the sum of per-token ratios: how much of the utterance this
+    key explains. `similarity` is the mean: how sure the fit is. `start`/`end`
+    are token indices, and they matter because a decoy may only suppress a
+    project match it actually COMPETES with - see `match_project_name`.
+
+    `rejoined` records that the fit needed two of the buyer's tokens read as
+    one ("sky rise" -> "skyrise"). That is real evidence, and it is also proof
+    that the recogniser is guessing at word boundaries in this utterance, so a
+    rejoined match is never treated as confident.
+    """
+
+    coverage: float
+    similarity: float
+    start: int
+    end: int
+    rejoined: bool
+    # How many of the key's own tokens found a match worth calling one. See
+    # `_MIN_EVIDENCE`: a total is not the same as agreement.
+    matched: int
+
+
+_NO_FIT = _Alignment(0.0, 0.0, 0, 0, False, 0)
+
+
+def _align(said: tuple[str, ...], key: tuple[str, ...]) -> _Alignment:
+    """The best contiguous alignment of `key` against `said`.
 
     Contiguous on purpose: a project name is spoken as one phrase, and letting
     the tokens match anywhere would score "Skyrise ... Binghatti is the
     developer" as a full-name match.
+
+    Each key token may consume ONE or TWO adjacent buyer tokens, because
+    per-utterance recognition splits names as readily as it mangles them:
+    "Skyrise" came back as "Sky Rise", and scoring "rise" alone against
+    "skyrise" reaches only 0.727 - close enough to be indistinguishable from
+    the ordinary-English false positives the higher single-token floor exists
+    to reject. Rejoining reads it as the 1.0 it is, and marks the match
+    rejoined so it still gets confirmed rather than assumed.
     """
-    if not said:
-        return 0.0
-    best = 0.0
-    for start in range(len(said)):
-        total = 0.0
-        for offset, expected in enumerate(key):
-            here = start + offset
-            if here >= len(said):
-                break
-            total += _ratio(said[here], expected)
-        best = max(best, total)
-    return best
+    if not said or not key:
+        return _NO_FIT
+    n, m = len(said), len(key)
+    # best[i][j]: the best (score, end, rejoined, matched) for key[i:] starting
+    # at said[j]. Key tokens with no utterance left score zero rather than
+    # failing, so a short utterance can still match the head of a long name.
+    best: list[list[tuple[float, int, bool, int]]] = [
+        [(0.0, min(j, n), False, 0) for j in range(n + 1)] for _ in range(m + 1)
+    ]
+    for i in range(m - 1, -1, -1):
+        for j in range(n - 1, -1, -1):
+            options: list[tuple[float, int, bool, int]] = []
+            for width in (1, 2):
+                if j + width > n:
+                    continue
+                token = "".join(said[j : j + width])
+                ratio = _ratio(token, key[i])
+                score, end, rejoined, matched = best[i + 1][j + width]
+                options.append(
+                    (
+                        ratio + score,
+                        end,
+                        rejoined or width == 2,
+                        matched + (1 if ratio >= _TOKEN_EVIDENCE else 0),
+                    )
+                )
+            best[i][j] = max(options, key=lambda o: (o[0], not o[2]))
+
+    chosen = max(
+        ((best[0][j], j) for j in range(n)),
+        key=lambda pair: (pair[0][0], not pair[0][2]),
+    )
+    (coverage, end, rejoined, matched), start = chosen
+    return _Alignment(
+        coverage=coverage,
+        similarity=coverage / m,
+        start=start,
+        end=max(end, start + 1),
+        rejoined=rejoined,
+        matched=matched,
+    )
 
 
 @dataclass(frozen=True)
@@ -157,7 +246,14 @@ def build_name_index(projects: list[Project]) -> NameIndex:
         distinctive = tuple(t for t in full if t not in shared)
         if distinctive:
             candidates.add(distinctive)
-            candidates.update((token,) for token in distinctive)
+            # Only the HEAD distinctive token stands alone. People shorten a
+            # name to its leading distinctive word - "the Bugatti", "Skyrise",
+            # "Aquarise" - never to its trailing descriptor, and making every
+            # distinctive token a key made `residences` an exact match on its
+            # own: "what residences are available?" was classified as a
+            # confident mention of Bugatti Residences, which is wrong in the
+            # audit and excluded that project from every later read-back.
+            candidates.add((distinctive[0],))
         keys.extend((project_id, key) for key in sorted(candidates))
 
     decoys: set[tuple[str, ...]] = {(token,) for token in shared}
@@ -194,12 +290,19 @@ def match_project_name(
     if not said:
         return None
 
-    best: dict[str, tuple[float, float]] = {}
+    best: dict[str, _Alignment] = {}
     for project_id, key in index.keys:
         if project_id in exclude:
             continue
-        coverage = _coverage(said, key)
-        similarity = coverage / len(key)
+        fit = _align(said, key)
+        if len(key) == 1:
+            # Each key clears its OWN floor before it can represent the
+            # project, so a project is still a candidate through its full name
+            # when its one-word short form is too weak to be trusted.
+            if fit.similarity < _FLOOR_SINGLE:
+                continue
+        elif fit.similarity < _FLOOR or fit.matched < _MIN_EVIDENCE:
+            continue
         held = best.get(project_id)
         # Similarity decides, then coverage. The tie-break is not cosmetic:
         # "Binghatti Aquarise" matches both the full name and the bare
@@ -207,38 +310,50 @@ def match_project_name(
         # left the match explaining a single token - which the `binghatti`
         # decoy then tied with and suppressed. Prefer the key that explains
         # more of what the buyer said.
-        if held is None or (similarity, coverage) > held:
-            best[project_id] = (similarity, coverage)
+        if held is None or (fit.similarity, fit.coverage) > (
+            held.similarity,
+            held.coverage,
+        ):
+            best[project_id] = fit
     if not best:
         return None
 
     ranked = sorted(
-        ((similarity, coverage, pid) for pid, (similarity, coverage) in best.items()),
-        reverse=True,
+        best.items(), key=lambda item: (item[1].similarity, item[1].coverage), reverse=True
     )
-    similarity, coverage, project_id = ranked[0]
-    runner_up = ranked[1][0] if len(ranked) > 1 else 0.0
-    if similarity < _FLOOR:
-        return None
+    project_id, fit = ranked[0]
+    runner_up = ranked[1][1].similarity if len(ranked) > 1 else 0.0
 
-    # A decoy only competes once it is a credible match itself; otherwise a
+    # A decoy only competes once it is a credible match itself (otherwise a
     # three-token area name accumulates coverage out of unrelated words and
-    # suppresses everything.
+    # suppresses everything) AND only where it competes for the same words.
+    #
+    # That second condition is the fix for the worst defect this matcher had.
+    # Comparing coverage across the whole utterance meant an EXACT area beat a
+    # FUZZY project phrase sitting beside it: "Binghatti Skyrize in Business
+    # Bay" was suppressed by `Business Bay` and the model answered a mangled
+    # name unconfirmed - the trigger defeated in precisely the situation it
+    # exists for. A decoy that explains OTHER words explains nothing about
+    # these ones.
     for decoy in index.decoys:
-        decoy_coverage = _coverage(said, decoy)
-        if decoy_coverage / len(decoy) >= _FLOOR and decoy_coverage >= coverage:
+        rival = _align(said, decoy)
+        if rival.similarity < _FLOOR or rival.coverage < fit.coverage:
+            continue
+        if rival.start < fit.end and fit.start < rival.end:
             return None
 
     band: Band = (
         "confident"
-        if similarity >= _CONFIDENT and (similarity - runner_up) > _MARGIN
+        if fit.similarity >= _CONFIDENT
+        and (fit.similarity - runner_up) > _MARGIN
+        and not fit.rejoined
         else "marginal"
     )
     return NameMatch(
         project_id=project_id,
         name=index.names[project_id],
         band=band,
-        similarity=similarity,
+        similarity=fit.similarity,
         runner_up=runner_up,
     )
 
@@ -405,6 +520,21 @@ class ProjectNamePolicy:
         if self._asked is None:
             return None
         return self._decision(self._asked)
+
+    def answers(self, utterance: str) -> bool:
+        """Does this reply say anything about the question that is open?
+
+        Pure and non-mutating, and the same contract as
+        `BudgetPolicy.answers`: a reply naming a project, agreeing, or pushing
+        back is an answer; anything else may belong to another question and
+        must not spend an attempt here. See ambassador/confirmation.py.
+        """
+        if self._handed_over or self._asked is None:
+            return False
+        if self._match(utterance) is not None:
+            return True
+        reading = read_agreement(utterance, self._words, self._language)
+        return reading.agreed or reading.contradicted
 
     def observe(self, utterance: str) -> ProjectDecision:
         if self._handed_over:

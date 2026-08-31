@@ -87,8 +87,10 @@ categories:
   - key: confirmation_policy
     title: Low-confidence and confirmation policy
     gate: pass95
-    min_cases: 4
-    proves: First budget mention confirmed; three failures escalate
+    min_cases: 9
+    proves: >-
+      All three ADR-011 triggers - budget currency, marginal project names,
+      three unheard turns - and which question owns each reply
 
   - key: negotiation_availability
     title: Negotiation and availability

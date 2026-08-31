@@ -414,14 +414,53 @@ def test_two_similar_names_are_marginal_however_high_the_score():
     assert match.band == "marginal"
 
 
-def test_a_two_letter_area_token_cannot_suppress_a_real_match():
-    """`_MIN_TOKEN`. "Al Jaddaf" is on this project's own pronunciation list,
-    so a two-letter decoy token is one inventory edit away. Scored, `al` would
-    match most short words in an utterance well enough to clear the floor and
-    outweigh a single-token project match - suppressing exactly the mangled
-    names the policy exists to catch."""
+def test_a_two_letter_name_token_never_becomes_a_key():
+    """`_MIN_TOKEN`. A short word in a project name would become that
+    project's standalone short-form key and then match the same short word
+    anywhere: "Binghatti On Park" makes `on` a key, and "what is on the
+    plan?" an exact, CONFIDENT mention of it.
+
+    "Al Jaddaf" is already on this project's pronunciation list, so a
+    two-character token in the data is one inventory edit away rather than a
+    hypothetical.
+    """
     index = build_name_index(
-        [fixture_project("a", "Binghatti Skyrise", "Al Jaddaf")]
+        [
+            fixture_project("a", "Binghatti On Park", "Al Jaddaf"),
+            fixture_project("b", "Binghatti Circle", "Al Jaddaf"),
+        ]
     )
+    assert ("on",) not in [key for _, key in index.keys]
     assert ("al",) not in index.decoys
-    assert match_project_name("Bint Jbeil Sky Rise, all of them", index) is not None
+    for ordinary in (
+        "what is on the plan?",
+        "is parking included?",
+        "al fresco dining, is there any?",
+    ):
+        assert match_project_name(ordinary, index) is None, ordinary
+    # And the name itself is still heard, through the tokens that carry it.
+    assert match_project_name("Binghatti On Park", index) is not None
+
+
+def test_two_weakly_matching_words_are_not_a_name():
+    """`_FLOOR`, the multi-word floor.
+
+    `_MIN_EVIDENCE` demands that two of a name's words agree, and this demands
+    that they agree WELL. Two tokens scraping just over the per-token evidence
+    bar are still two near-misses, and an amenity question is full of ordinary
+    words that weakly resemble a name: "parking" scores 0.615 against `marina`
+    and "garden" 0.667 against `arcade`, which averages over 0.6 without
+    either being a match.
+
+    Today's four records cannot produce this pair, which is why the fixture
+    exists (never a new entry in data/inventory.json - AGENTS.md).
+    """
+    index = build_name_index(
+        [
+            fixture_project("a", "Binghatti Marina Arcade", "Business Bay"),
+            fixture_project("b", "Binghatti Circle", "Business Bay"),
+        ]
+    )
+    assert match_project_name("Is parking or a garden included?", index) is None
+    # The name itself is still heard.
+    assert match_project_name("Binghatti Marina Arcade", index) is not None

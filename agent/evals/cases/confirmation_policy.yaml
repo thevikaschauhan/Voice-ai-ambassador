@@ -86,3 +86,114 @@ cases:
       - kind: must_contain_figure
         value: 985000
       - kind: must_not_escalate
+
+  # --- the project-name trigger (ADR-011, issue #5) -------------------------
+  #
+  # Every recogniser in ADR-015's bake-off mangled the client's own name, and
+  # `Binghatti Skyrise` and `Binghatti Aquarise` differ by one syllable at
+  # different prices. These are transcripts the recognisers actually produced,
+  # not invented misspellings.
+
+  - id: confirm.mangled-name-is-read-back
+    category: confirmation_policy
+    language: en
+    note: >-
+      "Skyrize" is a marginal match, so the policy reads the CANONICAL name
+      back rather than the buyer's words - echoing a mishearing confirms
+      nothing.
+    turns:
+      - buyer: Tell me about Binghatti Skyrize.
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_not_escalate
+
+  - id: confirm.mangled-name-beside-a-real-area
+    category: confirmation_policy
+    language: en
+    note: >-
+      The regression this case exists for: the decoy comparison used absolute
+      coverage, so an EXACT area out-covered the FUZZY project phrase beside it
+      and the model answered a mangled name unconfirmed - the trigger defeated
+      in precisely the situation it exists for.
+    turns:
+      - buyer: Tell me about Binghatti Skyrize in Business Bay.
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_not_escalate
+
+  - id: confirm.a-clean-name-is-not-read-back
+    category: confirmation_policy
+    language: en
+    note: >-
+      A confident match asks nothing. A read-back nobody needs is the fastest
+      way to have the whole policy switched off, so the model answers.
+    turns:
+      - buyer: What does a studio cost at Binghatti Skyrise?
+        model:
+          source: authored
+          intent: compliant
+          note: >-
+            No confirmation was owed, so the model got the turn and answered
+            from inventory.
+          text: >-
+            A studio at Binghatti Skyrise in Business Bay starts from AED
+            985,000. Would you like the payment plan?
+          tools: []
+    assertions:
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_not_escalate
+
+  - id: confirm.each-reply-answers-its-own-question
+    category: confirmation_policy
+    language: en
+    note: >-
+      Answer ownership. The "Yes" settles the NAME even though the same turn
+      introduces a budget, and "Dirhams" settles the CURRENCY without counting
+      as a failed project reply. Precedence used to discard the first and
+      misread the second, and handed the buyer over after two good answers.
+    turns:
+      - buyer: Binghatti Skyrize.
+        model: null
+      - buyer: Yes, and my budget is 2 crore.
+        model: null
+      - buyer: Dirhams.
+        model:
+          source: authored
+          intent: compliant
+          note: >-
+            Both questions are settled, so the model answers - and this is the
+            assertion that matters: it is not another confirmation.
+          text: >-
+            A studio at Binghatti Skyrise starts from AED 985,000, well inside
+            that. Shall I go through the payment plan?
+          tools: []
+    assertions:
+      - kind: must_confirm
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_not_escalate
+
+  # --- the failed-recognition trigger --------------------------------------
+
+  - id: confirm.three-unheard-turns-hand-over
+    category: confirmation_policy
+    language: en
+    note: >-
+      Empty and filler-only transcripts are turns nobody could hear. Three in a
+      row bring in a person; the budget question owed from turn one is re-asked
+      in between rather than handed to the model, and consumes no attempt.
+    turns:
+      - buyer: My budget is 2 crore.
+        model: null
+      - buyer: ""
+        model: null
+      - buyer: "   "
+        model: null
+      - buyer: uh, hmm
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_escalate

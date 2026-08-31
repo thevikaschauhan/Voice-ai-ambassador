@@ -96,7 +96,12 @@ class ModelFixture(BaseModel):
 
 
 class Turn(BaseModel):
-    buyer: str = Field(min_length=1)
+    # Deliberately allowed to be empty, and that is not a loosened validation.
+    # ADR-011's third trigger counts turns nobody could hear, and the commonest
+    # shape of one is a transcript with nothing in it: a `min_length=1` here
+    # made the primary case of a shipped behaviour inexpressible, so the eval
+    # would have had to test around it.
+    buyer: str = ""
     # Absent only for a turn the deterministic budget policy is expected to
     # take from the model (ADR-011). If the policy does NOT take it, the runner
     # fails the case loudly rather than quietly skipping the model call - a
