@@ -16,7 +16,7 @@
  * does not populate them - the meter says "not measured" and means it.
  */
 
-import type { SessionInput } from '@/lib/session/events'
+import type { AuthoredInput } from '@/lib/session/events'
 import type { LeadBrief } from '@/lib/types'
 import type { ReplayStep } from './types'
 
@@ -24,14 +24,14 @@ export const MODEL = 'qwen/qwen3.7-flash'
 export const INVENTORY_VERSION = 'inventory.json@VERIFY-placeholder'
 
 /** Build steps from `[delayMs, input]` pairs. */
-export function steps(...pairs: [number, SessionInput][]): ReplayStep[] {
+export function steps(...pairs: [number, AuthoredInput][]): ReplayStep[] {
   return pairs.map(([after, input]) => ({ after, input }))
 }
 
 export function sessionStart(
   promptMode: 'ambassador' | 'naive',
   guardrailMode: 'enforce' | 'warn',
-): SessionInput {
+): AuthoredInput {
   return {
     event: 'session_start',
     session: `replay-${promptMode}-${guardrailMode}`,
@@ -44,7 +44,7 @@ export function sessionStart(
 }
 
 /** Fixed copy from data/disclosures.yaml, never model-generated (ADR-013). */
-export const DISCLOSURE: SessionInput = {
+export const DISCLOSURE: AuthoredInput = {
   event: 'disclosure',
   language: 'en',
   spoken_language: 'en',
@@ -53,7 +53,7 @@ export const DISCLOSURE: SessionInput = {
     'You are speaking with an AI ambassador for Binghatti. This call is transcribed, not recorded.',
 }
 
-export function usage(turn: number, completion: number): SessionInput {
+export function usage(turn: number, completion: number): AuthoredInput {
   return {
     event: 'llm_usage',
     turn,
@@ -68,7 +68,7 @@ export function usage(turn: number, completion: number): SessionInput {
   }
 }
 
-export function brief(turn: number, patch: Partial<LeadBrief>): SessionInput {
+export function brief(turn: number, patch: Partial<LeadBrief>): AuthoredInput {
   return {
     event: 'brief',
     turn,
@@ -88,17 +88,17 @@ export function brief(turn: number, patch: Partial<LeadBrief>): SessionInput {
   }
 }
 
-export function agentSpeaks(on: boolean): SessionInput {
+export function agentSpeaks(on: boolean): AuthoredInput {
   return { signal: 'agent_speaking', on }
 }
 
-export function buyerSpeaks(on: boolean): SessionInput {
+export function buyerSpeaks(on: boolean): AuthoredInput {
   return { signal: 'buyer_speaking', on }
 }
 
 /** A short burst of waveform levels, deterministic so replays are repeatable. */
-export function levels(count: number, seed: number): [number, SessionInput][] {
-  const out: [number, SessionInput][] = []
+export function levels(count: number, seed: number): [number, AuthoredInput][] {
+  const out: [number, AuthoredInput][] = []
   let x = seed
   for (let i = 0; i < count; i += 1) {
     x = (x * 1103515245 + 12345) % 2147483648

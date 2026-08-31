@@ -48,6 +48,19 @@ export type AgentEvent = Base &
         text?: string
       }
     | { event: 'user_turn'; turn: number; text: string }
+    /**
+     * The framework's own end-of-utterance measurement (#21). `stt_ms` is a
+     * component of `endpoint_ms`, and `after_transcript_ms` is the difference:
+     * what the turn detector spent waiting once the words were in hand.
+     */
+    | {
+        event: 'endpointing'
+        turn: number
+        endpoint_ms: number | null
+        stt_ms: number | null
+        after_transcript_ms: number | null
+        turn_committed_ms: number | null
+      }
     | {
         event: 'guardrail'
         turn: number
@@ -114,10 +127,21 @@ export type AgentEvent = Base &
         ms: number
         since_first_sentence_ms: number | null
       }
+    /** Did this turn's audio come off a pooled socket, or wait for a handshake? */
+    | {
+        event: 'tts_connection'
+        turn: number | null
+        reused: boolean
+        connect_ms: number | null
+        pooled: number
+      }
+    | { event: 'tts_pool_reprewarm'; turn: number; outcome: string }
     | { event: 'interrupted'; turn: number }
     | {
         event: 'turn_complete'
         turn: number
+        endpoint_ms: number | null
+        stt_ms: number | null
         llm_ttft_ms: number | null
         llm_first_sentence_ms: number | null
         guardrail_ms: number | null
@@ -157,7 +181,19 @@ export type TransportSignal =
   /** Normalised 0-1 levels for the waveform, newest last. */
   | { signal: 'level'; value: number }
 
+/**
+ * What arrives from a source. The unknown arm belongs HERE and only here: it
+ * describes what a bridge may hand us, not what we author.
+ */
 export type SessionInput = AnyAgentEvent | TransportSignal
+
+/**
+ * What this repository writes: replay fixtures, designed states, the text-mode
+ * core. Closed on purpose - typing authored events as `SessionInput` lets a
+ * fixture with a missing or misspelled field match the unknown arm, type
+ * clean, and then fold as a no-op at runtime, which is a silently dead fixture.
+ */
+export type AuthoredInput = AgentEvent | TransportSignal
 
 export function isTransportSignal(input: SessionInput): input is TransportSignal {
   return 'signal' in input

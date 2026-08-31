@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TextMode } from '@/components/text-mode'
@@ -34,11 +34,10 @@ function routeFetch(): typeof fetch {
 }
 
 async function ask(question: string) {
-  const input = screen.getByLabelText('Message the ambassador')
-  await act(async () => {
-    await userEvent.type(input, question)
-    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
-  })
+  // userEvent wraps its own act(); wrapping it again is what produced the
+  // "testing environment is not configured to support act(...)" noise.
+  await userEvent.type(screen.getByLabelText('Message the ambassador'), question)
+  await userEvent.click(screen.getByRole('button', { name: 'Send' }))
 }
 
 beforeEach(() => {
@@ -107,6 +106,22 @@ describe('text mode', () => {
       within(transcript).getByText(/I do not want to tell you something I cannot confirm/),
     ).toBeInTheDocument()
     expect(within(transcript).queryByText(/AED/)).not.toBeInTheDocument()
+  })
+
+  it('says endpointing was not measured rather than showing it as zero', async () => {
+    vi.stubGlobal('fetch', routeFetch())
+    await ask('what does the Skyrise start at')
+
+    // A typed turn has no end-of-utterance to measure. events.py's rule is
+    // that a missing measurement and a zero-latency stage must not look the
+    // same, so this must read "not measured" and never "0 ms".
+    const meter = screen.getByLabelText('Latency')
+    expect(within(meter).getByText('Endpointing, speech to text')).toBeInTheDocument()
+    expect(within(meter).getAllByText('not measured').length).toBeGreaterThan(0)
+    expect(within(meter).queryByText('0 ms')).not.toBeInTheDocument()
+    expect(
+      within(meter).getByText(/Endpointing was not measured on this turn/),
+    ).toBeInTheDocument()
   })
 
   it('never ends a turn in silence when the core cannot be reached', async () => {

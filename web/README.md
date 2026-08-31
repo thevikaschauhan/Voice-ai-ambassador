@@ -18,6 +18,14 @@ npm run build
 `data/inventory.json` and `data/disclosures.yaml` are read from the repo root at
 request time, so the dev server must be started from inside `web/`.
 
+**The `next` scripts pin `NODE_ENV` and that is load-bearing.** `next build` is
+a production build by definition, and inheriting a non-production `NODE_ENV`
+(some agent shells export `NODE_ENV=development`) makes it prerender `/404` from
+the dev pages-router error component and fail with `<Html> should not be
+imported outside of pages/_document`. The error names a pages-router problem
+this app does not have, which is what makes it expensive to diagnose. Do not
+remove the prefixes.
+
 ## What is here
 
 | Route | What it is |
@@ -53,6 +61,11 @@ Three rules the code holds and the review should check:
 1. **Types are mirrored, not invented.** `lib/types.ts` mirrors
    `agent/src/ambassador/schemas.py`; `lib/session/events.ts` copies its field
    names from the `emit(...)` call sites in `agent/src/adapter/events.py`.
+   Two unions, deliberately: `SessionInput` carries the unknown arm because a
+   bridge may hand us an event type we have never seen, and `AuthoredInput` is
+   closed because fixtures and the text-mode core are written here - typing
+   those as `SessionInput` lets a missing field match the unknown arm, compile
+   clean, and fold as a no-op at runtime.
 2. **The surface reads in-process records, not the emitted stream.** That stream
    is redacted by design (validator 4) and carries no free text. Where a field
    is redacted on the way to stdout, this surface keeps it, and says so.
@@ -68,9 +81,17 @@ Three rules the code holds and the review should check:
   `tts_first_audio` are cumulative marks from turn start, not durations, so
   adding them would double-count. They are drawn on a timeline at their real
   offsets.
-- It does not draw a stage it did not measure. `Timings.endpoint` and
-  `Timings.stt` exist on the Python model but `TurnTracker.finish()` never
-  populates them, so they render as "not measured" rather than as zero.
+- It does not add `stt` to `endpoint`. The framework takes both from the same
+  anchor, so transcription is a **component** of the endpointing figure (#21).
+  They are drawn nested; summing them would invent a stage that does not exist.
+- It does not draw a stage it did not measure. A typed turn has no
+  end-of-utterance, and the framework reports nothing when its VAD anchors are
+  missing, so those turns say "not measured" rather than showing a zero. Text
+  mode is where that path is exercised.
+- Voice-to-voice first audio is `endpoint + tts_first_audio`, not
+  `tts_first_audio`. Endpointing happens before the turn tracker's clock
+  starts, so leaving it out understates the buyer's wait by up to half a
+  second.
 - Number grouping is pinned to one locale. `toLocaleString()` with no locale
   follows the viewer, and under an Indian locale AED 2,000,000 renders as
   20,00,000 - the exact lakh/crore confusion docs/04- treats as a 10x hazard.

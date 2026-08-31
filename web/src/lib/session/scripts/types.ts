@@ -1,10 +1,10 @@
 import type { GuardrailMode, PromptMode } from '@/lib/types'
-import type { SessionInput } from '@/lib/session/events'
+import type { AuthoredInput } from '@/lib/session/events'
 
 /** `after` is the delay in milliseconds from the previous step. */
 export interface ReplayStep {
   after: number
-  input: SessionInput
+  input: AuthoredInput
 }
 
 export interface ReplayScript {

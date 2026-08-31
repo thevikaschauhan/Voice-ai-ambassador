@@ -149,22 +149,57 @@ describe('the demo path, ambassador prompt with the guardrail enforcing', () => 
     ).toBeGreaterThan(0)
   })
 
-  it('reports the guardrail cost against the turn, and says what it did not measure', async () => {
+  it('reports the guardrail cost against the whole wait, endpointing included', async () => {
     renderSurface()
     await startCall()
     await play(WHOLE_CALL)
 
     const meter = screen.getByLabelText('Latency')
-    expect(within(meter).getByText(/Every sentence on this turn was inspected in/)).toBeInTheDocument()
+    expect(
+      within(meter).getByText(/Every sentence on this turn was inspected in/),
+    ).toBeInTheDocument()
     expect(
       within(meter).getByText(/The model dominates the budget, not the safety layer/),
     ).toBeInTheDocument()
+  })
 
-    // events.py's rule, applied to the panel it was written for: an unobserved
-    // stage must not look like a zero-latency one.
-    expect(within(meter).getByText('Endpointing, speech to text')).toBeInTheDocument()
-    expect(within(meter).getAllByText('not measured').length).toBeGreaterThan(0)
-    expect(within(meter).queryByText('0 ms')).not.toBeInTheDocument()
+  it('counts endpointing into the wait, and never adds transcription to it', async () => {
+    renderSurface()
+    await startCall()
+    await play(WHOLE_CALL)
+
+    const meter = screen.getByLabelText('Latency')
+
+    // Turn 4's own numbers, from the fixture: endpointing 447.1, of which
+    // transcription 300.8, and TTS first audio at 1011.5 from the turn clock.
+    expect(within(meter).getByText('Endpointing')).toBeInTheDocument()
+    expect(within(meter).getByText('of which, transcription')).toBeInTheDocument()
+    expect(within(meter).getByText('of which, detector wait')).toBeInTheDocument()
+
+    // Endpointing happens before the turn clock starts, so it is added back:
+    // 447.1 + 1011.5 = 1,459 ms. It appears twice, as this turn's headline and
+    // as the session p50, which is the same turn.
+    expect(within(meter).getAllByText('1,459 ms').length).toBeGreaterThan(0)
+    expect(
+      within(meter).getByText(/Endpointing included: it happens before the turn clock/),
+    ).toBeInTheDocument()
+
+    // Transcription is a component of endpointing, taken from the same anchor.
+    // Summing the two would report 1,759 ms, a stage that does not exist.
+    expect(within(meter).queryByText('1,759 ms')).not.toBeInTheDocument()
+  })
+
+  it('names a pooled TTS socket on the turn after a barge-in', async () => {
+    renderSurface()
+    await startCall()
+    await play(WHOLE_CALL)
+
+    // Turn 4 follows turn 3's barge-in. `reused: true` here is issue #18's fix.
+    expect(
+      within(screen.getByLabelText('Latency')).getByText(
+        /Audio came off a pooled socket/,
+      ),
+    ).toBeInTheDocument()
   })
 
   it('offers only the languages that have native-authored disclosure copy', () => {

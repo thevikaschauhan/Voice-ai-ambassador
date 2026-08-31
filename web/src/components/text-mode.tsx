@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useReducer, useRef, useState } from 'react'
 import { AmbassadorView } from '@/components/ambassador-view'
+import { LatencyMeter } from '@/components/latency-meter'
 import { TranscriptRail } from '@/components/transcript-rail'
 import type { AgentEvent } from '@/lib/session/events'
 import { initialState, reduce } from '@/lib/session/state'
@@ -70,7 +71,9 @@ export function TextMode({ projects }: { projects: readonly Project[] }) {
           </h1>
           <p className="mt-1.5 max-w-[74ch] text-[12px] leading-relaxed text-ink-500">
             The same core, demonstrated as chat. This is the plan for a venue where the
-            audio fails. Every sentence still passes the guardrail before it is shown.
+            audio fails. Every sentence still passes the guardrail before it is shown,
+            and the stages that only exist on the voice path report themselves missing
+            rather than reporting a zero.
           </p>
         </div>
         <Link className="text-[12px] text-ink-400 hover:text-brass-400" href="/">
@@ -117,7 +120,13 @@ export function TextMode({ projects }: { projects: readonly Project[] }) {
             </button>
           </form>
         </div>
-        <AmbassadorView state={state} projects={projects} />
+        <div className="flex flex-col gap-6">
+          <AmbassadorView state={state} projects={projects} />
+          {/* The tech lead is still in the room when the audio has failed, and
+              this is where the meter's "not measured" rendering earns itself:
+              a typed turn has no end-of-utterance and no synthesis. */}
+          <LatencyMeter turns={state.turns} />
+        </div>
       </div>
     </main>
   )

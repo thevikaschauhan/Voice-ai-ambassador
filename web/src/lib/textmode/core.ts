@@ -200,6 +200,10 @@ export function replayTextCore(): TextCore {
       events.push({
         event: 'turn_complete',
         turn: turnIndex,
+        // A typed turn has no end-of-utterance to measure, so these are null
+        // rather than zero. The meter says "not measured" and means it.
+        endpoint_ms: null,
+        stt_ms: null,
         llm_ttft_ms: 664.1,
         llm_first_sentence_ms: 908.7,
         guardrail_ms: Number(guardrailTotal.toFixed(2)),

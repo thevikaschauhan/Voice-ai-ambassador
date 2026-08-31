@@ -44,6 +44,13 @@ export interface ComposedSpeech {
   reason?: string
 }
 
+export interface TtsConnection {
+  /** false means the buyer waited for a TCP + TLS + WebSocket handshake. */
+  reused: boolean
+  connectMs: number | null
+  pooled: number
+}
+
 export interface Usage {
   promptTokens: number | null
   cachedTokens: number | null
@@ -66,6 +73,13 @@ export interface TurnView {
    * the mirror rather than inside it stops the two drifting.
    */
   ttftMs: number | null
+  /**
+   * `endpoint - stt`: what the turn detector spent waiting once the words were
+   * already in hand, and the only part of the endpointing budget that
+   * optimising the detector could recover. Not a stage of its own.
+   */
+  afterTranscriptMs: number | null
+  ttsConnection: TtsConnection | null
   actions: string[]
   regenerated: boolean
   interrupted: boolean
@@ -160,6 +174,8 @@ function newTurn(turnIndex: number): TurnView {
     spokenChunks: [],
     timings: emptyTimings(),
     ttftMs: null,
+    afterTranscriptMs: null,
+    ttsConnection: null,
     actions: [],
     regenerated: false,
     interrupted: false,
@@ -254,6 +270,28 @@ function reduceAgentEvent(state: SessionState, event: AgentEvent): SessionState 
           guardrail: round2((turn.timings.guardrail ?? 0) + event.ms),
         }
         if (event.spoken !== null) speak(turn, event.spoken)
+      })
+
+    case 'endpointing':
+      return withTurn(state, event.turn, (turn) => {
+        // stt is a COMPONENT of endpoint, taken from the same anchor, so the
+        // two are stored side by side and never summed.
+        turn.timings = {
+          ...turn.timings,
+          endpoint: event.endpoint_ms,
+          stt: event.stt_ms,
+        }
+        turn.afterTranscriptMs = event.after_transcript_ms
+      })
+
+    case 'tts_connection':
+      if (event.turn === null) return state
+      return withTurn(state, event.turn, (turn) => {
+        turn.ttsConnection = {
+          reused: event.reused,
+          connectMs: event.connect_ms,
+          pooled: event.pooled,
+        }
       })
 
     case 'llm_ttft':
@@ -352,10 +390,12 @@ function reduceAgentEvent(state: SessionState, event: AgentEvent): SessionState 
         turn.actions = event.actions.length > 0 ? event.actions : turn.actions
         turn.ttftMs = event.llm_ttft_ms
         turn.timings = {
-          // Never populated by TurnTracker.finish() today, so they stay null
-          // and the meter says "not measured" rather than showing a zero.
-          endpoint: turn.timings.endpoint,
-          stt: turn.timings.stt,
+          // `endpointing` normally arrives first and carries the same numbers;
+          // taking the sealed record's view keeps the two consistent, and a
+          // turn with no end-of-utterance (a typed one) stays null rather than
+          // showing a zero.
+          endpoint: event.endpoint_ms,
+          stt: event.stt_ms,
           llm_first_sentence: event.llm_first_sentence_ms,
           guardrail: event.guardrail_ms,
           tts_first_audio: event.tts_first_audio_ms,

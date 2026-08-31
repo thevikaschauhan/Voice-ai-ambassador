@@ -7,7 +7,7 @@
  * lands on an unrecorded state is a hole someone will click into on the day.
  */
 
-import type { SessionInput } from '@/lib/session/events'
+import type { AuthoredInput } from '@/lib/session/events'
 import {
   DISCLOSURE,
   agentSpeaks,
@@ -50,6 +50,17 @@ const ambassadorEnforce: ReplayScript = {
         text: 'I am looking to invest in Dubai. My budget is around two million.',
       },
     ],
+    [
+      30,
+      {
+        event: 'endpointing',
+        turn: 1,
+        endpoint_ms: 402.0,
+        stt_ms: 271.4,
+        after_transcript_ms: 130.6,
+        turn_committed_ms: 408.2,
+      },
+    ],
     [80, buyerSpeaks(false)],
     [
       140,
@@ -77,6 +88,8 @@ const ambassadorEnforce: ReplayScript = {
       {
         event: 'turn_complete',
         turn: 1,
+        endpoint_ms: 402.0,
+        stt_ms: 271.4,
         llm_ttft_ms: null,
         llm_first_sentence_ms: null,
         guardrail_ms: null,
@@ -97,6 +110,17 @@ const ambassadorEnforce: ReplayScript = {
     [900, buyerSpeaks(true)],
     ...levels(6, 51),
     [100, { event: 'user_turn', turn: 2, text: 'In dirhams.' }],
+    [
+      30,
+      {
+        event: 'endpointing',
+        turn: 2,
+        endpoint_ms: 430.2,
+        stt_ms: 287.1,
+        after_transcript_ms: 143.1,
+        turn_committed_ms: 436.4,
+      },
+    ],
     [60, buyerSpeaks(false)],
     [90, { event: 'budget_settled', turn: 2, currency: 'AED' }],
     [
@@ -189,6 +213,16 @@ const ambassadorEnforce: ReplayScript = {
         since_first_sentence_ms: 138.9,
       },
     ],
+    [
+      20,
+      {
+        event: 'tts_connection',
+        turn: 2,
+        reused: false,
+        connect_ms: 142.3,
+        pooled: 0,
+      },
+    ],
     [40, usage(2, 74)],
     ...levels(14, 83),
     [
@@ -205,6 +239,8 @@ const ambassadorEnforce: ReplayScript = {
       {
         event: 'turn_complete',
         turn: 2,
+        endpoint_ms: 430.2,
+        stt_ms: 287.1,
         llm_ttft_ms: 688.4,
         llm_first_sentence_ms: 939.7,
         guardrail_ms: 1.21,
@@ -230,6 +266,17 @@ const ambassadorEnforce: ReplayScript = {
         event: 'user_turn',
         turn: 3,
         text: 'What would I pay upfront on the Skyrise?',
+      },
+    ],
+    [
+      30,
+      {
+        event: 'endpointing',
+        turn: 3,
+        endpoint_ms: 388.5,
+        stt_ms: 264.3,
+        after_transcript_ms: 124.2,
+        turn_committed_ms: 394.7,
       },
     ],
     [70, buyerSpeaks(false)],
@@ -264,6 +311,16 @@ const ambassadorEnforce: ReplayScript = {
         since_first_sentence_ms: 111.2,
       },
     ],
+    [
+      20,
+      {
+        event: 'tts_connection',
+        turn: 3,
+        reused: true,
+        connect_ms: null,
+        pooled: 1,
+      },
+    ],
     ...levels(8, 113),
     [
       200,
@@ -285,12 +342,15 @@ const ambassadorEnforce: ReplayScript = {
     [40, usage(3, 41)],
     [180, buyerSpeaks(true)],
     [20, { event: 'interrupted', turn: 3 }],
+    [30, { event: 'tts_pool_reprewarm', turn: 3, outcome: 'reprewarmed' }],
     [60, agentSpeaks(false)],
     [
       80,
       {
         event: 'turn_complete',
         turn: 3,
+        endpoint_ms: 388.5,
+        stt_ms: 264.3,
         llm_ttft_ms: 641.2,
         llm_first_sentence_ms: 901.6,
         guardrail_ms: 0.56,
@@ -314,6 +374,17 @@ const ambassadorEnforce: ReplayScript = {
         event: 'user_turn',
         turn: 4,
         text: 'And what do the Bugatti Residences go for?',
+      },
+    ],
+    [
+      30,
+      {
+        event: 'endpointing',
+        turn: 4,
+        endpoint_ms: 447.1,
+        stt_ms: 300.8,
+        after_transcript_ms: 146.3,
+        turn_committed_ms: 453.3,
       },
     ],
     [80, buyerSpeaks(false)],
@@ -346,6 +417,16 @@ const ambassadorEnforce: ReplayScript = {
         turn: 4,
         ms: 1011.5,
         since_first_sentence_ms: 104.7,
+      },
+    ],
+    [
+      20,
+      {
+        event: 'tts_connection',
+        turn: 4,
+        reused: true,
+        connect_ms: null,
+        pooled: 1,
       },
     ],
     ...levels(6, 149),
@@ -404,6 +485,8 @@ const ambassadorEnforce: ReplayScript = {
       {
         event: 'turn_complete',
         turn: 4,
+        endpoint_ms: 447.1,
+        stt_ms: 300.8,
         llm_ttft_ms: 703.8,
         llm_first_sentence_ms: 946.1,
         guardrail_ms: 0.46,
@@ -428,7 +511,7 @@ const ambassadorEnforce: ReplayScript = {
 // language appears in either naive script: AGENTS.md forbids writing it into
 // fixtures at all, and the numeric fabrication is the centrepiece anyway.
 
-const NAIVE_QUESTION: SessionInput = {
+const NAIVE_QUESTION: AuthoredInput = {
   event: 'user_turn',
   turn: 1,
   text: 'What does a two-bedroom at Bugatti Residences cost?',
@@ -446,6 +529,17 @@ const naiveWarn: ReplayScript = {
     [600, buyerSpeaks(true)],
     ...levels(12, 11),
     [120, NAIVE_QUESTION],
+    [
+      30,
+      {
+        event: 'endpointing',
+        turn: 1,
+        endpoint_ms: 415.6,
+        stt_ms: 279.2,
+        after_transcript_ms: 136.4,
+        turn_committed_ms: 421.8,
+      },
+    ],
     [70, buyerSpeaks(false)],
     [
       660,
@@ -504,6 +598,8 @@ const naiveWarn: ReplayScript = {
       {
         event: 'turn_complete',
         turn: 1,
+        endpoint_ms: 415.6,
+        stt_ms: 279.2,
         llm_ttft_ms: 662.9,
         llm_first_sentence_ms: 913.3,
         guardrail_ms: 0.67,
@@ -535,6 +631,17 @@ const naiveEnforce: ReplayScript = {
     [600, buyerSpeaks(true)],
     ...levels(12, 11),
     [120, NAIVE_QUESTION],
+    [
+      30,
+      {
+        event: 'endpointing',
+        turn: 1,
+        endpoint_ms: 421.3,
+        stt_ms: 283.7,
+        after_transcript_ms: 137.6,
+        turn_committed_ms: 427.5,
+      },
+    ],
     [70, buyerSpeaks(false)],
     [
       670,
@@ -633,6 +740,8 @@ const naiveEnforce: ReplayScript = {
       {
         event: 'turn_complete',
         turn: 1,
+        endpoint_ms: 421.3,
+        stt_ms: 283.7,
         llm_ttft_ms: 671.5,
         llm_first_sentence_ms: 921.8,
         guardrail_ms: 0.68,
@@ -664,6 +773,17 @@ const ambassadorWarn: ReplayScript = {
     [600, buyerSpeaks(true)],
     ...levels(12, 11),
     [120, NAIVE_QUESTION],
+    [
+      30,
+      {
+        event: 'endpointing',
+        turn: 1,
+        endpoint_ms: 409.8,
+        stt_ms: 276.5,
+        after_transcript_ms: 133.3,
+        turn_committed_ms: 416.0,
+      },
+    ],
     [70, buyerSpeaks(false)],
     [
       680,
@@ -726,6 +846,8 @@ const ambassadorWarn: ReplayScript = {
       {
         event: 'turn_complete',
         turn: 1,
+        endpoint_ms: 409.8,
+        stt_ms: 276.5,
         llm_ttft_ms: 679.3,
         llm_first_sentence_ms: 924.5,
         guardrail_ms: 0.25,

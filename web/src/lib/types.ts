@@ -121,8 +121,18 @@ export interface SpokenChunk {
  * such: events.py is explicit that "a missing measurement and a zero-latency
  * stage must not look the same on the meter".
  *
- * `endpoint` and `stt` exist on the Python model but `TurnTracker.finish()`
- * does not populate them today - see the seam note in the PR description.
+ * `endpoint` and `stt` are the framework's own end-of-utterance measurement,
+ * populated by `TurnTracker.record_endpointing` (#21). Two properties of them
+ * are load-bearing and easy to lose:
+ *
+ *   - `stt` is a COMPONENT of `endpoint`, taken from the same anchor. The two
+ *     must never be added together.
+ *   - both are measured BEFORE the tracker's clock starts, so voice-to-voice
+ *     first audio is `endpoint + tts_first_audio`, not `tts_first_audio`.
+ *
+ * They stay null on any turn the voice path did not produce: a typed turn has
+ * no endpoint, and the framework returns nothing when its VAD anchors are
+ * missing (the agent already reads a flattened 0.0 back as "not measured").
  */
 export interface Timings {
   endpoint: number | null
@@ -132,14 +142,6 @@ export interface Timings {
   tts_first_audio: number | null
   total: number | null
 }
-
-export const TIMING_STAGES = [
-  { key: 'endpoint', label: 'Endpointing' },
-  { key: 'stt', label: 'Speech to text' },
-  { key: 'llm_first_sentence', label: 'LLM first sentence' },
-  { key: 'guardrail', label: 'Guardrail validation' },
-  { key: 'tts_first_audio', label: 'TTS first audio' },
-] as const satisfies readonly { key: keyof Timings; label: string }[]
 
 export interface TurnRecord {
   session_id: string
@@ -175,6 +177,7 @@ export const KNOWN_EVENT_NAMES = [
   'session_error',
   'disclosure',
   'user_turn',
+  'endpointing',
   'guardrail',
   'regeneration',
   'bridge',
@@ -202,6 +205,8 @@ export const KNOWN_EVENT_NAMES = [
   'llm_usage',
   'llm_failure',
   'tts_first_audio',
+  'tts_connection',
+  'tts_pool_reprewarm',
   'interrupted',
   'turn_complete',
   'event_log_backpressure',

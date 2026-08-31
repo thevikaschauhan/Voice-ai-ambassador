@@ -1,4 +1,4 @@
-import type { SessionInput } from '@/lib/session/events'
+import type { AuthoredInput } from '@/lib/session/events'
 import { initialState, reduceAll } from '@/lib/session/state'
 import type { SessionState } from '@/lib/session/state'
 
@@ -17,11 +17,11 @@ export interface DesignedState {
   state: SessionState
 }
 
-function build(inputs: SessionInput[], overrides: Partial<SessionState> = {}): SessionState {
+function build(inputs: AuthoredInput[], overrides: Partial<SessionState> = {}): SessionState {
   return reduceAll(initialState({ connection: 'live', ...overrides }), inputs)
 }
 
-const ESCALATION: SessionInput[] = [
+const ESCALATION: AuthoredInput[] = [
   { event: 'user_turn', turn: 1, text: 'And what do the Bugatti Residences go for?' },
   {
     event: 'guardrail',
@@ -68,7 +68,7 @@ const ESCALATION: SessionInput[] = [
   },
 ]
 
-const BLOCKED: SessionInput[] = [
+const BLOCKED: AuthoredInput[] = [
   { event: 'user_turn', turn: 1, text: 'What does a two-bedroom at Bugatti Residences cost?' },
   {
     event: 'guardrail',
@@ -96,7 +96,7 @@ const BLOCKED: SessionInput[] = [
   },
 ]
 
-const WARNED: SessionInput[] = [
+const WARNED: AuthoredInput[] = [
   { event: 'user_turn', turn: 1, text: 'What does a two-bedroom at Bugatti Residences cost?' },
   {
     event: 'guardrail',
@@ -114,7 +114,7 @@ const WARNED: SessionInput[] = [
   },
 ]
 
-const BARGE_IN: SessionInput[] = [
+const BARGE_IN: AuthoredInput[] = [
   { event: 'user_turn', turn: 1, text: 'What would I pay upfront on the Skyrise?' },
   {
     event: 'guardrail',
@@ -133,7 +133,7 @@ const BARGE_IN: SessionInput[] = [
   { event: 'interrupted', turn: 1 },
 ]
 
-const UNRESOLVED: SessionInput[] = [
+const UNRESOLVED: AuthoredInput[] = [
   {
     event: 'brief',
     turn: 1,
