@@ -261,22 +261,16 @@ def test_the_policy_is_off_where_no_confirmation_copy_exists(harness):
     assert spoken(observed) == COPY.fallback["hi"]
 
 
-# --- the finding this harness surfaced ------------------------------------
+# --- the finding this harness surfaced, now fixed -------------------------
+#
+# Was a strict xfail: the composed fallback said "let me put you through to one
+# of our ambassadors" and nobody was put through, because `adapter/agent.py`
+# wired the fallback sink straight to `tracker.record_fallback`. It now goes
+# through `_speak_fallback`, which also calls `_route_to_human`. Kept as a plain
+# assertion, and the bridge's mirror case is asserted below it so the fix cannot
+# be widened into paging a human on every recovered sentence.
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING: the composed fallback says 'let me put you through to one of "
-        "our ambassadors' and nobody is put through. adapter/agent.py wires the "
-        "fallback sink to tracker.record_fallback, which appends a chunk and "
-        "emits an event; it never calls _route_to_human. data/fallbacks.yaml "
-        "describes that copy as 'the line that hands the buyer to a human', and "
-        "_route_to_human's own docstring names this exact anti-pattern. Not "
-        "fixed here: this harness does not change product behaviour to make its "
-        "rows green. Flip this to a plain assertion when the wiring lands."
-    ),
-)
 def test_the_fallback_hands_the_buyer_to_a_human(harness):
     backend = ScriptedBackend(
         ModelReply("Binghatti Sapphire Bay starts from AED 1,450,000."),
@@ -285,6 +279,22 @@ def test_the_fallback_hands_the_buyer_to_a_human(harness):
     observed = run_case(case("What is Sapphire Bay?"), harness, backend)
     assert "put you through" in spoken(observed)
     assert observed.escalated
+
+
+def test_the_bridge_hands_the_buyer_to_nobody(harness):
+    """The mirror. Audio has already played, so the blocked sentence gets a
+    bridge and the turn carries on - and that copy promises nothing, so routing
+    it would notify someone on every recovered sentence."""
+    backend = ScriptedBackend(
+        ModelReply(
+            "Binghatti Skyrise starts from AED 985,000. "
+            "Sapphire Bay starts from AED 1,450,000."
+        )
+    )
+    observed = run_case(case("Tell me about Skyrise."), harness, backend)
+    assert "be precise about that figure" in spoken(observed)
+    assert "put you through" not in spoken(observed)
+    assert not observed.escalated
 
 
 def test_a_year_followed_by_a_comma_is_blocked(harness):

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -591,7 +591,9 @@ class AmbassadorAgent(Agent):
             tool_choice=str(tool_choice),
         )
 
-        sink = _tracker_sink(tracker)
+        sink = _tracker_sink(
+            tracker, on_fallback=lambda text: self._speak_fallback(tracker, text)
+        )
         spoke_anything = False
         try:
             source = await open_stream()
@@ -647,7 +649,7 @@ class AmbassadorAgent(Agent):
         except AssertionError:  # pragma: no cover - a defect in the copy itself
             logger.warning("fallback copy failed its own guardrails", exc_info=True)
             composed = raw
-        tracker.record_fallback(composed, "llm_failure")
+        self._speak_fallback(tracker, composed, "llm_failure")
         return [composed if composed.endswith((" ", "\n")) else composed + " "]
 
     # -- TTS timing (the Fish first-byte measurement) ---------------------
@@ -704,6 +706,39 @@ class AmbassadorAgent(Agent):
             "An ambassador has been notified and will pick this up. "
             "Tell the buyer a colleague will confirm this directly."
         )
+
+    def _speak_fallback(
+        self, tracker: TurnTracker, text: str, reason: str = "guardrail"
+    ) -> None:
+        """Record the composed fallback AND actually notify a human.
+
+        `data/fallbacks.yaml` calls this copy "the line that hands the buyer to
+        a human" and the English text is "let me put you through to one of our
+        ambassadors". Recording the chunk and emitting the event is not putting
+        anyone through, which left the buyer waiting for a call nobody booked -
+        the anti-pattern `_route_to_human`'s own docstring names, found on this
+        path by the eval harness (F2) after PR #20's review found the same shape
+        on the budget policy's hands_over decision.
+
+        This is the one path where the model definitively did NOT escalate: the
+        fallback only speaks because the model's own output was unusable, either
+        blocked twice or never produced at all. So there is nothing else to
+        notify anybody, and the promise is the system's to keep.
+
+        The BRIDGE is deliberately not routed. Its copy ("let me be precise
+        about that figure rather than guess") promises nothing, the turn carries
+        on and the buyer still gets an answer; paging a human there would fire
+        on every recovered sentence. Route the lines that promise, and only
+        those - if the bridge copy is ever reworded to offer a colleague, it
+        joins this path.
+
+        A model that DID call `escalate_to_human` and then had its sentence
+        blocked twice routes twice, with different reasons. That is two real
+        decisions and the audit shows both; routing once too often is the safe
+        direction here, and routing zero times is the defect being fixed.
+        """
+        tracker.record_fallback(text, reason)
+        self._route_to_human(f"composed fallback: {reason}")
 
     def _route_to_human(self, reason: str) -> None:
         """Notify a human ambassador. The one escalation mechanism, shared by
@@ -867,7 +902,16 @@ class AmbassadorAgent(Agent):
         self.finalise_pending_turn()
 
 
-def _tracker_sink(tracker: TurnTracker | None) -> _Sink:
+def _tracker_sink(
+    tracker: TurnTracker | None, *, on_fallback: Callable[[str], None]
+) -> _Sink:
+    """Wire one turn's tracker into the interception hook's callbacks.
+
+    `on_fallback` is required rather than defaulted to
+    `tracker.record_fallback`: that default is exactly the defect eval F2 found
+    (the copy promises a human and records a chunk), and a default here would
+    let the routing be dropped by omission at a new call site.
+    """
     if tracker is None:
         return _Sink()
     return _Sink(
@@ -882,7 +926,7 @@ def _tracker_sink(tracker: TurnTracker | None) -> _Sink:
         on_first_sentence=tracker.mark_first_sentence,
         on_regeneration=tracker.record_regeneration,
         on_bridge=tracker.record_bridge,
-        on_fallback=tracker.record_fallback,
+        on_fallback=on_fallback,
     )
 
 

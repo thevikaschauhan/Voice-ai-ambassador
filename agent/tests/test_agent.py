@@ -48,7 +48,7 @@ from adapter.config import Settings  # noqa: E402
 from adapter.confirmations import ConfirmationCopy  # noqa: E402
 from adapter.disclosure import UncertifiedLanguageError  # noqa: E402
 from adapter.events import EventLog  # noqa: E402
-from adapter.interception import FALLBACK_COPY  # noqa: E402
+from adapter.interception import BRIDGE_COPY, FALLBACK_COPY  # noqa: E402
 from adapter.llm_openrouter import build_llm, clamp_retry_after  # noqa: E402
 
 FAKE_KEY = "test-key-not-a-real-credential"
@@ -1394,3 +1394,124 @@ async def test_metrics_that_are_not_end_of_utterance_are_left_alone():
     assert "endpointing" not in emitted
     assert agent.tracker is not None
     assert agent.tracker.endpoint is None
+
+
+# --- eval F2: the composed fallback promises a human ----------------------
+#
+# `data/fallbacks.yaml` describes the fallback as "the line that hands the
+# buyer to a human" and the copy says "let me put you through to one of our
+# ambassadors". Recording the chunk and emitting the event is not putting
+# anyone through, and this is the one path where the model definitively did NOT
+# call `escalate_to_human` - the fallback only speaks because the model's own
+# output was unusable. So nothing else notifies anybody, and the buyer waits for
+# a call that was never booked.
+#
+# Same anti-pattern class as PR #20's defect 2 on the budget policy's
+# hands_over path, and `_route_to_human`'s own docstring names it.
+#
+# The bridge is deliberately excluded: its copy ("let me be precise about that
+# figure rather than guess") promises nothing and the turn carries on.
+
+FABRICATED = "1,450,000"
+
+
+def escalations(buf: StringIO) -> list[dict[str, Any]]:
+    return [ln for ln in json_lines(buf) if ln["event"] == "escalation"]
+
+
+async def test_a_fallback_after_the_retry_is_spent_notifies_a_human():
+    """The eval row `unknown.en.fabricated-twice-reaches-the-fallback`, through
+    the shipping path rather than the harness twin: the model fabricates, is
+    told why, fabricates again, and the composed fallback becomes the reply."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"Binghatti Sapphire Bay starts from AED {FABRICATED}. "]),
+            HealthyStream([f"The price at Sapphire Bay is AED {FABRICATED}. "]),
+        ]
+    )
+
+    text = spoken(await run_llm_node(agent, user_ctx("What does Sapphire Bay cost?")))
+    assert FALLBACK_COPY["en"] in text
+    assert FABRICATED not in text
+
+    assert agent.tracker is not None
+    assert "escalate_to_human" in agent.tracker.actions
+
+    await log.aclose()
+    assert [e["routed_to"] for e in escalations(buf)] == ["human_ambassador"]
+
+
+async def test_an_llm_failure_fallback_notifies_a_human_too():
+    """The other route into the same copy. Both ends of `record_fallback` speak
+    the line that promises a human, so both have to book one."""
+    agent, log, buf, _ = make_agent([FailingStream([])])
+
+    assert FALLBACK_COPY["en"] in spoken(await run_llm_node(agent, user_ctx()))
+    assert agent.tracker is not None
+    assert "escalate_to_human" in agent.tracker.actions
+
+    await log.aclose()
+    assert len(escalations(buf)) == 1
+
+
+async def test_a_bridge_notifies_nobody():
+    """Audio has already played, the bridge replaces one sentence, and the turn
+    carries on. Its copy promises nothing, so paging a human here would notify
+    someone on every recovered sentence."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream(
+                [
+                    f"A studio at Skyrise is AED {GROUNDED}. ",
+                    f"Sapphire Bay is AED {FABRICATED}. ",
+                ]
+            )
+        ]
+    )
+
+    text = spoken(await run_llm_node(agent, user_ctx()))
+    assert BRIDGE_COPY["en"] in text
+    assert FALLBACK_COPY["en"] not in text
+
+    assert agent.tracker is not None
+    assert agent.tracker.actions == []
+
+    await log.aclose()
+    emitted = [ln["event"] for ln in json_lines(buf)]
+    assert "bridge" in emitted  # the recovery did happen
+    assert "escalation" not in emitted
+
+
+async def test_the_escalation_belongs_to_the_turn_that_fell_back():
+    """Multi-turn, because a per-session notification would credit every later
+    turn with an escalation it did not earn - and because the ambassador view
+    reads `actions` per turn."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay starts from AED {FABRICATED}. "]),
+            HealthyStream([f"Still AED {FABRICATED}. "]),
+            HealthyStream([f"A studio at Skyrise is AED {GROUNDED}. "]),
+        ]
+    )
+
+    first_ctx = user_ctx("What does Sapphire Bay cost?")
+    assert FALLBACK_COPY["en"] in spoken(await run_llm_node(agent, first_ctx))
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(first_ctx)
+    handle._mark_done()
+    await settle()
+
+    second_ctx = user_ctx("And a studio at Skyrise?")
+    second = spoken(await run_llm_node(agent, second_ctx))
+    assert GROUNDED.replace(",", "") not in second  # verbalised, not digits
+    assert FALLBACK_COPY["en"] not in second
+    handle2 = SpeechHandle.create()
+    agent.note_speech_handle(handle2)
+    agent.finish_turn(second_ctx)
+    handle2._mark_done()
+    await settle()
+
+    await log.aclose()
+    assert [r.actions for r in log.turns] == [["escalate_to_human"], []]
+    assert [e["turn"] for e in json_lines(buf) if e["event"] == "tool_call"] == [1]
