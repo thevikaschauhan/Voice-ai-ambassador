@@ -1,0 +1,94 @@
+@import 'tailwindcss';
+
+/*
+ * Binghatti sells restraint (AGENTS.md). Monochrome base, one metallic accent
+ * used sparingly, generous whitespace, no gradients, no pill buttons. If this
+ * starts looking like a generic SaaS dashboard, it is wrong.
+ *
+ * The accent is brass. It marks exactly three things: the live indicator, the
+ * current stage, and a focused control. It is never a background fill.
+ */
+
+@theme {
+  --color-ink-950: #0a0a0b;
+  --color-ink-900: #0e0e10;
+  --color-ink-850: #131316;
+  --color-ink-800: #1a1a1e;
+  --color-ink-700: #26262c;
+  --color-ink-600: #3a3a42;
+  --color-ink-500: #5c5c66;
+  --color-ink-400: #8a8a95;
+  --color-ink-300: #b4b4bd;
+  --color-ink-200: #d6d6dc;
+  --color-ink-100: #ebebee;
+
+  --color-brass-400: #d3b271;
+  --color-brass-500: #b6924f;
+  --color-brass-600: #8f7139;
+
+  /* Status is monochrome first; these are the only two chromatic exceptions,
+     and both exist because a guardrail decision must never be ambiguous. */
+  --color-flag-500: #c25b4a;
+  --color-flag-400: #d97f6d;
+  --color-warn-500: #a8853a;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  --radius-panel: 2px;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: var(--color-ink-950);
+  color: var(--color-ink-200);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Keyboard focus must be visible everywhere (definition of done). Pointer
+   focus is not decorated; keyboard focus always is. */
+:focus-visible {
+  outline: 2px solid var(--color-brass-400);
+  outline-offset: 2px;
+}
+
+/* Reduced motion is honoured by removing motion, not by shortening it. The
+   waveform freezes on its last measured levels rather than animating. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@keyframes pulse-live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.live-dot {
+  animation: pulse-live 2.4s ease-in-out infinite;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

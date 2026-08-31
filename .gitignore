@@ -9,6 +9,7 @@ dist/
 # Node (web/, day 4)
 node_modules/
 .next/
+*.tsbuildinfo
 
 # Env and secrets - keys live in Railway/Vercel env, never in the repo
 .env
