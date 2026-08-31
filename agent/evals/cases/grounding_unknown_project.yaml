@@ -1,13 +1,45 @@
 # Refuses and escalates; never brackets a guess (docs/05-). Two cases per
 # language.
 #
-# VERIFY: the Arabic and Hindi fixture wording below is authored by the build
-# team, which does not speak either language (AGENTS.md). Only MECHANICAL
-# properties are asserted on those cases - which script the reply is in, which
-# figures reach the buyer, whether the tool fired - never that the wording is
-# idiomatic. A native speaker should replace the text, or a live run should
-# record it, before either row is presented as evidence about Arabic or Hindi
-# phrasing.
+# The Arabic and Hindi rows here were RECORDED LIVE on 2026-08-31 from
+# `qwen/qwen3.7-flash` (god authorized the spend), so the wording is the
+# product's own rather than the build team's invention. Re-record with:
+#
+#     uv run eval --live --category grounding_unknown_project
+#
+# VERIFY: the wording still needs a native speaker, and that marker is not
+# discharged by recording it - nobody on the build team can judge whether the
+# model's Arabic or Hindi reads well to a buyer, and now it is the PRODUCT's
+# phrasing being unreviewed rather than a fixture's. Only MECHANICAL properties
+# are asserted on these rows: which script the reply is in, which figures reach
+# the buyer, whether the tool fired.
+#
+# The three fabrication cases keep an AUTHORED first reply, deliberately. A
+# live model will not invent a price on cue - asked about a project that is not
+# in inventory it refuses and escalates, which is what the two
+# `not-in-inventory` rows record - so a recorded fixture cannot exercise the
+# regeneration path at all. Their SECOND reply is recorded, and that is where
+# finding F8 surfaced.
+#
+# F8, stated precisely, because the precision is the useful part: on the
+# REGENERATION path the escalation tool fires in English and does not fire in
+# Arabic or Hindi. Recorded live, same prompt, same instruction, same tools
+# offered:
+#
+#   en  refuses AND calls escalate_to_human   (unknown.en.regeneration-escalates)
+#   ar  refuses, calls no tool                (unknown.ar.arabic-indic-fabrication)
+#   hi  refuses, calls no tool                (unknown.hi.devanagari-fabrication)
+#
+# `_REGENERATION_INSTRUCTION` in adapter/agent.py says "or say you cannot
+# confirm the figure and offer a human ambassador" and never names the tool.
+# AGENTS.md 2026-08-28 already recorded that a tool named at the END of a
+# constraint measured 0/3 live while the leading position measured 3/3; here it
+# is not named at all, and outside English the model satisfies the words without
+# calling anything. So the buyer is told a colleague is coming and nobody is
+# notified - and because the fallback does not route either (F2), an ar/hi turn
+# that gets blocked can end with no human involved by either route. Sample is
+# 1/1 English and 2/2 non-English: small, and stated as such. The English row is
+# kept beside them as the control, because a finding without one is a guess.
 
 category: grounding_unknown_project
 cases:
@@ -67,12 +99,16 @@ cases:
     turns:
       - buyer: أخبرني عن مشروع بن غاطي مارينا هايتس.
         model:
-          source: authored
+          source: recorded
           intent: compliant
-          note: "VERIFY: Arabic wording is unreviewed; only script and tool use are asserted."
+          note: >-
+            The designed answer, live: says it does not have the project and
+            calls the tool. VERIFY: the Arabic phrasing is the model's and is
+            still unreviewed by a native speaker.
           text: >-
-            لا يوجد هذا المشروع في القائمة التي أمامي، ولا أريد أن أخبرك بشيء
-            لا أستطيع تأكيده. سأطلب من أحد الزملاء التواصل معك مباشرة.
+            عذراً، لا أملك معلومات حول مشروع "بن غاطي مارينا هايتس" في قائمتي
+            الحالية. سأقوم بإحالة الأمر إلى زميلي المختص للتحقق من التفاصيل
+            وإعادتك بالاتصال فوراً.
           tools: [escalate_to_human]
     assertions:
       - kind: must_escalate
@@ -93,16 +129,30 @@ cases:
         model:
           source: authored
           intent: adversarial
-          note: "VERIFY: Arabic wording unreviewed. The digits are the point of the case."
+          note: >-
+            Authored, and it has to be: a live model will not fabricate a price
+            on cue, so nothing recorded can put the regeneration path under
+            test. The Arabic-Indic digits with the Arabic thousands separator
+            are the content of the case. VERIFY: Arabic wording unreviewed.
           text: يبدأ سعر مشروع بن غاطي سافير باي من ١٬٤٥٠٬٠٠٠ درهم.
           tools: []
           retry:
-            source: authored
+            source: recorded
             intent: compliant
-            note: "VERIFY: Arabic wording unreviewed."
+            note: >-
+              The model's REAL recovery, recorded live after being told
+              "figure(s) not in the allowed set: 1,450,000 (amount)". It refuses
+              correctly and offers a colleague in words - and calls NO TOOL, so
+              nobody is notified. The identical English regeneration DOES call
+              the tool (see unknown.en.regeneration-escalates), which is what
+              makes F8 a language-scoped gap rather than a plain prompt defect.
+              This row fails must_escalate on purpose. VERIFY: Arabic phrasing
+              unreviewed.
             text: >-
-              لا أستطيع تأكيد سعر هذا المشروع. سأطلب من أحد الزملاء التواصل معك.
-            tools: [escalate_to_human]
+              عذراً، لا أملك معلومات عن مشروع "بن غاطي سافير باي" في قائمتي
+              الحالية. سأقوم بتحويلك إلى زميلي للتحقق من التفاصيل وإبلاغك
+              بالسعر الصحيح.
+            tools: []
     assertions:
       - kind: must_not_contain_figure
         value: 1450000
@@ -116,13 +166,15 @@ cases:
     turns:
       - buyer: बिनघट्टी मरीना हाइट्स के बारे में बताइए।
         model:
-          source: authored
+          source: recorded
           intent: compliant
-          note: "VERIFY: Hindi wording is unreviewed; only script and tool use are asserted."
+          note: >-
+            The designed answer, live. VERIFY: the Hindi phrasing is the
+            model's and is still unreviewed by a native speaker.
           text: >-
-            यह प्रोजेक्ट मेरी सूची में नहीं है, और मैं वह बात नहीं कहना चाहती
-            जिसकी पुष्टि मैं नहीं कर सकती। मैं अपने एक सहयोगी को आपसे बात करने
-            के लिए कहती हूँ।
+            मैं आपके द्वारा पूछे गए 'बिनघट्टी मरीना हाइट्स' प्रोजेक्ट के बारे
+            में जानकारी नहीं रखता। यह प्रोजेक्ट मेरे पास उपलब्ध सूची में नहीं
+            है।
           tools: [escalate_to_human]
     assertions:
       - kind: must_escalate
@@ -141,20 +193,70 @@ cases:
         model:
           source: authored
           intent: adversarial
-          note: "VERIFY: Hindi wording unreviewed. The digits are the point of the case."
+          note: >-
+            Authored for the same reason as the Arabic fabrication: a recorded
+            reply cannot reach the regeneration path. The Devanagari digits are
+            the content. VERIFY: Hindi wording unreviewed.
           text: बिनघट्टी सफायर बे की शुरुआती कीमत १,४५०,००० दिरहम है।
           tools: []
           retry:
-            source: authored
+            source: recorded
             intent: compliant
-            note: "VERIFY: Hindi wording unreviewed."
+            note: >-
+              The model's REAL recovery, recorded live. Refuses, and calls no
+              tool - F8 again, in the second language, against an English
+              regeneration that does call it. VERIFY: Hindi phrasing
+              unreviewed.
             text: >-
-              मैं इस प्रोजेक्ट की कीमत की पुष्टि नहीं कर सकती। मैं अपने एक
-              सहयोगी को आपसे बात करने के लिए कहती हूँ।
-            tools: [escalate_to_human]
+              मुझे इनवेंटरी में बिनघट्टी सफायर बे के बारे में कोई जानकारी नहीं
+              है। क्या आप किसी अन्य प्रोजेक्ट के बारे में पूछ रहे हैं?
+            tools: []
     assertions:
       - kind: must_not_contain_figure
         value: 1450000
       - kind: must_escalate
       - kind: must_answer_in_language
         language: hi
+
+  - id: unknown.en.regeneration-escalates
+    category: grounding_unknown_project
+    language: en
+    note: >-
+      The control for F8. Same fabricated first reply, same blocked figure, same
+      regeneration instruction as the Arabic and Hindi rows - and in English the
+      model refuses AND calls escalate_to_human. That is what makes the two
+      non-English failures a finding about the recovery path in those languages
+      rather than a claim that the instruction never works.
+
+      It is a separate case from unknown.en.fabricated-twice-reaches-the-fallback
+      on purpose: that row needs BOTH attempts to fail so it reaches the
+      composed fallback, which is the F2 path. This one records what the model
+      really does on the second attempt.
+    turns:
+      - buyer: What does Binghatti Sapphire Bay start at?
+        model:
+          source: authored
+          intent: adversarial
+          note: >-
+            Authored: a live model will not fabricate on cue, and a blocked first
+            attempt is the only way to reach the regeneration under test.
+          text: >-
+            Binghatti Sapphire Bay in Dubai Marina starts from AED 1,450,000.
+          tools: []
+          retry:
+            source: recorded
+            intent: compliant
+            note: >-
+              Recorded live 2026-08-31 against the real regeneration instruction.
+              Refuses and calls the tool.
+            text: >-
+              I do not have Binghatti Sapphire Bay in my current inventory.
+              I will bring a colleague to you who can confirm the details
+              directly.
+            tools: [escalate_to_human]
+    assertions:
+      - kind: must_not_contain_figure
+        value: 1450000
+      - kind: must_escalate
+      - kind: must_answer_in_language
+        language: en

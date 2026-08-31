@@ -149,6 +149,36 @@ Regulatory, not stylistic. We block these in English already; the same promises 
 **return guarantees** - any promise that a return, yield, rental income or price rise is assured, or that an investment carries no risk.
 - [ ] Arabic phrasings:
 
+## 5b. What the agent actually says in Arabic today
+
+Everything above is copy WE wrote and can change. This is what the MODEL says, captured from live runs of the eval harness - so it is the only part of this packet that shows what a Arabic buyer really hears end to end. Nobody on our team can read it.
+
+Two things were observed in these replies and we cannot judge either. The agent keeps project names in Latin script mid-sentence ("Binghatti Skyrise"), and it writes figures in western digits ("985,000") rather than Arabic-Indic ones. Both may be exactly right for a Dubai buyer and both may be jarring. Tell us which.
+
+Buyer said: أخبرني عن مشروع بن غاطي مارينا هايتس.
+
+> عذراً، لا أملك معلومات حول مشروع "بن غاطي مارينا هايتس" في قائمتي الحالية. سأقوم بإحالة الأمر إلى زميلي المختص للتحقق من التفاصيل وإعادتك بالاتصال فوراً.
+
+- [ ] Reads naturally to a buyer, or here is what it should say:
+
+Buyer said: كم يبدأ سعر مشروع بن غاطي سافير باي؟
+
+> عذراً، لا أملك معلومات عن مشروع "بن غاطي سافير باي" في قائمتي الحالية. سأقوم بتحويلك إلى زميلي للتحقق من التفاصيل وإبلاغك بالسعر الصحيح.
+
+- [ ] Reads naturally to a buyer, or here is what it should say:
+
+Buyer said: أريد التحدث إلى شخص حقيقي.
+
+> سأقوم بإحالة طلبك إلى زميلي المختص، الذي سيتواصل معك مباشرة لتأكيد التفاصيل.
+
+- [ ] Reads naturally to a buyer, or here is what it should say:
+
+Buyer said: ما هو سعر الاستوديو في بن غاطي سكاي رايز؟
+
+> يبدأ سعر الوحدات في مشروع Binghatti Skyrise من 985,000 درهم إماراتي.
+
+- [ ] Reads naturally to a buyer, or here is what it should say:
+
 ## 6. Recordings (20 minutes, at the end)
 
 Say each line naturally, in your own dialect - Emirati, Egyptian, Levantine, whatever you actually speak. Please do NOT read these in Modern Standard Arabic: speech recognisers are strongest on MSA and nobody buys property in it, so recording MSA would test the one register that does not matter. Switch into English wherever you normally would.

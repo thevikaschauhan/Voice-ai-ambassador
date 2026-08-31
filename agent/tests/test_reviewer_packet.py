@@ -115,3 +115,97 @@ def test_an_unknown_language_is_refused(tmp_path):
         check=False,
     )
     assert result.returncode != 0
+
+
+# --- section 5b: the agent's own words ------------------------------------
+#
+# The rest of the packet reviews copy WE wrote. This section is the only place a
+# native speaker sees what the MODEL says, which is what a buyer actually hears
+# and what nobody on the build team can read.
+
+
+def test_it_shows_the_recorded_replies_for_that_language(arabic):
+    """Every recorded ar fixture has to reach the packet, or the reviewer
+    blesses a subset and the rest ships unread."""
+    sys.path.insert(0, str(AGENT_DIR / "src"))
+    from evals.cases import load_cases
+
+    expected = []
+    for case in load_cases():
+        if case.language != "ar":
+            continue
+        for turn in case.turns:
+            fixture = turn.model
+            while fixture is not None:
+                if fixture.source == "recorded" and fixture.text.strip():
+                    expected.append(" ".join(fixture.text.split()))
+                fixture = fixture.retry
+    assert expected, "no recorded Arabic fixtures - this test would pass vacuously"
+    for reply in expected:
+        assert reply in arabic
+
+
+def test_it_does_not_ask_a_reviewer_to_bless_our_invented_arabic(arabic):
+    """An authored fixture is text the build team made up to stand for a model
+    behaviour. A native speaker's time is the scarcest thing in the project and
+    must not go on copy no buyer will ever hear."""
+    sys.path.insert(0, str(AGENT_DIR / "src"))
+    from evals.cases import load_cases
+
+    authored = [
+        " ".join(f.text.split())
+        for case in load_cases()
+        if case.language == "ar"
+        for turn in case.turns
+        for f in _fixtures(turn.model)
+        if f.source == "authored" and f.text.strip()
+    ]
+    assert authored, "no authored Arabic fixtures - this test would pass vacuously"
+    section = arabic.split("## 5b")[1].split("## 6")[0]
+    for text in authored:
+        assert text not in section
+
+
+def _fixtures(fixture):
+    while fixture is not None:
+        yield fixture
+        fixture = fixture.retry
+
+
+def test_the_hindi_packet_asks_about_the_transliterated_currency():
+    """Recorded live: the model wrote AED as a Devanagari transliteration. It is
+    the product's own choice, not ours, so the only way it gets checked is by
+    asking - and a reviewer handed "does this read naturally?" and nothing else
+    will say yes."""
+    packet = generate("hi")
+    section = packet.split("## 5b")[1].split("## 6")[0]
+    assert "transliteration" in section
+    assert "एडीई" in section
+
+
+def test_each_language_is_asked_about_its_own_observations():
+    """The Arabic reply keeps Latin project names; the Hindi one transliterates
+    the currency. Asking each language the other's question wastes the session."""
+    assert "Latin script" in generate("ar").split("## 5b")[1]
+    assert "Latin script" not in generate("hi").split("## 5b")[1].split("## 6")[0]
+
+
+def test_a_language_with_nothing_recorded_says_so_rather_than_going_blank(
+    monkeypatch, capsys
+):
+    """An empty section reads as "nothing to review here". The truth would be
+    that nobody has recorded that language yet, which is itself the finding, and
+    a packet that hides it books a reviewer session against copy the product may
+    not even produce."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("reviewer_packet", TOOL)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    monkeypatch.setattr(module, "load_cases", lambda: [])
+    module.main("ar")
+    section = capsys.readouterr().out.split("## 5b")[1].split("## 6")[0]
+    assert "Nothing recorded yet" in section
+    assert "uv run eval --live" in section

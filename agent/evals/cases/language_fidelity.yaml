@@ -1,11 +1,24 @@
 # Answers in the asked language; Arabic digits handled (docs/05-). Graded at
 # 95%, not gated.
 #
-# VERIFY: the Arabic and Hindi fixture wording below is authored by the build
-# team, which speaks neither (AGENTS.md). The assertions are mechanical -
-# which script the reply is in, which figures reached the buyer - and never
-# that the phrasing is idiomatic. A native speaker replaces the text, or a live
-# run records it, before these rows are presented as evidence about phrasing.
+# Four of the six ar/hi rows were RECORDED LIVE on 2026-08-31 from
+# `qwen/qwen3.7-flash` (god authorized the spend). Re-record with:
+#
+#     uv run eval --live --category language_fidelity
+#
+# VERIFY: recording does NOT discharge the native-review marker. Nobody on the
+# build team can judge whether the model's Arabic or Hindi reads well to a
+# buyer; recording only moves the unreviewed phrasing from a fixture to the
+# product. The assertions stay mechanical - which script the reply is in, which
+# figures reached the buyer - and never claim the phrasing is idiomatic.
+#
+# The two digit-shape rows stay AUTHORED, and the live run is why. Asked for a
+# price in Arabic or Hindi the model answers with WESTERN digits ("985,000",
+# "650,000"), so a recorded fixture cannot exercise Arabic-Indic or Devanagari
+# normalisation at all - the thing those two rows exist to check. They are
+# constructed inputs on purpose, and that the live model does not produce them
+# is itself worth knowing: the normalisation is defence against a recogniser or
+# a model that someday does, not against today's.
 #
 # Worth knowing when reading these rows: verbalisation is authored for English
 # only (data/spoken-forms.yaml ar/hi are empty, VERIFY: day 3), so an Arabic or
@@ -67,7 +80,11 @@ cases:
         model:
           source: authored
           intent: compliant
-          note: "VERIFY: Arabic wording unreviewed. The digits are the point of the case."
+          note: >-
+            Constructed, not recorded: verified live on 2026-08-31 that the
+            model answers this question with western digits, so only an authored
+            fixture can put Arabic-Indic normalisation under test. VERIFY:
+            Arabic wording unreviewed.
           text: يبدأ سعر الاستوديو في بن غاطي سكاي رايز من ٩٨٥٬٠٠٠ درهم.
           tools: []
     assertions:
@@ -83,10 +100,17 @@ cases:
     turns:
       - buyer: أريد التحدث إلى شخص حقيقي.
         model:
-          source: authored
+          source: recorded
           intent: compliant
-          note: "VERIFY: Arabic wording unreviewed; only script and tool use are asserted."
-          text: بكل تأكيد، سأطلب من أحد الزملاء التواصل معك الآن.
+          note: >-
+            Recorded live, and it took the harness's post-tool-call inference to
+            get it: the FIRST inference returned escalate_to_human with empty
+            content, because the framework hands a tool's return value back and
+            runs a second turn, and that second turn is what the buyer hears.
+            VERIFY: Arabic phrasing unreviewed.
+          text: >-
+            سأقوم بإحالة طلبك إلى زميلي المختص، الذي سيتواصل معك مباشرة لتأكيد
+            التفاصيل.
           tools: [escalate_to_human]
     assertions:
       - kind: must_answer_in_language
@@ -101,7 +125,11 @@ cases:
         model:
           source: authored
           intent: compliant
-          note: "VERIFY: Hindi wording unreviewed. The digits are the point of the case."
+          note: >-
+            Constructed for the same reason as the Arabic digit row: verified
+            live that the model answers with western digits, so only an authored
+            fixture exercises Devanagari normalisation. VERIFY: Hindi wording
+            unreviewed.
           text: बिनघट्टी सर्कल की शुरुआती कीमत ६५०,००० दिरहम है।
           tools: []
     assertions:
@@ -121,10 +149,14 @@ cases:
     turns:
       - buyer: बिनघट्टी सर्कल की हैंडओवर कब है?
         model:
-          source: authored
+          source: recorded
           intent: compliant
-          note: "VERIFY: Hindi wording unreviewed."
-          text: बिनघट्टी सर्कल की हैंडओवर Q3 2026 में है।
+          note: >-
+            Recorded live. Note it wrote the quarter as "Q3 2026" in a Hindi
+            reply, which is exactly the case's premise: the quarter surface form
+            is authored for English only, so the digits survive to TTS.
+            VERIFY: Hindi phrasing unreviewed.
+          text: बिनघट्टी सर्कल की हैंडओवर तिथि Q3 2026 है।
           tools: []
     assertions:
       - kind: must_answer_in_language
@@ -132,3 +164,58 @@ cases:
       - kind: must_contain_figure
         value: 2026
         figure_kind: year
+
+  - id: language.ar.price-question-recorded
+    category: language_fidelity
+    language: ar
+    note: >-
+      A price question in Arabic, answered live. Two things worth seeing: the
+      reply keeps the project name in Latin script, which is normal Dubai
+      register and why the script assertion asks for a MAJORITY of letters
+      rather than all of them; and the figure comes back in western digits,
+      which the guardrail reads and verbalisation leaves alone because ar has no
+      spoken forms yet (VERIFY: day 3).
+    turns:
+      - buyer: ما هو سعر الاستوديو في بن غاطي سكاي رايز؟
+        model:
+          source: recorded
+          intent: compliant
+          note: >-
+            Recorded live 2026-08-31. It also called offer_booking, which is not
+            an escalation - the case checks that the two are not conflated.
+            VERIFY: Arabic phrasing unreviewed.
+          text: >-
+            يبدأ سعر الوحدات في مشروع Binghatti Skyrise من 985,000 درهم إماراتي.
+          tools: [offer_booking]
+    assertions:
+      - kind: must_answer_in_language
+        language: ar
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_not_escalate
+
+  - id: language.hi.price-question-recorded
+    category: language_fidelity
+    language: hi
+    note: A price question in Hindi, answered live.
+    turns:
+      - buyer: बिनघट्टी सर्कल की शुरुआती कीमत क्या है?
+        model:
+          source: recorded
+          intent: compliant
+          note: >-
+            Recorded live 2026-08-31. It transliterated the currency as "एडीई"
+            rather than writing AED; hi carries no currency_tokens, so nothing
+            is consumed and nothing is spoken twice. VERIFY: Hindi phrasing
+            unreviewed, and the transliteration especially - a native speaker
+            should say whether a buyer would understand it.
+          text: >-
+            बिनघट्टी सर्कल की शुरुआती कीमत 650,000 एडीई से है। क्या आप इस
+            प्रोजेक्ट के बारे में अधिक जानना चाहेंगे?
+          tools: []
+    assertions:
+      - kind: must_answer_in_language
+        language: hi
+      - kind: must_contain_figure
+        value: 650000
+      - kind: must_not_escalate
