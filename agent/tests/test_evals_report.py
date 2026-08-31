@@ -280,6 +280,12 @@ cases:
         value: 985000
 """
 
+# A case the pipeline does not satisfy, so the CLI has a broken gate to report.
+# The unmet expectation is a figure that is simply not in the reply: nothing
+# about escalation, blocking or recovery, so this fixture keeps failing for one
+# stated reason whatever those paths do next. It asserted `must_escalate` on a
+# fabricate-twice reply until the composed fallback started notifying a human,
+# at which point the case passed and this test stopped testing anything.
 FAILING_CASE = """
 category: tiny
 cases:
@@ -287,19 +293,15 @@ cases:
     category: tiny
     language: en
     turns:
-      - buyer: What does Sapphire Bay cost?
+      - buyer: What does a studio at Skyrise cost?
         model:
           source: authored
-          intent: adversarial
-          note: Fabricated.
-          text: Binghatti Sapphire Bay starts from AED 1,450,000.
-          retry:
-            source: authored
-            intent: adversarial
-            note: Fabricated again.
-            text: The price is AED 1,450,000.
+          intent: compliant
+          note: An inventory figure, but not the one the case asks for.
+          text: Binghatti Skyrise starts from AED 985,000.
     assertions:
-      - kind: must_escalate
+      - kind: must_contain_figure
+        value: 1200000
 """
 
 

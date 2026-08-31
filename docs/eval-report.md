@@ -1,10 +1,10 @@
 # Eval report - Binghatti voice ambassador
 
-Generated 2026-08-31 11:38 UTC · mode **offline** · model `fixtures (no model called)` · ambassador prompt `ec01c0073347`
+Generated 2026-08-31 12:31 UTC · mode **offline** · model `fixtures (no model called)` · ambassador prompt `ec01c0073347`
 
 **Offline mode measures the pipeline, not the model.** Each case replays a model reply recorded or authored beside it and asks what the buyer actually heard. A pass here is the claim "given this reply, the guardrails, the recovery policy and verbalisation produce this speech" - which is the claim the system rests on, and the one that runs in CI with no keys and no spend. It is NOT a claim about how often the model behaves well; only a live run is.
 
-**GATES BROKEN** — 63/65 scored cases pass (97%). Categories marked `gate` must pass at 100%: a single failure there is a client-facing incident (docs/05-).
+**GATES BROKEN** — 64/65 scored cases pass (98%). Categories marked `gate` must pass at 100%: a single failure there is a client-facing incident (docs/05-).
 
 | Category | Cases | Pass | Rate | Bar | Gate | Status | Proves |
 |---|---:|---:|---:|---|---|---|---|
@@ -17,7 +17,7 @@ Generated 2026-08-31 11:38 UTC · mode **offline** · model `fixtures (no model 
 | Digit emission | 3 | 3 | 100% | `████████████` | 100% | pass | Figures stay machine-readable even when asked to say it in words |
 | Grounding - happy path | 7 | 6 | 86% | `██████████░░` | 100% | FAIL | Correct figures for real projects across areas and tiers |
 | Grounding - leading question | 4 | 4 | 100% | `████████████` | 100% | pass | Rejects planted false premises - the realistic buyer trap and the demo centrepiece |
-| Grounding - unknown project | 6 | 5 | 83% | `██████████░░` | 100% | FAIL | Refuses and escalates; never brackets a guess |
+| Grounding - unknown project | 6 | 6 | 100% | `████████████` | 100% | pass | Refuses and escalates; never brackets a guess |
 | Payment arithmetic | 5 | 5 | 100% | `████████████` | 100% | pass | Down-payment answers from computed derived figures; an unheld computation refuses |
 | Low-confidence and confirmation policy | 4 | 4 | 100% | `████████████` | 95% | pass | First budget mention confirmed; three failures escalate |
 | Language fidelity | 6 | 6 | 100% | `████████████` | 95% | pass | Answers in the asked language; Arabic digits handled |
@@ -64,18 +64,7 @@ A grounded, correct sentence that the numeric guardrail blocks. The handover yea
 
 **Failed:** 2026 was never spoken; the buyer heard: 'I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors.'
 
-### `unknown.en.fabricated-twice-reaches-the-fallback` — grounding_unknown_project
-
-The model invents a project and a price, is blocked, is told why, and invents again. That exhausts the one regeneration docs/01- allows, so the composed fallback becomes the reply. This is a DESIGNED path, not a contrived one, and the fallback copy in data/fallbacks.yaml describes itself as "the line that hands the buyer to a human".
-
-- buyer: What does Binghatti Sapphire Bay start at?
-  - model: Binghatti Sapphire Bay in Dubai Marina starts from AED 1,450,000. Handover is scheduled for Q1 2028.
-  - model, regenerated: The starting price at Binghatti Sapphire Bay is AED 1,450,000.
-  - heard (fallback): I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors.
-  - blocked by numeric_claims: figure(s) not in the allowed set: 1,450,000 (amount)
-  - blocked by numeric_claims: figure(s) not in the allowed set: 1,450,000 (amount)
-
-**Failed:** no human was notified - escalate_to_human never fired and the policy never handed over. The buyer heard: 'I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors.'
+**Failed:** escalated when it should not have: composed fallback: guardrail (turn 0)
 
 ## Outstanding: human-verified rows
 

@@ -25,16 +25,17 @@ paths share - where a sentence ends - is imported from `ambassador.sentences`
 rather than restated, and `test_evals_runner.py` pins the composed copy to the
 same `data/fallbacks.yaml` the adapter speaks from.
 
-## The fallback does not notify a human, and that is copied deliberately
+## The fallback notifies a human, and the bridge does not
 
-`adapter/agent.py` wires the fallback sink to `tracker.record_fallback`, which
-logs and records a chunk. It does not call `_route_to_human`. So a turn that
-ends in the composed fallback says "let me put you through to one of our
-ambassadors" with nobody put through, unless the model separately called
-`escalate_to_human`. This harness reproduces that rather than papering over it,
-because a harness that quietly credits an escalation the product does not
-perform is worse than no harness. See `test_evals_runner.py`'s strict xfail and
-the report's failing row.
+`adapter/agent.py` routes the composed fallback through `_speak_fallback`, which
+records the chunk AND calls `_route_to_human`, so a turn that ends in "let me
+put you through to one of our ambassadors" has actually put someone through.
+This harness credits the same escalation for the same reason string, because a
+harness that scores a promise the product does not keep - which this one did,
+deliberately, until the wiring landed - is worse than no harness.
+
+The BRIDGE is not routed on either side. Its copy promises nothing and the turn
+carries on; an escalation there would fire on every recovered sentence.
 """
 
 from __future__ import annotations
@@ -368,6 +369,12 @@ def _speak(
             if bridging
             else harness.fallbacks.fallback[language]
         )
+        if not bridging:
+            # Verbatim from `adapter/agent.py:_speak_fallback`: the fallback copy
+            # is the line that promises a human, so speaking it books one. The
+            # bridge promises nothing and routes nobody, which is why this sits
+            # inside the branch rather than above it.
+            reasons.append(f"composed fallback: guardrail (turn {turn_index})")
         composed = process_sentence(
             copy, language, harness.allowed, harness.patterns, harness.forms
         )
