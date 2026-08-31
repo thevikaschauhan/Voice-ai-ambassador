@@ -7,6 +7,13 @@ interface WaveformProps {
   active: boolean
   /** Whose audio the levels belong to, for the accessible label. */
   label: string
+  /**
+   * No audio track is attached, so there are no levels to draw and a flat
+   * trace would read as silence rather than as absence. Live sessions are in
+   * this state until the LiveKit room client lands: the event stream carries
+   * turns, not samples.
+   */
+  unavailable?: boolean
 }
 
 const BARS = 40
@@ -18,10 +25,24 @@ const BARS = 40
  * level reading rather than a faster version of the same movement - the
  * accommodation is the absence of motion, not less of it.
  */
-export function Waveform({ levels, active, label }: WaveformProps) {
+export function Waveform({ levels, active, label, unavailable = false }: WaveformProps) {
   const reduced = usePrefersReducedMotion()
   const recent = levels.slice(-BARS)
   const peak = recent.length === 0 ? 0 : Math.max(...recent)
+
+  if (unavailable) {
+    return (
+      <div
+        className="flex h-14 items-center border border-dashed border-ink-800 px-4"
+        role="img"
+        aria-label={`${label}: no audio track attached`}
+      >
+        <p className="text-[12px] leading-relaxed text-ink-500">
+          No audio track attached. The event stream carries turns, not samples.
+        </p>
+      </div>
+    )
+  }
 
   if (reduced) {
     return (

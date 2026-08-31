@@ -27,7 +27,7 @@ async function runCall() {
 
 beforeEach(() => {
   vi.useFakeTimers()
-  render(<DemoSurface projects={PROJECTS} languages={LANGUAGES} />)
+  render(<DemoSurface projects={PROJECTS} languages={LANGUAGES} live={false} />)
 })
 
 afterEach(() => {

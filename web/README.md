@@ -34,6 +34,7 @@ remove the prefixes.
 | `/text` | Text-mode fallback, the venue plan B (docs/01-, docs/07-) |
 | `/states` | Every designed escalation and failure state, side by side |
 | `/api/text-turn` | Where the text-mode core runs. The browser never calls a provider |
+| `/api/session/stream` | Re-serves the agent's live event stream, same-origin. Holds the token |
 
 Four panels, each earning its place with a different person in the room:
 
@@ -52,9 +53,24 @@ replay script  ─┐
 live source    ─┘   (lib/session/state.ts)
 ```
 
-One reducer, two sources. Milestone one ships the replay source; milestone two
-adds a live one (a LiveKit room for transport signals, an events bridge for
-agent events) behind the same `SessionSource` interface, and no panel changes.
+One reducer, two sources, and no panel knows which is running. The page decides
+on the server: if the agent left a handshake, the surface attaches to it;
+otherwise it plays a fixture and says so.
+
+```
+agent (127.0.0.1, token required)  ──►  this server (holds the token)
+                                   ──►  browser (same-origin, no token)
+```
+
+**The token stops at the server.** A token in a browser is a token in every page
+that shares it and in the devtools of anyone standing behind the laptop, so the
+credential is read from the agent's `0600` handshake file by `lib/bridge/`,
+which is `server-only`, and what crosses to the client is events. A test asserts
+the token appears in no response body; so does the browser check in the PR.
+
+**Provenance is on screen at all times.** `Live agent` or `Replay`, in the
+header, plus a sentence saying which and why. The one unrecoverable mistake this
+surface could make is letting somebody believe a fixture was a call.
 
 Three rules the code holds and the review should check:
 
@@ -95,6 +111,21 @@ Three rules the code holds and the review should check:
 - Number grouping is pinned to one locale. `toLocaleString()` with no locale
   follows the viewer, and under an Indian locale AED 2,000,000 renders as
   20,00,000 - the exact lakh/crore confusion docs/04- treats as a 10x hazard.
+
+## What the live path does not claim
+
+- **No audio track.** The event stream carries turns, not samples, so the
+  waveform says "no audio track attached" instead of drawing a flat trace that
+  would read as a silent microphone. Levels need the LiveKit room, which is a
+  separate piece of work.
+- **Speaking indicators are turn-level.** A turn is already transcribed when it
+  is emitted, so "buyer speaking" is known once they have stopped. Barge-in is
+  exact, because the agent audits the chunk it cut. The panel says so.
+- **The mode toggles are read-only against a running agent.** Both modes are
+  read once at session start by the agent process, so nothing here can change a
+  call already in flight. They report what the agent said it is running. A
+  control that looks live and does nothing is worse than one that says it
+  cannot.
 
 ## Design
 

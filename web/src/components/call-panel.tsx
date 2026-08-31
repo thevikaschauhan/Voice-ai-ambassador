@@ -1,6 +1,7 @@
 'use client'
 
 import { Panel } from '@/components/panel'
+import type { Provenance } from '@/lib/session/source'
 import { Waveform } from '@/components/waveform'
 import type { LanguageReadiness } from '@/lib/readiness'
 import type { SessionState } from '@/lib/session/state'
@@ -15,19 +16,33 @@ const LANGUAGE_NAMES: Record<Language, string> = {
 interface CallPanelProps {
   state: SessionState
   running: boolean
+  provenance: Provenance
   languages: readonly LanguageReadiness[]
   onStart: () => void
   onEnd: () => void
 }
 
-export function CallPanel({ state, running, languages, onStart, onEnd }: CallPanelProps) {
+export function CallPanel({
+  state,
+  running,
+  provenance,
+  languages,
+  onStart,
+  onEnd,
+}: CallPanelProps) {
+  const live = provenance === 'live'
   const speaking = state.buyerSpeaking || state.agentSpeaking
   const speaker = state.buyerSpeaking ? 'Buyer' : state.agentSpeaking ? 'Ambassador' : 'Nobody'
 
   return (
     <Panel title="Call" audience="Everyone" action={<ConnectionBadge state={state} />}>
       <div className="space-y-5">
-        <Waveform levels={state.levels} active={speaking} label={`${speaker} audio`} />
+        <Waveform
+          levels={state.levels}
+          active={speaking}
+          label={`${speaker} audio`}
+          unavailable={live}
+        />
 
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <Indicator on={state.buyerSpeaking} label="Buyer speaking" />
@@ -35,17 +50,27 @@ export function CallPanel({ state, running, languages, onStart, onEnd }: CallPan
           <Indicator on={state.bargeIn} label="Barge-in" flag />
         </div>
 
+        {live ? (
+          <p className="max-w-[70ch] text-[12px] leading-relaxed text-ink-500">
+            These three read the agent&rsquo;s turn events, not the microphone. A turn is
+            already transcribed when it arrives, so &ldquo;buyer speaking&rdquo; is known
+            once they have stopped; barge-in is exact, because the agent audits the chunk
+            it cut.
+          </p>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={running ? onEnd : onStart}
             className="border border-ink-600 px-5 py-2.5 text-[13px] tracking-wide text-ink-100 transition-colors hover:border-brass-500 hover:text-brass-400"
           >
-            {running ? 'End call' : 'Start call'}
+            {running ? (live ? 'Detach' : 'End call') : live ? 'Attach to agent' : 'Start call'}
           </button>
-          <span className="text-[12px] text-ink-500">
-            Replay fixture. No microphone is opened and no provider is called from this
-            page.
+          <span className="max-w-[52ch] text-[12px] leading-relaxed text-ink-500">
+            {live
+              ? 'Watches a running agent. This page opens no microphone and calls no provider; the audio is on the agent side.'
+              : 'Replay fixture. No microphone is opened and no provider is called from this page.'}
           </span>
         </div>
 

@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { AmbassadorView } from '@/components/ambassador-view'
 import { CallPanel } from '@/components/call-panel'
 import { LatencyMeter } from '@/components/latency-meter'
@@ -10,30 +10,101 @@ import { SessionBanner } from '@/components/session-banner'
 import { TranscriptRail } from '@/components/transcript-rail'
 import { useSession } from '@/hooks/use-session'
 import type { LanguageReadiness } from '@/lib/readiness'
+import { liveSource } from '@/lib/session/live-source'
 import { scriptFor } from '@/lib/session/scripts'
 import type { ReplayScript } from '@/lib/session/scripts/types'
+import { replaySource } from '@/lib/session/source'
+import type { Provenance } from '@/lib/session/source'
 import type { GuardrailMode, Project, PromptMode } from '@/lib/types'
 
 interface DemoSurfaceProps {
   projects: readonly Project[]
   languages: readonly LanguageReadiness[]
+  /** True when the agent left a handshake for us. Decided on the server. */
+  live: boolean
+  /** Why not, when it is not. Shown rather than swallowed. */
+  liveReason?: string
 }
 
-export function DemoSurface({ projects, languages }: DemoSurfaceProps) {
+/**
+ * Owns the mode selection and the session key, and nothing else.
+ *
+ * The session lives one level down so that a change of source or of mode
+ * remounts it: both modes are process configuration read at session start, so
+ * a call cannot be re-moded in flight, and keying on it is what enforces that
+ * rather than a comment asking people to remember.
+ */
+export function DemoSurface({ projects, languages, live, liveReason }: DemoSurfaceProps) {
   const [promptMode, setPromptMode] = useState<PromptMode>('ambassador')
   const [guardrailMode, setGuardrailMode] = useState<GuardrailMode>('enforce')
   const script = scriptFor(promptMode, guardrailMode)
+  const provenance: Provenance = live ? 'live' : 'replay'
+
+  return (
+    <CallSession
+      key={`${provenance}:${script.id}`}
+      script={script}
+      provenance={provenance}
+      projects={projects}
+      languages={languages}
+      liveReason={liveReason}
+      onPromptMode={setPromptMode}
+      onGuardrailMode={setGuardrailMode}
+    />
+  )
+}
+
+function CallSession({
+  script,
+  provenance,
+  projects,
+  languages,
+  liveReason,
+  onPromptMode,
+  onGuardrailMode,
+}: {
+  script: ReplayScript
+  provenance: Provenance
+  projects: readonly Project[]
+  languages: readonly LanguageReadiness[]
+  liveReason?: string
+  onPromptMode: (mode: PromptMode) => void
+  onGuardrailMode: (mode: GuardrailMode) => void
+}) {
+  const live = provenance === 'live'
+  const source = useMemo(
+    () => (live ? liveSource() : replaySource(script)),
+    [live, script],
+  )
+  // A live session reports its own modes in `session_start`; a replay is
+  // configured by the toggles, so it is seeded with what the script records.
+  const { state, status, start, stop } = useSession(
+    source,
+    live ? {} : { promptMode: script.promptMode, guardrailMode: script.guardrailMode },
+  )
+  const running = status === 'running'
+
+  // Live: the pairing on screen is the agent's, read back from its own
+  // session_start, and the controls are inert because nothing here can change a
+  // process that already started. A control that looks live and does nothing is
+  // worse than one that says it cannot.
+  const shown = live ? scriptFor(state.promptMode, state.guardrailMode) : script
 
   return (
     <main className="mx-auto flex min-h-screen max-w-[1680px] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
       <header className="space-y-5">
         <div className="flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2">
           <div>
-            <h1 className="text-[15px] tracking-[0.16em] text-ink-100 uppercase">
-              Binghatti ambassador
-            </h1>
-            <p className="mt-1.5 text-[12px] text-ink-500">
-              Demo surface. The page makes no model calls and opens no microphone.
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-[15px] tracking-[0.16em] text-ink-100 uppercase">
+                Binghatti ambassador
+              </h1>
+              <ProvenanceChip provenance={provenance} />
+            </div>
+            <p className="mt-1.5 max-w-[76ch] text-[12px] leading-relaxed text-ink-500">
+              {live
+                ? 'Attached to a running agent. The page makes no model calls: events reach it from this server, which holds the only credential.'
+                : `Replay fixture, not a call. ${liveReason ?? 'No agent is running.'}`}
             </p>
           </div>
           <nav className="flex items-center gap-5 text-[12px]">
@@ -46,46 +117,23 @@ export function DemoSurface({ projects, languages }: DemoSurfaceProps) {
           </nav>
         </div>
         <ModeToggles
-          promptMode={promptMode}
-          guardrailMode={guardrailMode}
-          script={script}
-          onPromptMode={setPromptMode}
-          onGuardrailMode={setGuardrailMode}
+          promptMode={live ? state.promptMode : script.promptMode}
+          guardrailMode={live ? state.guardrailMode : script.guardrailMode}
+          script={shown}
+          readOnly={live}
+          onPromptMode={onPromptMode}
+          onGuardrailMode={onGuardrailMode}
         />
       </header>
 
-      {/* A mode change is a session change, so the call restarts rather than
-          mutating mid-flight. Keying on the script id is what enforces it. */}
-      <CallSession
-        key={script.id}
-        script={script}
-        projects={projects}
-        languages={languages}
-      />
-    </main>
-  )
-}
-
-function CallSession({
-  script,
-  projects,
-  languages,
-}: {
-  script: ReplayScript
-  projects: readonly Project[]
-  languages: readonly LanguageReadiness[]
-}) {
-  const { state, status, start, stop } = useSession(script)
-  const running = status === 'running'
-
-  return (
-    <>
       <SessionBanner state={state} />
+
       <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-2 lg:items-start">
         <div className="flex min-h-0 flex-col gap-6">
           <CallPanel
             state={state}
             running={running}
+            provenance={provenance}
             languages={languages}
             onStart={start}
             onEnd={stop}
@@ -97,6 +145,19 @@ function CallSession({
           <LatencyMeter turns={state.turns} />
         </div>
       </div>
-    </>
+    </main>
+  )
+}
+
+function ProvenanceChip({ provenance }: { provenance: Provenance }) {
+  const live = provenance === 'live'
+  return (
+    <span
+      className={`border px-2.5 py-1 text-[11px] tracking-[0.12em] uppercase ${
+        live ? 'border-brass-500 text-brass-400' : 'border-ink-700 text-ink-400'
+      }`}
+    >
+      {live ? 'Live agent' : 'Replay'}
+    </span>
   )
 }

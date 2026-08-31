@@ -12,6 +12,14 @@ import type { ReplayScript } from '@/lib/session/scripts/types'
 
 export type Emit = (input: SessionInput) => void
 
+/**
+ * Which source is running. It is on screen at all times and it is the reason
+ * this type is not a private detail of a component: the one unrecoverable
+ * mistake this surface could make is letting somebody believe a fixture was a
+ * call.
+ */
+export type Provenance = 'live' | 'replay'
+
 export interface SessionSource {
   /** Begin emitting. Returns a stop function; calling it twice is safe. */
   start(emit: Emit, onEnd?: () => void): () => void
