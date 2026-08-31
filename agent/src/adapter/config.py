@@ -24,6 +24,22 @@ because they configure a sink rather than the session:
                             `TurnRecord`s carry the full text either way, so
                             the ambassador view and the audit lose nothing when
                             it is off.
+
+Two more are read by `events_bridge.py`, for the same reason - they configure a
+sink, not the session:
+
+  AMBASSADOR_BRIDGE_HANDSHAKE  path to a 0600 file carrying the bridge's host,
+                               port and per-session token. Its presence is what
+                               enables the bridge at all, and it is also how the
+                               local consumer finds it, so a bridge is never
+                               listening without a reader that was told about
+                               it. The bridge serves the UNREDACTED records to
+                               that one local process (docs/03-, "the one
+                               surface that is not redacted").
+  AMBASSADOR_BRIDGE_PORT       optional fixed port. Default 0 - ephemeral -
+                               because the handshake file carries the real one
+                               and a fixed port is one more thing a scanning
+                               page can guess.
 """
 
 from __future__ import annotations

@@ -86,6 +86,28 @@ Every `shortlist_ids` entry must resolve to a real inventory record. An unresolv
 
 Applied to the emitted event stream today, not deferred: the JSON lines the agent emits (stdout, optional file sink) carry **no free text at all** - enumerated and numeric telemetry only (event names, outcomes, timings, counts, token usage, tool names, ids). Every free-text field is redacted by default because free text can carry buyer-derived content by more routes than the obvious one: the agent's own sentences read the buyer's budget back for confirmation, guardrail violation details quote the offending figures, escalation reasons paraphrase complaints, booking slots are "in the buyer's own words". One less obvious route is named explicitly because it has now leaked twice in review: an exception message from a provider call quotes a slice of the response body, and that request's payload was the buyer's transcript - so error/detail fields on `brief_error`, `brief_fallback`, `llm_failure` and `session_error` are redacted too. The classification lives in code (`adapter/events.py`): every emitted event type must appear in exactly one of `_REDACTED_FIELDS` or `CLEAR_EVENTS` (the latter with a stated reason), enforced by a test that discovers event names from the adapter source itself - adding an event without classifying it fails the suite. Anything that needs the text - the ambassador view, the audit - reads the full-fidelity in-process records, never the emitted stream. `AMBASSADOR_EVENT_VERBOSE=true` restores full emission for local development and is never set for demos or deployments (`docs/07-`). Hashing of contact details before any durable event store remains `PHASE-2:`.
 
+### The one surface that is not redacted
+
+Two surfaces leave this process and they carry deliberately different things. Naming both here, because a reader who finds only the redacted one will reasonably assume there is nothing else, and that assumption is how the second one stops being reviewed.
+
+| Surface | Carries | Reaches |
+|---|---|---|
+| stdout and the optional file sink | enumerated and numeric telemetry only, per the rule above | anything that scrapes the process, anything durable |
+| the events bridge (`adapter/events_bridge.py`) | the **unredacted** records: buyer utterance, model sentence, validator detail, brief | one local process holding a per-session token |
+
+The bridge exists because the demo surface needs exactly what validator 4 withholds: a transcript rail shows what the buyer said, the ambassador view shows the brief, and a guardrail decision is illegible without the sentence it objected to (`web/README.md` for the surface itself, issue #9). Building it out of the redacted stream is not possible, and the alternative - setting `AMBASSADOR_EVENT_VERBOSE=true` for the demo - is worse, because that routes buyer text into stdout and the file sink, which is the thing this validator forbids.
+
+It is bounded twice, and neither bound is sufficient alone:
+
+- **Bound to `127.0.0.1`.** The module refuses any other host rather than treating it as configuration. Full-fidelity buyer data never leaves the machine, which is the ADR-012/013 posture.
+- **A per-session random token, required as the first line of every connection.** This exists because loopback is not a boundary against a page running in the presenter's own browser: any web page can reach 127.0.0.1 and port-scan whatever answers. Loopback stops the network; the token stops the browser.
+
+The token is held by the Next server and never by the browser, which only ever talks same-origin to Next. It is delivered through a `0600` handshake file and appears on no stream - the `events_bridge` event carries the host and port and deliberately not the token, because putting the credential for the unredacted surface into the sink that exists because it is redacted would defeat both.
+
+The bridge is **read-only**: after the token line it never reads from the socket again. There is no command channel, and the `GUARDRAIL_MODE`/`PROMPT_MODE` toggles are deliberately not folded into it - both are read at session start, so a control channel is a different question with a different threat model, and adding one would turn a surface that can watch the agent into one that can change it.
+
+It is **off unless `AMBASSADOR_BRIDGE_HANDSHAKE` names a path**, and that same variable is what tells the consumer where to connect, so an enabled bridge always has a reader that was told about it. A listening socket carrying buyer transcripts is not something to have on by default.
+
 ## Failure handling
 
 Every path ends in composed, localised speech and a route to a human. The buyer never hears silence, an error tone, or an error message. Every failure emits an event.

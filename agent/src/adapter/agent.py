@@ -73,6 +73,7 @@ from .confirmations import UnspeakableConfirmation, load_confirmations
 from .confirmations import compose as compose_confirmation
 from .disclosure import load_disclosures, resolve_opening
 from .events import EventLog, TurnTracker
+from .events_bridge import EventsBridge, bridge_from_env
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
 from .lexicon import load_lexicon, respell_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
@@ -935,6 +936,7 @@ async def shutdown_session(
     agent: AmbassadorAgent,
     log: EventLog,
     llm: BuiltLLM,
+    bridge: EventsBridge | None = None,
     # Whatever `build_stt` selected: Deepgram's streaming node, the
     # whole-utterance OpenRouter one, or nothing in text mode. The annotation
     # named OpenRouterSTT concretely until the factory landed and stopped
@@ -959,6 +961,10 @@ async def shutdown_session(
         await stt_node.aclose()
     await llm.aclose()
     log.emit("session_end", turns=len(log.turns))
+    # After the last event so the surface sees the session end, before the log
+    # closes so the observer is gone by the time the writer stops.
+    if bridge is not None:
+        await bridge.aclose()
     await log.aclose()
 
 
@@ -976,6 +982,15 @@ async def entrypoint(ctx: JobContext) -> None:
         raise RuntimeError(
             "missing credentials for the voice path: " + ", ".join(missing)
         )
+
+    # Started before the first event, so a surface that connects mid-call
+    # replays the whole session rather than joining from wherever it arrived.
+    # None unless AMBASSADOR_BRIDGE_HANDSHAKE names a path: a listening socket
+    # carrying buyer transcripts is not on by default.
+    bridge = bridge_from_env(log)
+    if bridge is not None:
+        await bridge.start()
+        log.emit("events_bridge", host="127.0.0.1", port=bridge.port)
 
     log.emit("session_start", config=settings.redacted())
 
@@ -1038,7 +1053,9 @@ async def entrypoint(ctx: JobContext) -> None:
         log.emit("session_error", error=str(ev.error))
 
     async def _shutdown() -> None:
-        await shutdown_session(agent=agent, log=log, llm=llm, stt_node=stt_node)
+        await shutdown_session(
+            agent=agent, log=log, llm=llm, stt_node=stt_node, bridge=bridge
+        )
 
     ctx.add_shutdown_callback(_shutdown)
 

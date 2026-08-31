@@ -36,6 +36,7 @@ Two properties of the emitted stream are load-bearing and easy to lose:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -214,6 +215,17 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "brief_retry": "an attempt number, a delay in seconds, an HTTP status",
     "brief_stale_dropped": "turn indexes and a fixed literal reason",
     "event_log_backpressure": "a dropped-line count and the queue bound",
+    # The port, deliberately, and NEVER the token: the token reaches the local
+    # consumer through a 0600 handshake file and nothing else. A token on the
+    # emitted stream would put the credential for the unredacted surface into
+    # the sink that exists because it is redacted.
+    "events_bridge": "a loopback host and a port, both written by the adapter",
+    # Bridge-only: written straight to the bridge's own socket by
+    # events_bridge._Client, so it never passes through redact_event at all.
+    # Listed here anyway because the rule is that every event name the adapter
+    # emits is classified, and an unlisted name is the thing this table exists
+    # to make impossible.
+    "bridge_backpressure": "a dropped-line count and the queue bound",
 }
 
 # The default reduction is to blank a field. A field listed here is reduced by
@@ -288,6 +300,12 @@ class EventLog:
             path.parent.mkdir(parents=True, exist_ok=True)
             self._file = path.open("a", encoding="utf-8")
 
+        # In-process observers of the FULL record (events_bridge.py). Kept
+        # separate from the sinks above because they receive what those
+        # deliberately do not: the unredacted view. An observer must not block
+        # and must not raise - `emit` runs on the voice path.
+        self._observers: list[Callable[[dict[str, Any]], None]] = []
+
         self._queue: asyncio.Queue[Any] | None = None
         self._writer: asyncio.Task[None] | None = None
         self._dropped = 0
@@ -296,6 +314,28 @@ class EventLog:
         self._writer_stopped = False
 
     # -- emission ---------------------------------------------------------
+
+    def add_observer(
+        self, observer: Callable[[dict[str, Any]], None]
+    ) -> Callable[[], None]:
+        """Watch the FULL records, in process. Returns the remover.
+
+        The one way to see the unredacted stream without going through stdout,
+        and the reason `AMBASSADOR_EVENT_VERBOSE` does not have to be set for
+        the demo surface to work - that flag routes buyer text to a durable
+        sink, which is what docs/03- forbids, and this does not.
+
+        Contract on the observer, because this is called on the voice path: it
+        must not block and it must not await. `events_bridge.py` satisfies it
+        with a non-blocking put onto a bounded queue.
+        """
+        self._observers.append(observer)
+
+        def remove() -> None:
+            with contextlib.suppress(ValueError):
+                self._observers.remove(observer)
+
+        return remove
 
     def emit(self, event: str, **fields: Any) -> dict[str, Any]:
         """Record an event and queue its emitted (redacted) form.
@@ -311,7 +351,17 @@ class EventLog:
         record.update(fields)
         emitted = record if self.verbose else redact_event(record)
         self._enqueue(json.dumps(emitted, ensure_ascii=False, default=str))
+        self._notify(record)
         return record
+
+    def _notify(self, record: dict[str, Any]) -> None:
+        """A broken observer must not take the voice path with it, the same way
+        a broken sink does not."""
+        for observer in self._observers:
+            try:
+                observer(record)
+            except Exception:
+                logger.warning("event observer failed", exc_info=True)
 
     def _enqueue(self, line: str) -> None:
         queue = self._ensure_writer()
