@@ -7,6 +7,13 @@ interface ModeTogglesProps {
   promptMode: PromptMode
   guardrailMode: GuardrailMode
   script: ReplayScript
+  /**
+   * Both modes are read once at session start by the agent process, so a
+   * running agent's pairing cannot be changed from here. In that state these
+   * report what the agent said it is running rather than pretending to set it:
+   * a control that looks live and does nothing is worse than no control.
+   */
+  readOnly?: boolean
   onPromptMode: (mode: PromptMode) => void
   onGuardrailMode: (mode: GuardrailMode) => void
 }
@@ -26,6 +33,7 @@ export function ModeToggles({
   promptMode,
   guardrailMode,
   script,
+  readOnly = false,
   onPromptMode,
   onGuardrailMode,
 }: ModeTogglesProps) {
@@ -35,6 +43,7 @@ export function ModeToggles({
         <Segmented
           name="PROMPT_MODE"
           value={promptMode}
+          readOnly={readOnly}
           options={[
             { value: 'ambassador', label: 'ambassador' },
             { value: 'naive', label: 'naive' },
@@ -44,6 +53,7 @@ export function ModeToggles({
         <Segmented
           name="GUARDRAIL_MODE"
           value={guardrailMode}
+          readOnly={readOnly}
           options={[
             { value: 'enforce', label: 'enforce' },
             { value: 'warn', label: 'warn' },
@@ -54,6 +64,13 @@ export function ModeToggles({
       <p className="max-w-[68ch] text-[12px] leading-relaxed text-ink-400">
         <span className="text-ink-200">{script.label}.</span> {script.note}
       </p>
+      {readOnly ? (
+        <p className="max-w-[68ch] text-[12px] leading-relaxed text-ink-500">
+          Reported by the running agent, not set from here. Both are read once at
+          session start, so changing the pairing means restarting the agent with
+          different environment.
+        </p>
+      ) : null}
     </div>
   )
 }
@@ -62,11 +79,13 @@ function Segmented<T extends string>({
   name,
   value,
   options,
+  readOnly,
   onChange,
 }: {
   name: string
   value: T
   options: { value: T; label: string }[]
+  readOnly: boolean
   onChange: (value: T) => void
 }) {
   return (
@@ -82,14 +101,23 @@ function Segmented<T extends string>({
               key={option.value}
               type="button"
               aria-pressed={selected}
+              disabled={readOnly}
               onClick={() => onChange(option.value)}
               className={`border px-4 py-1.5 text-[12px] tracking-wide ${
                 i > 0 ? '-ml-px' : ''
               } ${
                 selected
                   ? 'border-brass-500 text-brass-400'
-                  : 'border-ink-700 text-ink-400 hover:border-ink-500'
-              }`}
+                  : 'border-ink-700 text-ink-400'
+              } ${
+                readOnly
+                  ? selected
+                    ? ''
+                    : 'opacity-40'
+                  : selected
+                    ? ''
+                    : 'hover:border-ink-500'
+              } ${readOnly ? 'cursor-not-allowed' : ''}`}
             >
               {option.label}
             </button>

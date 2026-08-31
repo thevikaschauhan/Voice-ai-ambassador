@@ -1,9 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import type { SessionInput } from '@/lib/session/events'
-import { replaySource } from '@/lib/session/source'
-import type { ReplayScript } from '@/lib/session/scripts/types'
+import type { SessionSource } from '@/lib/session/source'
 import { initialState, reduce } from '@/lib/session/state'
 import type { SessionState } from '@/lib/session/state'
 
@@ -17,19 +16,18 @@ export interface UseSession {
 }
 
 /**
- * Drives the reducer from a replay script. The only thing that changes in
- * milestone two is which source is constructed here.
+ * Drives the reducer from whichever source it was handed.
+ *
+ * This is where milestone one's seam pays off: `replaySource` and `liveSource`
+ * are interchangeable here, and no panel below knows which one is running.
  */
-export function useSession(script: ReplayScript, speed = 1): UseSession {
-  const [state, dispatch] = useReducer(reduce, undefined, () =>
-    initialState({
-      promptMode: script.promptMode,
-      guardrailMode: script.guardrailMode,
-    }),
-  )
+export function useSession(
+  source: SessionSource,
+  initial: Partial<SessionState> = {},
+): UseSession {
+  const [state, dispatch] = useReducer(reduce, undefined, () => initialState(initial))
   const [status, setStatus] = useState<PlaybackStatus>('idle')
   const stopRef = useRef<(() => void) | null>(null)
-  const source = useMemo(() => replaySource(script, speed), [script, speed])
 
   const stop = useCallback(() => {
     stopRef.current?.()
@@ -46,8 +44,9 @@ export function useSession(script: ReplayScript, speed = 1): UseSession {
     )
   }, [source, stop])
 
-  // A script change is a session change: the modes are process configuration,
+  // A source change is a session change: the modes are process configuration,
   // so flipping a toggle restarts the call rather than mutating it mid-flight.
+  // The component keys on that change, so this only has to cover unmount.
   useEffect(() => stop, [stop])
 
   return { state, status, start, stop }

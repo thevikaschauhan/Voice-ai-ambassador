@@ -20,7 +20,7 @@ function play(ms: number): Promise<void> {
 }
 
 function renderSurface() {
-  render(<DemoSurface projects={PROJECTS} languages={LANGUAGES} />)
+  render(<DemoSurface projects={PROJECTS} languages={LANGUAGES} live={false} />)
 }
 
 async function startCall() {
