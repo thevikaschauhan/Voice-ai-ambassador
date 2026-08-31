@@ -38,6 +38,7 @@ from livekit.agents import (
     ErrorEvent,
     JobContext,
     JobProcess,
+    MetricsCollectedEvent,
     ModelSettings,
     RunContext,
     SpeechCreatedEvent,
@@ -50,6 +51,7 @@ from livekit.agents import (
     llm as lk_llm,
 )
 from livekit.agents import stt
+from livekit.agents.metrics import EOUMetrics
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils import is_given
 from livekit.agents.voice import SpeechHandle
@@ -75,6 +77,7 @@ from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
 from .lexicon import load_lexicon, respell_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
 from .stt_factory import build_stt, describe
+from .tts_pool import connection_state, reprewarm
 
 logger = logging.getLogger("ambassador.agent")
 
@@ -213,6 +216,9 @@ class AmbassadorAgent(Agent):
         self._tracker: TurnTracker | None = None
         self._speech_handle: SpeechHandle | None = None
         self._pending: _PendingTurn | None = None
+        # Set once teardown has begun, so the barge-in hook does not open a Fish
+        # socket for a call that is already over (see `_reprewarm_tts`).
+        self._closing = False
 
         # Resolved here rather than in on_enter, so a language with no
         # native-authored disclosure fails while the operator is still looking
@@ -317,6 +323,91 @@ class AmbassadorAgent(Agent):
             completion_tokens=usage["completion_tokens"],
             reasoning_tokens=usage["reasoning_tokens"],
             cached_tokens=usage["cached_tokens"],
+        )
+
+    def note_metrics(self, metrics: Any) -> None:
+        """Route the framework's own measurements onto the turn (issue #7).
+
+        Only `EOUMetrics` is taken. Everything else on `metrics_collected` is
+        either already recorded from closer to the source (LLM TTFT and usage
+        come off the streaming transport, TTS first audio off `tts_node`) or is
+        not a per-turn fact.
+
+        Endpointing is the one stage the adapter cannot time itself: it happens
+        before `on_user_turn_completed`, which is where the tracker's clock
+        starts, and its anchor is a VAD timestamp inside the recognition loop.
+        The framework already computes it, so this reads it rather than
+        rebuilding it (AGENTS.md: do not build what the framework provides).
+
+        The event lands while this turn's tracker is still open - LiveKit emits
+        it at the end of `_user_turn_completed_task`, after
+        `on_user_turn_completed` has opened the tracker and before the agent
+        ever reaches "listening". A turn with no tracker is a turn with no
+        record to attribute the measurement to, so it is dropped rather than
+        filed against the wrong index.
+        """
+        if not isinstance(metrics, EOUMetrics):
+            return
+        tracker = self._tracker
+        if tracker is None:
+            logger.debug("end-of-utterance metrics arrived with no open turn")
+            return
+        tracker.record_endpointing(
+            end_of_utterance=metrics.end_of_utterance_delay,
+            transcription=metrics.transcription_delay,
+            turn_committed=metrics.on_user_turn_completed_delay,
+        )
+
+    # -- issue #18: the Fish connection pool across a barge-in -------------
+
+    def _active_tts(self) -> Any | None:
+        """The TTS the session is actually synthesising through, or None.
+
+        Same resolution order as `llm_node` uses for the LLM: the agent's own
+        override if one was set, otherwise the session's. Outside a running
+        session there is neither, and that is not an error - the console and the
+        tests reach this with no activity attached.
+        """
+        if is_given(self.tts):
+            return self.tts
+        try:
+            return self.session.tts
+        except RuntimeError:
+            return None
+
+    def _reprewarm_tts(self, turn: int) -> None:
+        """Restore a spare Fish socket after a confirmed barge-in (issue #18).
+
+        The cancelled synthesis discarded its own socket, which is correct, and
+        the pool will not open another on its own. Without this the next
+        utterance opens a fresh TCP + TLS + WebSocket upgrade inline; with it
+        the connect happens during the silence while the buyer is still talking.
+
+        Skipped during teardown: a socket opened here would be closed again by
+        `tts.aclose()` moments later, and the connect would race the shutdown.
+        """
+        if self._closing:
+            return
+        tts = self._active_tts()
+        if tts is None:
+            return
+        self._log.emit("tts_pool_reprewarm", turn=turn, outcome=reprewarm(tts))
+
+    def _note_tts_connection(self, tracker: TurnTracker | None) -> None:
+        """Issue #18's measurement: did this turn's audio come off a pooled
+        socket, or did the buyer wait for a handshake first?
+
+        Emitted at first audio, once the pool has already handed the socket to
+        this synthesis. `reused: false` on a turn that follows an `interrupted`
+        event is the defect; `reused: true` on the same turn is the fix.
+        """
+        state = connection_state(self._active_tts())
+        if state is None:
+            return
+        self._log.emit(
+            "tts_connection",
+            turn=None if tracker is None else tracker.turn_index,
+            **state,
         )
 
     def note_speech_handle(self, handle: SpeechHandle) -> None:
@@ -578,6 +669,7 @@ class AmbassadorAgent(Agent):
                 first = False
                 if tracker is not None:
                     tracker.mark_tts_first_audio()
+                self._note_tts_connection(tracker)
             yield frame
 
     # -- hook 2: function tools firing mid-turn ---------------------------
@@ -720,6 +812,11 @@ class AmbassadorAgent(Agent):
                 # Confirmed barge-in: the last chunk handed to TTS did not
                 # finish playing, so the audit must not claim it did (docs/04-).
                 pending.tracker.mark_interrupted()
+                # And the cancelled synthesis took the pooled Fish socket with
+                # it (issue #18). This is the moment the framework itself
+                # settles that the interruption was real, so it is the earliest
+                # honest point to open a replacement.
+                self._reprewarm_tts(pending.tracker.turn_index)
         pending.tracker.finish(audit_incomplete=audit_incomplete)
         if self._pending is pending:
             self._pending = None
@@ -743,6 +840,9 @@ class AmbassadorAgent(Agent):
         the interrupt did land - and flagged `audit_incomplete` so nobody reads
         completion out of a record that never saw the end of its own audio.
         """
+        # Every caller of this is teardown, and sealing an interrupted turn
+        # here must not re-prewarm a pool that is about to be closed.
+        self._closing = True
         pending = self._pending
         if pending is not None and not pending.sealed:
             self._seal(pending, audit_incomplete=_unresolved(pending.handle))
@@ -881,6 +981,13 @@ async def entrypoint(ctx: JobContext) -> None:
         # stays synchronous and cheap.
         if ev.new_state == "listening":
             agent.finish_turn(session.history)
+
+    @session.on("metrics_collected")
+    def _on_metrics(ev: MetricsCollectedEvent) -> None:
+        # The framework's own per-stage measurements. Only end-of-utterance is
+        # taken from here (issue #7): it is the one stage that happens before
+        # the adapter's clock starts. Synchronous and cheap, like the others.
+        agent.note_metrics(ev.metrics)
 
     @session.on("error")
     def _on_error(ev: ErrorEvent) -> None:

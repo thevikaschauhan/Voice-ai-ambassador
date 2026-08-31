@@ -88,6 +88,17 @@ def _ms(seconds: float | None) -> float | None:
     return None if seconds is None else round(seconds * 1000, 1)
 
 
+def _unflatten(seconds: float | None) -> float | None:
+    """Read a framework delay that has already had its None flattened to 0.0.
+
+    `EOUMetrics` builds its fields as `info.metrics.<field> or 0.0`, so an
+    unmeasurable stage arrives as a zero. None of these stages can genuinely be
+    zero - each is a wait the framework sat through - so a zero is the missing
+    measurement, and this module's rule says the two must not look the same.
+    """
+    return None if seconds is None or seconds <= 0.0 else seconds
+
+
 def _redact_brief(brief: Any) -> Any:
     """Reduce a serialised `LeadBrief` to its non-PII fields."""
     if not isinstance(brief, dict):
@@ -188,7 +199,10 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "llm_upstream_error": "turn index, an HTTP status, a fixed literal note",
     "llm_ttft": "turn index, milliseconds, the model name",
     "llm_usage": "token counts and the thinking-off boolean",
+    "endpointing": "turn index and four millisecond marks, all from the framework's own EOUMetrics",
     "tts_first_audio": "turn index and two millisecond marks",
+    "tts_connection": "turn index, a boolean, milliseconds and a pooled-socket count",
+    "tts_pool_reprewarm": "turn index and an enum outcome the adapter itself wrote",
     "interrupted": "a turn index",
     "turn_complete": "timings, counts, booleans and the list of tool names fired",
     "bridge": "fixed composed copy from data/fallbacks.yaml (bridge), never generated",
@@ -444,6 +458,13 @@ class TurnTracker:
         self.inventory_version = inventory_version
 
         self.t0 = time.perf_counter()
+        # The two stages that happen BEFORE t0: the buyer had stopped speaking
+        # by the time this tracker existed. They are measured by the framework
+        # and handed over by `record_endpointing`, so they stay None on any
+        # turn the voice path did not produce - a typed turn has no endpoint.
+        self.endpoint: float | None = None
+        self.stt: float | None = None
+        self.turn_committed: float | None = None
         self.llm_ttft: float | None = None
         self.llm_first_sentence: float | None = None
         self.tts_first_audio: float | None = None
@@ -466,6 +487,54 @@ class TurnTracker:
 
     def elapsed(self) -> float:
         return time.perf_counter() - self.t0
+
+    def record_endpointing(
+        self,
+        *,
+        end_of_utterance: float | None,
+        transcription: float | None,
+        turn_committed: float | None,
+    ) -> None:
+        """The framework's own end-of-utterance measurement (issue #7).
+
+        LiveKit measures this and we do not. `EOUMetrics.end_of_utterance_delay`
+        is the gap between VAD's end of the buyer's speech and the decision to
+        end their turn: the "endpointing" row of the budget table, the one
+        budgeted at up to 500ms and never measured. `transcription_delay` is the
+        "STT after endpoint" row, taken from the SAME anchor
+        (`_compute_end_of_turn_metrics` in voice/audio_recognition.py), so it is
+        a COMPONENT of the endpoint figure and the two must never be added
+        together. `after_transcript_ms` is the difference: what the turn
+        detector spent waiting once the words were already in hand, which is the
+        part of the budget that optimising endpointing could actually recover.
+
+        ZERO IS NOT A MEASUREMENT HERE. The framework returns None from
+        `_compute_end_of_turn_metrics` whenever the VAD anchors are missing or
+        inconsistent, and then flattens that to 0.0 building the metrics event
+        (`info.metrics.end_of_turn_delay or 0.0`). A real endpointing delay
+        cannot be 0.0 - it is a silence the detector waited out - so 0.0 is read
+        back as "not measured" rather than reported as a zero-latency stage.
+        That is events.py's own None-vs-zero rule, applied to a number that
+        arrives already collapsed.
+
+        Seconds in, milliseconds out: the framework's delays are seconds.
+        """
+        self.endpoint = _unflatten(end_of_utterance)
+        self.stt = _unflatten(transcription)
+        self.turn_committed = _unflatten(turn_committed)
+        after_transcript = (
+            None
+            if self.endpoint is None or self.stt is None
+            else max(self.endpoint - self.stt, 0.0)
+        )
+        self._log.emit(
+            "endpointing",
+            turn=self.turn_index,
+            endpoint_ms=_ms(self.endpoint),
+            stt_ms=_ms(self.stt),
+            after_transcript_ms=_ms(after_transcript),
+            turn_committed_ms=_ms(self.turn_committed),
+        )
 
     def mark_llm_ttft(self) -> None:
         if self.llm_ttft is None:
@@ -645,6 +714,8 @@ class TurnTracker:
             guardrail_decisions=self.violations,
             actions=self.actions,
             timings_ms=Timings(
+                endpoint=_ms(self.endpoint),
+                stt=_ms(self.stt),
                 llm_first_sentence=_ms(self.llm_first_sentence),
                 guardrail=(
                     None
@@ -663,6 +734,8 @@ class TurnTracker:
         self._log.emit(
             "turn_complete",
             turn=self.turn_index,
+            endpoint_ms=_ms(self.endpoint),
+            stt_ms=_ms(self.stt),
             llm_ttft_ms=_ms(self.llm_ttft),
             llm_first_sentence_ms=_ms(self.llm_first_sentence),
             guardrail_ms=(

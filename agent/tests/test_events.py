@@ -627,3 +627,71 @@ def test_the_writer_survives_a_burst_from_several_coroutines():
     for tag in ("a", "b"):
         indexes = [line_["sentence_index"] for line_ in emitted if line_["tag"] == tag]
         assert indexes == list(range(20))
+
+
+# --- endpointing: the stage that was budgeted and never measured ----------
+#
+# Issue #7's budget table has "Endpointing 200-500ms / never measured", which
+# would make it the single largest component if true. The number exists inside
+# the framework already (`EOUMetrics`), so the risk is not measuring it, it is
+# reporting it wrong: the metrics event has had its "not measurable" flattened
+# to 0.0 before the adapter ever sees it, and a 0.0 on the latency meter is a
+# claim that endpointing was instant.
+
+
+def test_endpointing_lands_on_the_turn_and_on_the_stream():
+    log, buf = make_log(verbose=False)
+    tracker = make_tracker(log)
+    tracker.record_endpointing(
+        end_of_utterance=0.412, transcription=0.287, turn_committed=0.002
+    )
+    record = tracker.finish()
+    log.close()
+
+    assert record.timings_ms.endpoint == 412.0
+    assert record.timings_ms.stt == 287.0
+
+    emitted = {line_["event"]: line_ for line_ in lines(buf)}
+    assert emitted["endpointing"]["endpoint_ms"] == 412.0
+    assert emitted["endpointing"]["stt_ms"] == 287.0
+    # The two share an anchor, so the meter must subtract rather than add: this
+    # is what the turn detector spent after the words were already in hand.
+    assert emitted["endpointing"]["after_transcript_ms"] == 125.0
+    assert emitted["turn_complete"]["endpoint_ms"] == 412.0
+    assert emitted["turn_complete"]["stt_ms"] == 287.0
+
+
+def test_an_unmeasurable_endpoint_stays_none_rather_than_becoming_zero():
+    """The framework computes None when the VAD anchors are missing or stale
+    (`_compute_end_of_turn_metrics`) and then writes `... or 0.0` into the
+    metrics event. Taken at face value that reports a zero-latency stage, which
+    is exactly the collision this module refuses to make."""
+    log, buf = make_log(verbose=False)
+    tracker = make_tracker(log)
+    tracker.record_endpointing(
+        end_of_utterance=0.0, transcription=0.0, turn_committed=0.0
+    )
+    record = tracker.finish()
+    log.close()
+
+    assert record.timings_ms.endpoint is None
+    assert record.timings_ms.stt is None
+
+    emitted = {line_["event"]: line_ for line_ in lines(buf)}
+    assert emitted["endpointing"]["endpoint_ms"] is None
+    assert emitted["endpointing"]["stt_ms"] is None
+    assert emitted["endpointing"]["after_transcript_ms"] is None
+    assert emitted["turn_complete"]["endpoint_ms"] is None
+
+
+def test_a_turn_with_no_endpoint_at_all_reports_neither_stage():
+    """A typed turn (console --text, the eval harness) never goes near VAD, so
+    there is no endpointing to report. It must read as absent, not as fast."""
+    log, buf = make_log(verbose=False)
+    tracker = make_tracker(log)
+    record = tracker.finish()
+    log.close()
+
+    assert record.timings_ms.endpoint is None
+    assert record.timings_ms.stt is None
+    assert "endpointing" not in [line_["event"] for line_ in lines(buf)]
