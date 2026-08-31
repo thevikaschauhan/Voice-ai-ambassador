@@ -16,6 +16,10 @@ en:
   ask_currency: "{amount} - is that in dirhams or in rupees?"
   # Currency stated. Read back to catch a misheard number, not the currency.
   confirm_amount: "{amount} - have I got that right?"
+  # The buyer contradicted the read-back, so the number itself is in doubt.
+  # Deliberately slotless: repeating the figure they just rejected is worse
+  # than asking plainly.
+  ask_amount: "Apologies - what is the budget, then?"
   # The buyer's budget is in a currency we hold no confirmed rate for. We do
   # not guess a conversion; we hand over. See data/currencies.yaml.
   cannot_convert: >-
@@ -23,6 +27,10 @@ en:
     Let me put you through to one of our ambassadors.
   # Three tries and the buyer still has not told us. Making them repeat a
   # fourth time earns lasting resentment (docs/04-).
+  # Also the line spoken when a confirmation cannot be composed at all (a
+  # broken template, a refused echo): those paths fail closed to a human
+  # rather than letting the model answer unconfirmed, so this key may never
+  # carry a slot - the loader enforces that.
   give_up: >-
     Let me put you through to one of our ambassadors who can go through the
     numbers with you properly.
@@ -30,6 +38,7 @@ en:
 ar:
   ask_currency: ""
   confirm_amount: ""
+  ask_amount: ""
   cannot_convert: ""
   give_up: ""
   # VERIFY: native-authored. Until these exist the policy cannot run in
@@ -39,6 +48,7 @@ ar:
 hi:
   ask_currency: ""
   confirm_amount: ""
+  ask_amount: ""
   cannot_convert: ""
   give_up: ""
   # VERIFY: native-authored. Same rule.

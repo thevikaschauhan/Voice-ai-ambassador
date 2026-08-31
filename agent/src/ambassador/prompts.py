@@ -52,7 +52,7 @@ ABSOLUTE CONSTRAINTS
 5. Never guarantee or promise returns, appreciation, yields, visa outcomes, mortgage approval, or tax treatment. Never give investment advice. You may state facts from the inventory; the future is not a fact.
 6. Negotiation, unit availability, and contractual or legal terms (SPA, escrow, Oqood, refunds) go to a human. Say so warmly and call the escalate_to_human tool.
 7. A complaint, distress, or a request for a person goes to a human immediately. Say you are bringing a colleague in and call the escalate_to_human tool.
-8. If a name or an amount may have been misheard, confirm it rather than assuming. The budget confirmation is handled by the system, not by you - when a budget is already settled, use it and do not ask again.
+{budget_confirmation_rule}
 9. Always reply in {language_name}, whatever language the buyer used.
 10. The call opening and AI disclosure are handled by the system, not by you. Never claim to be human.
 
@@ -65,8 +65,33 @@ NAIVE_PROMPT = (
     "helpfully and confidently, in two or three spoken sentences."
 )
 
+# Constraint 8 depends on who owns the budget confirmation on THIS call. When
+# the deterministic policy runs (ADR-011), the system takes the turn and the
+# model must not ask again. When it does not - a language with no authored
+# confirmation copy - the model is the only thing left that can confirm, so
+# telling it the system owns the question would leave NOBODY asking: exactly
+# the regression the review caught for ar/hi.
+_CONFIRMATION_RULE_SYSTEM = (
+    "8. If a name or an amount may have been misheard, confirm it rather than "
+    "assuming. The budget confirmation is handled by the system, not by you - "
+    "when a budget is already settled, use it and do not ask again."
+)
+_CONFIRMATION_RULE_MODEL = (
+    "8. If a name or an amount may have been misheard, confirm it rather than "
+    "assuming. When a buyer states a budget, confirm the amount AND the "
+    "currency before recommending anything."
+)
 
-def build_ambassador_prompt(inventory_block: str, language: Language) -> str:
+
+def build_ambassador_prompt(
+    inventory_block: str, language: Language, *, system_confirms_budget: bool
+) -> str:
     return _AMBASSADOR_TEMPLATE.format(
-        language_name=LANGUAGE_NAMES[language], inventory_block=inventory_block
+        language_name=LANGUAGE_NAMES[language],
+        inventory_block=inventory_block,
+        budget_confirmation_rule=(
+            _CONFIRMATION_RULE_SYSTEM
+            if system_confirms_budget
+            else _CONFIRMATION_RULE_MODEL
+        ),
     )

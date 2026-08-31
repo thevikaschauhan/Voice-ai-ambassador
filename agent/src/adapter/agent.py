@@ -56,7 +56,7 @@ from livekit.agents.voice import SpeechHandle
 from livekit.plugins import fishaudio, silero
 
 from ambassador.budget import BudgetPolicy, load_currency_vocabulary
-from ambassador.figures import normalise_digits
+from ambassador.budget import Decision as BudgetDecision
 from ambassador.guardrails.prohibited import languages_covered, load_patterns
 from ambassador.inventory import (
     build_allowed_figures,
@@ -68,8 +68,12 @@ from ambassador.verbalise import load_spoken_forms
 
 from .brief import BriefExtractor
 from .config import Settings, load_settings
+from .confirmations import (
+    EchoNotInTranscript,
+    UnspeakableConfirmation,
+    load_confirmations,
+)
 from .confirmations import compose as compose_confirmation
-from .confirmations import load_confirmations
 from .disclosure import load_disclosures, resolve_opening
 from .events import EventLog, TurnTracker
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
@@ -117,11 +121,32 @@ class AmbassadorAgent(Agent):
         self._settings = settings
         self._log = log
 
+        # ADR-011. The policy speaks INSTEAD of the model when it has a
+        # question, which is what makes it deterministic: prompt constraint 8
+        # asked the model to confirm, and ADR-007 is explicit that asking
+        # reduces violations without eliminating them. Loaded before the
+        # prompt is built because constraint 8 depends on the answer: for a
+        # language whose copy nobody has authored the policy is off, and the
+        # model must be told to confirm budgets itself - the old wording -
+        # or nobody asks at all.
+        confirmations = load_confirmations()
+        self._confirmations = confirmations
+        self._budget_vocabulary = load_currency_vocabulary()
+        self._budget = BudgetPolicy(self._budget_vocabulary, settings.language)
+        self._budget_policy_runs = confirmations.covers(settings.language)
+        self._budget_last_action = "none"
+        # The turn the policy last read, so a tool call splitting one buyer
+        # turn across two llm_node invocations cannot make the same utterance
+        # count as two of the buyer's three attempts.
+        self._budget_observed_turn: int | None = None
+
         instructions = (
             NAIVE_PROMPT
             if settings.prompt_mode == "naive"
             else build_ambassador_prompt(
-                serialise_for_prompt(projects), settings.language
+                serialise_for_prompt(projects),
+                settings.language,
+                system_confirms_budget=self._budget_policy_runs,
             )
         )
         super().__init__(instructions=instructions)
@@ -163,15 +188,6 @@ class AmbassadorAgent(Agent):
             on_event=log.emit,
             thinking_disabled=settings.thinking_disabled,
         )
-        # ADR-011. The policy speaks INSTEAD of the model when it has a
-        # question, which is what makes it deterministic: prompt constraint 8
-        # asked the model to confirm, and ADR-007 is explicit that asking
-        # reduces violations without eliminating them.
-        self._confirmations = load_confirmations()
-        self._budget_vocabulary = load_currency_vocabulary()
-        self._budget = BudgetPolicy(self._budget_vocabulary, settings.language)
-        self._budget_policy_runs = self._confirmations.covers(settings.language)
-        self._budget_last_action = "none"
         log.emit(
             "budget_policy",
             active=self._budget_policy_runs,
@@ -327,15 +343,26 @@ class AmbassadorAgent(Agent):
         turn after the budget is settled and every turn in a language whose
         confirmation copy nobody has authored. Speaking English into an Arabic
         call would be worse than not asking.
+
+        Every failure in here fails CLOSED: if the confirmation cannot be
+        spoken, the buyer goes to a human, and the model never gets the turn
+        unconfirmed. The first version of this method returned None on error,
+        which read as fail-safe and was fail-open - the policy silently
+        switching itself off on the exact path it existed to protect.
         """
         if not self._budget_policy_runs:
             return None
-        said = normalise_digits(tracker.buyer_utterance)
-        decision = self._budget.observe(said)
+        if self._budget_observed_turn == tracker.turn_index:
+            # The second half of a tool-using turn. The policy already read
+            # this utterance; reading it again would burn a second attempt on
+            # one reply.
+            return None
+        self._budget_observed_turn = tracker.turn_index
+        decision = self._budget.observe(tracker.buyer_utterance)
         if not decision.speaks:
             if decision.currency is not None:
                 self._log.emit(
-                    "budget_confirmed",
+                    "budget_settled",
                     turn=tracker.turn_index,
                     currency=decision.currency,
                 )
@@ -343,22 +370,48 @@ class AmbassadorAgent(Agent):
 
         template = self._confirmations.line(self._settings.language, decision.action)
         try:
-            text = (
-                compose_confirmation(
+            if decision.mention is not None:
+                # Every mention-bearing decision goes through compose(), slot
+                # or no slot: gating on a literal "{amount}" check let a
+                # template with a MISSPELLED slot skip composition and reach
+                # TTS braces and all.
+                text = compose_confirmation(
                     template,
                     echoed=decision.mention.surface,
-                    said=said,
+                    # The transcript the mention came from, NOT this turn's:
+                    # on a re-ask the current turn is the reply that failed to
+                    # answer, and the number is not in it.
+                    said=decision.mention.utterance,
                 )
-                if decision.mention is not None and "{amount}" in template
-                else template
+            elif "{" in template:
+                raise UnspeakableConfirmation(
+                    f"{decision.action!r} copy carries a slot and the decision "
+                    "has nothing to fill it with"
+                )
+            else:
+                text = template
+            if not text.strip():
+                raise UnspeakableConfirmation(
+                    f"no confirmation copy composed for {decision.action!r}"
+                )
+        except (EchoNotInTranscript, UnspeakableConfirmation):
+            # A defect in this policy or its copy, not in the buyer's reply.
+            # Fail closed: hand the buyer to a human and settle the policy so
+            # it cannot loop. The one direction this must never fail is open -
+            # returning None here hands the model an unconfirmed budget.
+            logger.error(
+                "budget confirmation could not be composed; handing over",
+                exc_info=True,
             )
-        except ValueError:
-            # The echo did not come from the transcript, which should be
-            # impossible - the surface is extracted from it. Refusing to speak
-            # is right, but the turn must not end in silence, so fall through
-            # to the model rather than raising into the voice path.
-            logger.warning("budget confirmation refused its own echo", exc_info=True)
-            return None
+            self._budget.abandon()
+            decision = BudgetDecision("give_up")
+            text = self._confirmations.line(self._settings.language, "give_up")
+
+        if decision.hands_over:
+            # Speaking "let me put you through" without notifying anyone is
+            # the anti-pattern escalate_to_human's own docstring names. This
+            # is the same routing the tool performs.
+            self._route_to_human(f"budget confirmation: {decision.action}")
 
         self._budget_last_action = decision.action
         self._log.emit(
@@ -391,14 +444,6 @@ class AmbassadorAgent(Agent):
             )
         tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
         opened: list[Any] = []
-        self._log.emit(
-            "llm_request",
-            turn=tracker.turn_index,
-            tools=[
-                getattr(t, "name", None) or getattr(t, "__name__", "?") for t in tools
-            ],
-            tool_choice=str(tool_choice),
-        )
 
         async def open_stream(
             extra_instruction: str | None = None,
@@ -434,6 +479,19 @@ class AmbassadorAgent(Agent):
                 else (confirmation + " ")
             )
             return
+
+        # Emitted here, after the confirmation check, because it claims a
+        # model call is about to happen. On a confirmation turn none does, and
+        # a request line with no llm_ttft or llm_usage behind it makes the
+        # audit over-count model calls.
+        self._log.emit(
+            "llm_request",
+            turn=tracker.turn_index,
+            tools=[
+                getattr(t, "name", None) or getattr(t, "__name__", "?") for t in tools
+            ],
+            tool_choice=str(tool_choice),
+        )
 
         sink = _tracker_sink(tracker)
         spoke_anything = False
@@ -542,6 +600,17 @@ class AmbassadorAgent(Agent):
         Args:
             reason: Why the escalation is needed, in a few words.
         """
+        self._route_to_human(reason)
+        return (
+            "An ambassador has been notified and will pick this up. "
+            "Tell the buyer a colleague will confirm this directly."
+        )
+
+    def _route_to_human(self, reason: str) -> None:
+        """Notify a human ambassador. The one escalation mechanism, shared by
+        the model's tool call and the budget policy's terminal actions - a
+        hands_over decision that only wrote a log field left the buyer hearing
+        "let me put you through" with nobody put through."""
         if self._tracker is not None:
             self._tracker.record_tool("escalate_to_human", reason=reason)
         else:
@@ -550,10 +619,6 @@ class AmbassadorAgent(Agent):
             )
         # STUB: the CRM/routing write is a console log behind this interface.
         self._log.emit("escalation", reason=reason, routed_to="human_ambassador")
-        return (
-            "An ambassador has been notified and will pick this up. "
-            "Tell the buyer a colleague will confirm this directly."
-        )
 
     @function_tool
     async def offer_booking(self, context: RunContext, slot_description: str) -> str:

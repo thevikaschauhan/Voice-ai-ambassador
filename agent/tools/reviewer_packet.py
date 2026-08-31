@@ -230,6 +230,11 @@ def main(language: str) -> None:
         ("ask_currency", "they gave a number but no currency"),
         ("confirm_amount", "they gave both; we read it back to catch a mishearing"),
         (
+            "ask_amount",
+            "they said the read-back was wrong; ask for the figure afresh "
+            "(no {amount} slot - repeating the rejected number reads badly)",
+        ),
+        (
             "cannot_convert",
             "their budget is not in dirhams and we will not guess a rate",
         ),
@@ -256,6 +261,17 @@ def main(language: str) -> None:
     )
     w("")
     w(bullet("budget words:"))
+    w("")
+    w(
+        "The system also reads a buyer's PUSH-BACK, so a rejected read-back is "
+        "never recorded as agreement. Two lists: words that deny the currency "
+        'they sit in front of (the equivalents of "not", as in "not dirhams"), '
+        "and words that contradict what was just read back (the equivalents "
+        'of "no", "wrong", "you misheard").'
+    )
+    w("")
+    w(bullet("denial words (like \"not\"):"))
+    w(bullet("contradiction words (like \"no\" / \"wrong\"):"))
     w("")
     w("## 4. How these names should sound")
     w("")

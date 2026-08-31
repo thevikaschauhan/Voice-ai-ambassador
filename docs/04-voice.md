@@ -39,22 +39,25 @@ The plan is as strict about input numbers as output ones. Two failure modes:
 1. **Misrecognition**: "two million" transcribed as "two hundred million".
 2. **Unit and currency ambiguity**: "do crore ka budget hai" - two crore of what? INR 2 crore is roughly AED 880k; AED 2 crore is 20 million. Guessing wrong recommends a property off by up to 20x. Same trap with "million" from European and Russian buyers assuming home currency.
 
-**Confirmation policy (ADR-011), deterministic - and now implemented in `ambassador/budget.py`, not in the prompt.** It was prompt constraint 8 until this landed, and ADR-007 is explicit that prompt instructions reduce violation rates without eliminating them. What makes it deterministic is that the policy takes the turn: when a confirmation is owed, `llm_node` speaks it and the model never runs, so the question cannot be skipped, reworded, or answered on the buyer's behalf. Constraint 8 now tells the model the system owns this, the way constraint 10 already did for the disclosure.
+**Confirmation policy (ADR-011), deterministic - the budget half implemented in `ambassador/budget.py`, not in the prompt.** It was prompt constraint 8 until this landed, and ADR-007 is explicit that prompt instructions reduce violation rates without eliminating them. What makes it deterministic is that the policy takes the turn: when a confirmation is owed, `llm_node` speaks it and the model never runs, so the question cannot be skipped, reworded, or answered on the buyer's behalf.
 
-Two things are deliberately refused rather than approximated:
+The first budget mention is always confirmed - an unstated currency gets "2 crore - is that in dirhams or in rupees?", a stated one gets a read-back to catch a misheard number. While the question is open, every reply is read for four things, in order: a restated budget (which replaces the stale mention and restarts the confirmation), a currency named without negation, a currency denied ("not dirhams" names rupees, because there are exactly two), and a contradiction ("no", "that's wrong", "I'm not sure"), which reopens the amount - a rejected or doubted read-back is never consent. Three replies that answer nothing hand the buyer over. The word lists driving negation and contradiction live in `data/currencies.yaml`, per language.
+
+Both terminal actions ("cannot convert", "give up") actually notify a human through the same routing as the `escalate_to_human` tool, not just say so - a spoken "let me put you through" with nobody notified is the anti-pattern the tool's own docstring names.
+
+Three things are deliberately refused rather than approximated:
 
 - **No conversion on an unverified rate.** `data/currencies.yaml` ships no rate and `confirmed: false`. A made-up exchange rate spoken to a buyer is the same class of error as a made-up price - a specific, checkable, wrong number said with confidence - so a non-AED budget is handed to a human instead. An operator sets a real rate, dates it, and flips the flag. Worth demonstrating rather than hiding.
-- **No English confirmation in a non-English call.** The copy is per language and only English is authored, so the policy reports itself off for ar/hi rather than asking the question in the wrong language.
+- **No English confirmation in a non-English call.** The copy is per language and only English is authored, so the policy reports itself off for ar/hi rather than asking the question in the wrong language. For exactly those languages, constraint 8 keeps its original wording - the model is asked to confirm budgets itself - because telling the model the system owns a question the system will not ask leaves nobody asking.
+- **No silent fall-through on failure.** A confirmation that cannot be composed - a broken template, an echo the transcript check refuses - fails CLOSED: the agent speaks the give-up line and escalates. The first version returned the turn to the model on error, which read as fail-safe and was fail-open.
 
-The confirmation echoes the buyer's own budget, which is by construction not an inventory figure, so it cannot go through `SentenceGuard.compose()` - every confirmation would be blocked as a fabricated amount. It takes a separate, bounded path: the template comes from `data/confirmations.yaml`, the slot must be a literal substring of the transcript, and no model output passes through it. The spoken text stays out of the emitted event stream for the same reason a buyer utterance does.
+The confirmation echoes the buyer's own budget through a separate, bounded path rather than `SentenceGuard.compose()`: `process_sentence` is guardrails and then verbalisation, and verbalising the echo would assert a currency the buyer never named on the very turn that exists to ask which they meant. The template comes from `data/confirmations.yaml`, the slot must be a literal substring of the utterance the mention was extracted from (not of the current turn - a re-ask happens precisely because the reply did not repeat the number), and no model output passes through it. The echo therefore reaches TTS as the transcript surface, digits included - the same plain-digits fallback ADR-009 accepts for anything outside the spoken-forms table. The spoken text stays out of the emitted event stream for the same reason a buyer utterance does; the settled currency is emitted as `budget_settled`, named apart from the brief extractor's model-inferred `budget.confirmed` field on purpose.
 
-**Confirmation policy (ADR-011), deterministic:**
+Still ADR-011, not yet implemented (tracked in #5):
 
-- The first budget mention in a session is always confirmed, and the confirmation names the currency: "Two crore - in rupees or in dirhams?"
-- Any currency conversion is deterministic code with a pinned rate marked `VERIFY:`, and the converted figure is spoken back before it drives a recommendation.
 - Project names are confirmed when the fuzzy match against inventory is marginal.
+- Three consecutive failed recognitions escalate warmly - a separate trigger from the budget policy's three attempts.
 - Vendor word-confidence, where available and sane, tightens these triggers; it is never the sole mechanism, because streaming confidence is often absent or uncalibrated.
-- Three consecutive failed recognitions escalate warmly. A voice bot that makes the buyer repeat themselves a fourth time earns lasting resentment.
 
 ## Verbalisation: a closed set (ADR-009)
 

@@ -51,9 +51,35 @@ symbols:
 # Words that mark a number as a BUDGET rather than a bedroom count or a floor.
 # Without these "three bedrooms" reads as a budget mention. A number carrying a
 # currency or a lakh/crore/million multiplier needs no keyword - those say it
-# on their own.
+# on their own. Matched within a short window of the figure, not across the
+# whole utterance, and kept to words that are ABOUT money: "around" and
+# "looking at" were in this list once, and "I'm around floor 15" read as a
+# budget of 15.
 budget_keywords:
-  en: [budget, spend, spending, afford, price range, looking at, up to, around, maximum, max]
+  en: [budget, spend, spending, afford, price range, up to, maximum, max]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# Negators: a currency these directly precede is being DENIED, not named.
+# "Not dirhams" and "not in dirhams" deny dirhams; punctuation breaks the
+# bind, so "no, dirhams" affirms them. A negator that is not denying a
+# currency ("I'm not sure") reads as a contradiction of the read-back.
+# "no" is quoted because YAML 1.1 reads it as a boolean, and a False in this
+# list is silently unmatched rather than an error.
+negators:
+  en: ["not", "no", "never", "don't", "dont", "isn't", "isnt", "wasn't", "wasnt"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# Contradictions: the buyer pushing back on what was read to them. A read-back
+# answered with one of these is never consent - the policy asks for the
+# amount again instead of settling it.
+contradictions:
+  en: ["no", "nope", "nah", "wrong", "incorrect", "mistake", "misheard"]
   ar: []
   # VERIFY: native-authored.
   hi: []

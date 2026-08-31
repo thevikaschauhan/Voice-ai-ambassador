@@ -17,7 +17,10 @@ figures as words ("two million"), which `extract_figures` cannot read at all.
 Deepgram with `numerals=True` returns "2000000" and "2 crore" (ADR-017), so
 there is finally something deterministic to parse. If the recogniser is ever
 swapped for one that spells numbers out, this module silently stops seeing
-budgets - hence `test_detection_needs_digits_and_says_so`.
+budgets. Two tests pin the dependency from both ends:
+`test_detection_needs_digits_and_says_so` pins that word-form figures are
+invisible to `find_budget`, and `test_deepgram_is_built_with_numerals_on`
+pins that the STT factory actually requests digits.
 
 ## Conversion is refused, not approximated
 
@@ -44,16 +47,36 @@ _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
 Currency = Literal["AED", "INR"]
 
+# The two sides of the Literal, spelled out once. `_other_currency` leans on
+# this being exactly two: denying one names the other.
+_CURRENCIES: tuple[Currency, Currency] = ("AED", "INR")
+
 # How far either side of a figure a currency word still binds to it. Wide
 # enough for "2 crore in rupees" and "rupees 2 crore", tight enough that the
 # currency named in the previous clause does not attach to this number.
 _BIND_WINDOW = 24
 
+# How far a budget keyword may sit from the figure it marks. Keywords lead in
+# speech ("my budget is X", "I want to spend X"), so the window behind the
+# figure is wider than the one ahead ("900,000 is my budget"). Whole-utterance
+# matching was a shipped defect: with "around" in the list, "I'm around floor
+# 15" read as a budget of 15.
+_KEYWORD_BEFORE = 30
+_KEYWORD_AFTER = 15
+
+# How close a negator must sit in front of a currency word to negate it:
+# "not dirhams", "not in dirhams". Punctuation in the gap breaks the bind,
+# because "no, dirhams" is an answer that AFFIRMS dirhams while contradicting
+# something else, and "not dirhams" is a denial of them.
+_NEGATION_GAP = 6
+_PUNCTUATION = re.compile(r"[,.;:!?]")
+
 # Multiplier words that make a bare number a budget on their own: nobody says
 # "two crore" about a bedroom count. Kept in step with figures._MULTIPLIERS,
-# minus the ones too small to imply money.
+# minus the ones too small to imply money. Longest alternatives first, or
+# "lakhs" matches as "lakh" and fails the boundary.
 _BUDGET_UNITS = re.compile(
-    r"\b(thousand|million|lakh|lacs|lac|crores|crore|k|m)\b", re.IGNORECASE
+    r"\b(thousand|million|lakhs|lakh|lacs|lac|crores|crore|k|m)\b", re.IGNORECASE
 )
 
 
@@ -79,6 +102,10 @@ class CurrencyVocabulary:
     words: dict[str, dict[Currency, tuple[str, ...]]]
     symbols: dict[Currency, tuple[str, ...]]
     budget_keywords: dict[str, tuple[str, ...]]
+    # "not", "don't": a currency these precede is being denied, not named.
+    negators: dict[str, tuple[str, ...]]
+    # "no", "wrong": the buyer is contradicting what was read back to them.
+    contradictions: dict[str, tuple[str, ...]]
     rate: ConversionRate
 
     def languages_covered(self) -> frozenset[str]:
@@ -101,10 +128,35 @@ class BudgetMention:
     # unstated": those units are overwhelmingly Indian, which makes an
     # unqualified "two crore" MORE likely to be misread as dirhams, not less.
     subcontinental_unit: bool
+    # The digit-normalised utterance the mention was extracted from. The
+    # confirmation's echo is validated against THIS text, never against a
+    # later turn's transcript: a re-ask happens precisely because the buyer's
+    # reply did not repeat the number, so checking the echo against the reply
+    # guaranteed failure and (before it was caught in review) silently
+    # disabled the policy on the exact path it existed for.
+    utterance: str
 
     @property
     def needs_currency(self) -> bool:
         return self.currency is None
+
+
+def _word_lists(raw: Any, key: str) -> dict[str, tuple[str, ...]]:
+    lists: dict[str, tuple[str, ...]] = {}
+    for language, values in (raw.get(key) or {}).items():
+        words: list[str] = []
+        for word in values or []:
+            if not isinstance(word, str):
+                # YAML 1.1 reads bare no/yes/on/off as booleans. Coercing the
+                # boolean to text would leave the word silently unmatchable -
+                # "no" is exactly the kind of word these lists hold.
+                raise ValueError(
+                    f"currencies.yaml: {key}.{language} contains {word!r}, "
+                    "not text. Quote the word in the data file."
+                )
+            words.append(word.lower())
+        lists[language] = tuple(words)
+    return lists
 
 
 def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
@@ -121,16 +173,12 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
             currency: tuple(
                 str(w).lower() for w in (by_currency or {}).get(currency) or []
             )
-            for currency in ("AED", "INR")
+            for currency in _CURRENCIES
         }
 
     symbols = {
         currency: tuple(str(s) for s in (raw.get("symbols") or {}).get(currency) or [])
-        for currency in ("AED", "INR")
-    }
-    keywords = {
-        language: tuple(str(k).lower() for k in values or [])
-        for language, values in (raw.get("budget_keywords") or {}).items()
+        for currency in _CURRENCIES
     }
 
     rate_block = raw.get("rate") or {}
@@ -140,8 +188,72 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
         confirmed=bool(rate_block.get("confirmed")),
     )
     return CurrencyVocabulary(
-        words=words, symbols=symbols, budget_keywords=keywords, rate=rate
+        words=words,
+        symbols=symbols,
+        budget_keywords=_word_lists(raw, "budget_keywords"),
+        negators=_word_lists(raw, "negators"),
+        contradictions=_word_lists(raw, "contradictions"),
+        rate=rate,
     )
+
+
+# --- reading currency words out of a transcript -----------------------------
+
+
+@dataclass(frozen=True)
+class _CurrencyHit:
+    currency: Currency
+    start: int
+    end: int
+    negated: bool
+
+
+def _token_pattern(token: str) -> str:
+    return (
+        rf"(?<!\w){re.escape(token)}(?!\w)" if token.isalnum() else re.escape(token)
+    )
+
+
+def _negator_spans(lowered: str, vocabulary: CurrencyVocabulary, language: str):
+    spans: list[tuple[int, int]] = []
+    for token in vocabulary.negators.get(language, ()):
+        if not token:
+            continue
+        for found in re.finditer(_token_pattern(token), lowered):
+            spans.append((found.start(), found.end()))
+    return spans
+
+
+def _currency_hits(
+    lowered: str, vocabulary: CurrencyVocabulary, language: str
+) -> list[_CurrencyHit]:
+    """Every currency word or symbol in the text, with whether it is negated.
+
+    A currency word is negated when a negator ends just before it with no
+    punctuation in between: "not dirhams" and "not in dirhams" deny dirhams,
+    "no, dirhams" does not - the comma makes "no" a contradiction of something
+    else and "dirhams" the answer.
+    """
+    negators = _negator_spans(lowered, vocabulary, language)
+    by_currency = vocabulary.words.get(language, {})
+    hits: list[_CurrencyHit] = []
+    for currency in _CURRENCIES:
+        candidates = list(by_currency.get(currency, ())) + [
+            s.lower() for s in vocabulary.symbols.get(currency, ())
+        ]
+        for token in candidates:
+            if not token:
+                continue
+            for found in re.finditer(_token_pattern(token), lowered):
+                negated = any(
+                    0 <= found.start() - neg_end <= _NEGATION_GAP
+                    and not _PUNCTUATION.search(lowered[neg_end : found.start()])
+                    for _, neg_end in negators
+                )
+                hits.append(
+                    _CurrencyHit(currency, found.start(), found.end(), negated)
+                )
+    return hits
 
 
 def _currency_near(
@@ -149,72 +261,140 @@ def _currency_near(
 ) -> Currency | None:
     """The currency named beside this figure, if any.
 
-    Nearest wins, so "rupees, not dirhams, 2 crore" binds to whichever the
-    buyer actually put next to the number rather than to whichever the table
-    lists first.
+    Nearest non-negated word wins, so "rupees, not dirhams, 2 crore" binds to
+    rupees: "dirhams" is being denied, and denials do not name a currency.
     """
-    window = text[max(0, start - _BIND_WINDOW) : end + _BIND_WINDOW].lower()
-    by_currency = vocabulary.words.get(language, {})
+    lowered = text.lower()
+    lo, hi = max(0, start - _BIND_WINDOW), end + _BIND_WINDOW
     best: tuple[int, Currency] | None = None
-    for currency in ("AED", "INR"):
-        candidates = list(by_currency.get(currency, ())) + [
-            s.lower() for s in vocabulary.symbols.get(currency, ())
-        ]
-        for token in candidates:
+    for hit in _currency_hits(lowered, vocabulary, language):
+        if hit.negated or hit.end <= lo or hit.start >= hi:
+            continue
+        distance = min(abs(hit.start - start), abs(hit.start - end))
+        if best is None or distance < best[0]:
+            best = (distance, hit.currency)
+    return None if best is None else best[1]
+
+
+@dataclass(frozen=True)
+class ReplyReading:
+    """What a reply to a confirmation actually said about it.
+
+    `affirmed` are currencies named without a negator in front; `denied` are
+    currencies every occurrence of which was negated; `contradicted` means the
+    buyer pushed back on what was read to them - a contradiction word, or a
+    negator that is not denying a currency ("no", "that's not right", "I'm
+    not sure"). Uncertainty counts as contradiction on purpose: the one thing
+    a doubted read-back must never be treated as is consent.
+    """
+
+    affirmed: tuple[Currency, ...]
+    denied: tuple[Currency, ...]
+    contradicted: bool
+
+
+def read_reply(
+    utterance: str, vocabulary: CurrencyVocabulary, language: str
+) -> ReplyReading:
+    lowered = normalise_digits(utterance).lower()
+    hits = _currency_hits(lowered, vocabulary, language)
+
+    affirmed = tuple(
+        c for c in _CURRENCIES if any(h.currency == c and not h.negated for h in hits)
+    )
+    denied = tuple(
+        c
+        for c in _CURRENCIES
+        if c not in affirmed and any(h.currency == c and h.negated for h in hits)
+    )
+
+    # A negator that is busy denying a currency is not a contradiction; one
+    # that is not ("I'm not sure") is. The check is by span: which currency
+    # hits sit within the gap of this negator.
+    contradicted = False
+    for neg_start, neg_end in _negator_spans(lowered, vocabulary, language):
+        binds = any(
+            h.negated and 0 <= h.start - neg_end <= _NEGATION_GAP for h in hits
+        )
+        if not binds:
+            contradicted = True
+            break
+    if not contradicted:
+        for token in vocabulary.contradictions.get(language, ()):
             if not token:
                 continue
-            pattern = (
-                rf"(?<!\w){re.escape(token)}(?!\w)"
-                if token.isalnum()
-                else re.escape(token)
-            )
-            for found in re.finditer(pattern, window):
-                # Distance from the figure, which sits at _BIND_WINDOW in the
-                # window unless it was clipped at the start of the text.
-                offset = min(start, _BIND_WINDOW)
-                distance = min(
-                    abs(found.start() - offset),
-                    abs(found.start() - (offset + end - start)),
+            for found in re.finditer(_token_pattern(token), lowered):
+                binds = any(
+                    h.negated
+                    and 0 <= h.start - found.end() <= _NEGATION_GAP
+                    and not _PUNCTUATION.search(lowered[found.end() : h.start])
+                    for h in hits
                 )
-                if best is None or distance < best[0]:
-                    best = (distance, currency)  # type: ignore[assignment]
-    return None if best is None else best[1]
+                if not binds:
+                    contradicted = True
+                    break
+            if contradicted:
+                break
+    return ReplyReading(affirmed=affirmed, denied=denied, contradicted=contradicted)
+
+
+def _other_currency(currency: Currency) -> Currency:
+    return "INR" if currency == "AED" else "AED"
+
+
+# --- finding the budget in an utterance --------------------------------------
 
 
 def find_budget(
     utterance: str, vocabulary: CurrencyVocabulary, language: str
 ) -> BudgetMention | None:
-    """The first budget figure in a buyer utterance, or None.
+    """The budget figure in a buyer utterance, or None.
 
     "Budget-like" means one of three things, because a bare number is usually
     not money: it carries a currency, it carries a lakh/crore/million-style
-    multiplier, or a budget keyword sits in the utterance. Without that test
-    "three bedrooms" is a budget mention and every turn triggers a
-    confirmation.
+    multiplier IN ITS OWN SURFACE, or a budget keyword sits within a short
+    window of it. The unit must come from the figure's own surface because
+    `extract_figures` already folds an adjacent multiplier in - a unit found
+    by looking further ahead belongs to the NEXT figure, which is how "Floor
+    15, 2 million" once read as a budget of 15.
+
+    When several figures qualify, the one marked by a budget keyword wins over
+    the ones that merely carry a currency or a unit: in "the villa is 5
+    million dirhams but I only want to spend 2 crore rupees", the budget is
+    what the buyer wants to spend, not the price they are quoting back.
     """
     text = normalise_digits(utterance)
     lowered = text.lower()
     keywords = vocabulary.budget_keywords.get(language, ())
-    keyword_present = any(k and k in lowered for k in keywords)
 
+    def keyword_near(start: int, end: int) -> bool:
+        lo, hi = max(0, start - _KEYWORD_BEFORE), end + _KEYWORD_AFTER
+        window = lowered[lo:hi]
+        return any(k and k in window for k in keywords)
+
+    fallback: BudgetMention | None = None
     for match in sorted(extract_figures(text), key=lambda m: m.start):
         if match.figure.kind != "amount":
             continue
         currency = _currency_near(text, match.start, match.end, vocabulary, language)
-        unit = _BUDGET_UNITS.search(match.figure.surface) or _BUDGET_UNITS.search(
-            text[match.end : match.end + 12]
-        )
-        if currency is None and unit is None and not keyword_present:
+        unit = _BUDGET_UNITS.search(match.figure.surface)
+        marked = keyword_near(match.start, match.end)
+        if currency is None and unit is None and not marked:
             continue
-        return BudgetMention(
+        mention = BudgetMention(
             surface=match.figure.surface,
             value=match.figure.value,
             currency=currency,
             subcontinental_unit=bool(
                 unit and unit.group(0).lower().startswith(("lakh", "lac", "crore"))
             ),
+            utterance=text,
         )
-    return None
+        if marked:
+            return mention
+        if fallback is None:
+            fallback = mention
+    return fallback
 
 
 def to_aed(amount: float, currency: Currency, rate: ConversionRate) -> float:
@@ -247,8 +427,11 @@ class ConversionUnavailable(RuntimeError):
 # times error is testable without a room, a socket or a vendor.
 
 Action = Literal[
-    "none", "ask_currency", "confirm_amount", "cannot_convert", "give_up"
+    "none", "ask_currency", "confirm_amount", "ask_amount", "cannot_convert", "give_up"
 ]
+
+# The questions the policy can be waiting on an answer to.
+_Question = Literal["ask_currency", "confirm_amount", "ask_amount"]
 
 # Three tries, then hand over. A voice bot that makes the buyer repeat
 # themselves a fourth time earns lasting resentment (docs/04-).
@@ -268,8 +451,10 @@ class Decision:
 
     @property
     def hands_over(self) -> bool:
-        """Both terminal actions route to a human, and the caller must treat
-        them the same way even though the copy differs."""
+        """Both terminal actions route to a human. The caller must actually
+        notify one - the same escalation the escalate_to_human tool performs -
+        not merely speak the copy; saying "let me put you through" with nobody
+        notified is the exact anti-pattern that tool's docstring names."""
         return self.action in ("cannot_convert", "give_up")
 
 
@@ -279,6 +464,15 @@ class BudgetPolicy:
     Deliberately a small state machine rather than a prompt instruction: the
     model never gets the chance to skip the question, because the adapter
     speaks the confirmation INSTEAD of running a turn.
+
+    While a question is open, every reply is read for four things, in order:
+    a restated budget (which replaces the stale mention and restarts the
+    confirmation - "sorry, I meant 5 million dirhams" is about 5 million, not
+    about whatever was misheard first), a currency named without negation, a
+    currency denied ("not dirhams" names the other one, because there are
+    exactly two), and a contradiction ("no", "that's wrong", "I'm not sure"),
+    which reopens the amount rather than settling it. Only a confirm_amount
+    reply with none of those counts as consent.
     """
 
     def __init__(self, vocabulary: CurrencyVocabulary, language: str) -> None:
@@ -286,7 +480,7 @@ class BudgetPolicy:
         self._language = language
         self._mention: BudgetMention | None = None
         self._currency: Currency | None = None
-        self._awaiting = False
+        self._asked: _Question | None = None
         self._attempts = 0
         self._settled = False
 
@@ -303,45 +497,87 @@ class BudgetPolicy:
     def observe(self, utterance: str) -> Decision:
         if self._settled:
             return Decision("none")
-        if self._awaiting:
-            return self._answer(utterance)
-        return self._first_mention(utterance)
+        said = normalise_digits(utterance)
+        if self._asked is not None:
+            return self._answer(said)
+        return self._first_mention(said)
 
-    def _first_mention(self, utterance: str) -> Decision:
-        mention = find_budget(utterance, self._vocabulary, self._language)
+    def abandon(self) -> None:
+        """Give up on the policy without consent: the caller could not speak
+        the confirmation (broken copy, refused echo) and has routed the buyer
+        to a human instead. Settling here is what makes that path fail CLOSED:
+        the alternative - leaving the policy open and letting the model take
+        the turn - is the fail-open defect this rework removed."""
+        self._settled = True
+        self._asked = None
+
+    def _first_mention(self, said: str) -> Decision:
+        mention = find_budget(said, self._vocabulary, self._language)
         if mention is None:
             return Decision("none")
+        return self._confirm(mention)
+
+    def _confirm(self, mention: BudgetMention) -> Decision:
+        """Open (or reopen) the confirmation for this mention.
+
+        ADR-011 confirms the FIRST mention even when the currency was named:
+        a misheard "two" for "ten" costs as much as a misread currency.
+        """
         self._mention = mention
-        self._awaiting = True
         if mention.needs_currency:
+            self._asked = "ask_currency"
             return Decision("ask_currency", mention)
-        # ADR-011 confirms the FIRST mention even when the currency was named:
-        # a misheard "two" for "ten" costs as much as a misread currency.
+        self._asked = "confirm_amount"
         return Decision("confirm_amount", mention)
 
-    def _answer(self, utterance: str) -> Decision:
-        """Read the buyer's reply to the confirmation.
+    def _answer(self, said: str) -> Decision:
+        assert self._mention is not None and self._asked is not None
+        fresh = find_budget(said, self._vocabulary, self._language)
 
-        A currency named anywhere in the reply settles it - the buyer answers
-        "dirhams", not in a full sentence - and a reply that names none counts
-        as a failed attempt rather than as consent.
-        """
-        assert self._mention is not None
-        currency = _currency_near(
-            normalise_digits(utterance), 0, len(utterance), self._vocabulary,
-            self._language,
-        )
-        if currency is None and not self._mention.needs_currency:
-            # The question was "have I got that right", not "which currency".
-            # Anything that is not a fresh contradiction settles it.
-            currency = self._mention.currency
+        if self._asked == "ask_amount":
+            # "What is the budget, then?" - any figure in the reply is the
+            # answer, and it starts a fresh confirmation.
+            if fresh is not None:
+                self._attempts = 0
+                return self._confirm(fresh)
+            return self._failed_attempt()
 
-        if currency is None:
-            self._attempts += 1
-            if self._attempts >= _MAX_ATTEMPTS:
-                return self._settle(Decision("give_up"))
-            return Decision("ask_currency", self._mention)
+        if fresh is not None and fresh.value != self._mention.value:
+            # A restated budget replaces the stale one. Settling the old
+            # amount against a reply that corrected it was a shipped defect.
+            self._attempts = 0
+            return self._confirm(fresh)
 
+        reading = read_reply(said, self._vocabulary, self._language)
+        if len(reading.affirmed) == 1:
+            return self._settle_currency(reading.affirmed[0])
+        if not reading.affirmed and len(reading.denied) == 1:
+            # Two currencies exist, so denying one names the other.
+            return self._settle_currency(_other_currency(reading.denied[0]))
+
+        if self._asked == "confirm_amount":
+            if reading.contradicted:
+                # "No" to a read-back means the number is wrong. Ask for it
+                # again; treating rejection as consent was a shipped defect.
+                return self._failed_attempt(reopen="ask_amount")
+            if not reading.affirmed:
+                # The question was "have I got that right", and nothing in the
+                # reply pushed back: that is consent.
+                assert self._mention.currency is not None
+                return self._settle_currency(self._mention.currency)
+
+        return self._failed_attempt()
+
+    def _failed_attempt(self, reopen: _Question | None = None) -> Decision:
+        self._attempts += 1
+        if self._attempts >= _MAX_ATTEMPTS:
+            return self._settle(Decision("give_up"))
+        if reopen is not None:
+            self._asked = reopen
+        assert self._asked is not None
+        return Decision(self._asked, self._mention)
+
+    def _settle_currency(self, currency: Currency) -> Decision:
         self._currency = currency
         if currency != "AED" and not self._vocabulary.rate.usable:
             # Honest refusal rather than a converted figure nobody vouched for.
@@ -350,5 +586,5 @@ class BudgetPolicy:
 
     def _settle(self, decision: Decision) -> Decision:
         self._settled = True
-        self._awaiting = False
+        self._asked = None
         return decision

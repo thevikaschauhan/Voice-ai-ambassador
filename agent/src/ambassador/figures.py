@@ -29,6 +29,7 @@ _MULTIPLIERS = {
     "m": 1_000_000,
     "million": 1_000_000,
     "lakh": 100_000,
+    "lakhs": 100_000,
     "lac": 100_000,
     "lacs": 100_000,
     "crore": 10_000_000,
@@ -47,7 +48,9 @@ _MULTIPLIERS = {
 _NUMBER_RE = re.compile(
     r"(?<![\d.,])"
     r"(?P<num>\d[\d,]*(?:\.\d+)?)"
-    r"(?:\s*(?P<mult>thousand|million|lakh|lacs|lac|crores|crore|k|m)\b)?"
+    # Longest alternatives first: "lakhs" must not match as "lakh" and then
+    # fail the word boundary, which is how "24 lakhs" once extracted a bare 24.
+    r"(?:\s*(?P<mult>thousand|million|lakhs|lakh|lacs|lac|crores|crore|k|m)\b)?"
     r"(?:\s*(?P<pct>%|percent\b|per\s+cent\b))?",
     re.IGNORECASE,
 )

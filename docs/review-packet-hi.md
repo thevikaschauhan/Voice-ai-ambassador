@@ -85,6 +85,10 @@ English: > {amount} - is that in dirhams or in rupees?
 English: > {amount} - have I got that right?
 - [ ] Hindi:
 
+**ask_amount** - they said the read-back was wrong; ask for the figure afresh (no {amount} slot - repeating the rejected number reads badly)
+English: > Apologies - what is the budget, then?
+- [ ] Hindi:
+
 **cannot_convert** - their budget is not in dirhams and we will not guess a rate
 English: > I would rather not convert that myself and risk being wrong. Let me put you through to one of our ambassadors.
 - [ ] Hindi:
@@ -103,6 +107,11 @@ Every way a buyer could name dirhams or rupees out loud, so the system hears it.
 And the words that mark a number as a budget rather than a bedroom count - the equivalents of "budget", "spend", "afford", "up to".
 
 - [ ] budget words:
+
+The system also reads a buyer's PUSH-BACK, so a rejected read-back is never recorded as agreement. Two lists: words that deny the currency they sit in front of (the equivalents of "not", as in "not dirhams"), and words that contradict what was just read back (the equivalents of "no", "wrong", "you misheard").
+
+- [ ] denial words (like "not"):
+- [ ] contradiction words (like "no" / "wrong"):
 
 ## 4. How these names should sound
 

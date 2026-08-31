@@ -174,7 +174,11 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     # in-memory TurnRecord, where the audit and the ambassador view need it,
     # and never puts it on the emitted stream.
     "budget_confirmation": "an enum action, a currency code and booleans",
-    "budget_confirmed": "a turn index and a currency code",
+    # "Settled", not "confirmed": the brief extractor's model-inferred record
+    # carries its own `budget.confirmed` field on the same stream, and the two
+    # must not share a name - this one is the deterministic policy's verdict
+    # and wins wherever they disagree.
+    "budget_settled": "a turn index and a currency code",
     "budget_confirmation_spoken": "a turn index and an enum action, never the text",
     "lexicon": "language codes and a boolean, all from a static data file",
     "prohibited_coverage": "language codes, a boolean and a pattern count",
@@ -443,7 +447,10 @@ class TurnTracker:
         self.llm_ttft: float | None = None
         self.llm_first_sentence: float | None = None
         self.tts_first_audio: float | None = None
-        self.guardrail_total: float = 0.0
+        # None until the guardrail actually runs. A confirmation turn never
+        # runs it, and events.py's own rule is that a missing measurement and
+        # a zero-latency stage must not look the same on the meter.
+        self.guardrail_total: float | None = None
 
         self.generated_sentences: list[str] = []
         self.spoken_chunks: list[SpokenChunk] = []
@@ -505,7 +512,7 @@ class TurnTracker:
         Emitted for passes as well as violations: the claim is that every
         sentence is inspected, and only a per-sentence record can evidence it.
         """
-        self.guardrail_total += guardrail_ms
+        self.guardrail_total = (self.guardrail_total or 0.0) + guardrail_ms
         self.generated_sentences.append(raw)
         if violation is not None:
             self.violations.append(violation)
@@ -639,7 +646,11 @@ class TurnTracker:
             actions=self.actions,
             timings_ms=Timings(
                 llm_first_sentence=_ms(self.llm_first_sentence),
-                guardrail=round(self.guardrail_total, 2),
+                guardrail=(
+                    None
+                    if self.guardrail_total is None
+                    else round(self.guardrail_total, 2)
+                ),
                 tts_first_audio=_ms(self.tts_first_audio),
                 total=_ms(total),
             ),
@@ -654,7 +665,11 @@ class TurnTracker:
             turn=self.turn_index,
             llm_ttft_ms=_ms(self.llm_ttft),
             llm_first_sentence_ms=_ms(self.llm_first_sentence),
-            guardrail_ms=round(self.guardrail_total, 2),
+            guardrail_ms=(
+                None
+                if self.guardrail_total is None
+                else round(self.guardrail_total, 2)
+            ),
             tts_first_audio_ms=_ms(self.tts_first_audio),
             total_ms=_ms(total),
             sentences=len(self.generated_sentences),
