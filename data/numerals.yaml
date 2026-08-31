@@ -1,0 +1,120 @@
+# Numeric surface vocabulary for figure extraction (docs/03-, validator 1).
+#
+# figures.py works on DIGITS, and that is what makes the numeric guardrail
+# language-agnostic. The magnitude and the kind, though, usually live in the
+# token NEXT to the digits - "8 million", "12%", "AED 8" - and those tokens are
+# words and symbols. This file is that vocabulary, kept out of code so a native
+# reviewer can extend it without an engineer, and so what is and is not covered
+# is readable rather than buried in a regular expression.
+#
+# Read the direction of failure before editing. An over-extracted figure blocks
+# a sentence; an under-extracted one SPEAKS an unverified one. So every list
+# here is applied to every sentence whatever language the call is in - the same
+# rule as prohibited-patterns.yaml and for the same reason - and adding a word
+# can only ever block more, never less.
+#
+# VERIFY: the `ar` and `hi` word lists are EMPTY and must be AUTHORED BY A
+# NATIVE SPEAKER. Until they are, a magnitude or a percent word written in pure
+# Arabic or Devanagari script is not read: "٨ مليون درهم" extracts a bare 8,
+# which is an exempt conversational count. That gap is disclosed in
+# docs/03-guardrails.md rather than absorbed; do not machine-fill these lists.
+
+# --- language-neutral ------------------------------------------------------
+# A symbol is in the transcript whatever language is spoken, so these need no
+# native reviewer and are authored here.
+
+symbols:
+  # Beside a figure, these mean "this is money", and money is never an exempt
+  # count and never a year. Without this, "It starts at AED 12" was a count of
+  # twelve and "It starts at AED 2026" was an allowed handover year, and both
+  # were spoken as prices that are in no record.
+  currency: ["$", "€", "£", "¥", "₹", "﷼", "د.إ"]
+
+  # Percent signs. U+066A is the Arabic percent sign, U+FF05 fullwidth, U+FE6A
+  # small form. All of them are read as "per cent" by a buyer and by a TTS,
+  # so all of them make the figure a percentage to be checked.
+  percent: ["%", "٪", "％", "﹪"]
+
+  # Group separators INSIDE a number. U+202F, the narrow no-break space, is the
+  # dangerous one: it is a standard thousands separator, and without it
+  # "AED 380<U+202F>000" split into an allowed square footage of 380 and an
+  # exempt 000, so a fabricated 380,000 validated through a smaller figure that
+  # genuinely exists. U+00A0 no-break space and U+2009 thin space are the same
+  # class. The ordinary ASCII space is deliberately NOT here: making it a
+  # separator would fuse "3 bedrooms and 2 towers" into one figure. The Arabic
+  # separator U+066C is normalised to "," before extraction runs.
+  group_separators: [" ", " ", " "]
+
+  # Arithmetic. A figure joined to another by one of these is BLOCKED, never
+  # computed: AGENTS.md invariant 2 says the system does no arithmetic, and
+  # doing the model's would be worse than refusing it. "8 × 10^5" is three
+  # exempt small integers that compose to 800,000 - every token passes and the
+  # sentence says a fabricated price. Superscript digits are here because
+  # "10⁵" is the same claim without a caret.
+  #
+  # Latin "x" is deliberately ABSENT. It is the ordinary dimension separator
+  # ("2 x 3 metres"), so blocking it would cost real sentences rather than
+  # nothing; "8 x 10^5" is still caught by the caret.
+  arithmetic: ["×", "*", "^", "·", "⋅", "⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"]
+
+# Latin-script currency tokens. NOT per-language: a model replying in Hindi
+# still writes "AED". Matched case-insensitively, on either side of the figure,
+# with or without a separating space. This is a different list from
+# `currency_tokens` in spoken-forms.yaml (what verbalisation SWALLOWS) and from
+# `words` in currencies.yaml (what a BUYER says); this one only decides whether
+# a figure is money for the purpose of checking it.
+latin_currency_tokens: [AED, dh, dhs, dirham, dirhams, Rs, INR]
+
+# --- per language ----------------------------------------------------------
+# `language` here is PROVENANCE - who was competent to write the list - not
+# routing. Every list is applied to every sentence. Same contract as the
+# `language` field in prohibited-patterns.yaml.
+
+languages:
+  en:
+    # Word -> factor. 24 lakh is 2,400,000 and 2.4 crore is 24,000,000: a 10x
+    # difference, which is why these are a table and not arithmetic.
+    multipliers:
+      "k": 1000
+      "thousand": 1000
+      "thousands": 1000
+      "m": 1000000
+      "million": 1000000
+      "millions": 1000000
+      "bn": 1000000000
+      "billion": 1000000000
+      "billions": 1000000000
+      "lakh": 100000
+      "lakhs": 100000
+      "lac": 100000
+      "lacs": 100000
+      "crore": 10000000
+      "crores": 10000000
+    percent_words: ["percent", "per cent"]
+    # Empty because every English currency word is Latin-script and already in
+    # `latin_currency_tokens` above.
+    currency_words: []
+
+  ar:
+    # VERIFY: native-authored. "مليون" (million) and the lakh/crore borrowings
+    # belong here with their factors; until they do, "٨ مليون درهم" reads as a
+    # count of 8.
+    multipliers: {}
+    # VERIFY: native-authored. The Arabic percent SIGN (٪) is covered above as
+    # a symbol; the spelled-out word is not.
+    percent_words: []
+    # VERIFY: native-authored. "درهم" / "دراهم" belong here. Until they do, a
+    # figure whose only currency marker is an Arabic word keeps its small-
+    # integer and year exemptions.
+    currency_words: []
+
+  hi:
+    # VERIFY: native-authored. "करोड़", "लाख", "हज़ार" belong here with their
+    # factors; until they do, "८ करोड़" reads as a count of 8. Note the
+    # Latin-script spellings (lakh, crore) ARE covered, under `en`, because
+    # Indian English writes them that way and every list applies everywhere.
+    multipliers: {}
+    # VERIFY: native-authored.
+    percent_words: []
+    # VERIFY: native-authored. "दिरहम" / "रुपये" belong here.
+    currency_words: []
