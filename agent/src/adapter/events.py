@@ -47,6 +47,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final, TextIO
 
+from ambassador.figures import states_a_figure
 from ambassador.schemas import (
     GuardrailViolation,
     Language,
@@ -534,6 +535,10 @@ class TurnTracker:
         # `record_escalation`.
         self.handed_over: bool = False
         self.regenerated: bool = False
+        # Whether any sentence the REGENERATED reply actually spoke asserted a
+        # figure. Read by `AmbassadorAgent._backstop_regeneration` (issue #33),
+        # which documents why False is the routing direction.
+        self.regenerated_stated_figure: bool = False
         self.reasoning_tokens: int | None = None
         self.prompt_tokens: int | None = None
         self.completion_tokens: int | None = None
@@ -639,6 +644,21 @@ class TurnTracker:
         """
         self.guardrail_total = (self.guardrail_total or 0.0) + guardrail_ms
         self.generated_sentences.append(raw)
+        if self.regenerated and outcome == "pass":
+            # Only after a regeneration, so the extraction cost lands on a rare
+            # path rather than on every sentence of every turn - and only on a
+            # pass, because a warned sentence is spoken with its figure
+            # UNVALIDATED and must not read as a corrected answer.
+            try:
+                if states_a_figure(raw):
+                    self.regenerated_stated_figure = True
+            except Exception:
+                # Fails towards routing a human: see the failure-direction note
+                # on `AmbassadorAgent._backstop_regeneration`.
+                logger.warning(
+                    "figure detection failed on a regenerated sentence",
+                    exc_info=True,
+                )
         if violation is not None:
             self.violations.append(violation)
         if spoken is not None:

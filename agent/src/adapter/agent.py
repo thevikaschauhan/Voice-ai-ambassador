@@ -600,6 +600,10 @@ class AmbassadorAgent(Agent):
                 if isinstance(out, str):
                     spoke_anything = True
                 yield out
+            # The reply is complete and nothing raised. Issue #33: if this turn
+            # regenerated and came back with no figure, it refused, and a
+            # refusal promises a colleague.
+            self._backstop_regeneration(tracker)
         except (asyncio.CancelledError, GeneratorExit):
             # Both derive from BaseException, so `except Exception` below would
             # miss them anyway. Named explicitly because it is a decision, not
@@ -736,6 +740,50 @@ class AmbassadorAgent(Agent):
         """
         tracker.record_fallback(text, reason)
         self._route_to_human(f"composed fallback: {reason}")
+
+    def _backstop_regeneration(self, tracker: TurnTracker) -> None:
+        """Make the regeneration's promise structural, not sampled (issue #33).
+
+        #31 named `escalate_to_human` in the regeneration instruction's leading
+        imperative and it measured 3/3 English, 3/3 Hindi and 1/3 ARABIC - and
+        the three Arabic samples were byte-identical requests at temperature 0
+        that disagreed with each other, so no amount of rewording can make the
+        promise provable. This is the F2 and budget-handover move applied one
+        layer up: stop asking the model to keep the promise and keep it in code.
+
+        A regenerated reply that ends the turn stating no figure is
+        refusal-shaped by construction. The model has just been told the figure
+        it used is not in the inventory; if it comes back WITH a figure it
+        corrected itself, which is the designed happy recovery and must not
+        escalate, and if it comes back without one it has refused - which is
+        exactly the turn that tells the buyer a colleague will confirm.
+
+        Scoped to the regeneration invocation, deliberately. A first-pass reply
+        with no figure is ordinary conversation: "which areas do you cover"
+        carries no figure and needs no human.
+
+        Whether the MODEL called the tool is not checked, and does not need to
+        be. Its tool call executes after this generator finishes, so it cannot
+        be observed here, and #31's notify-once-per-turn guard collapses the two
+        requests into one handover. Requiring a tool call we cannot yet see
+        would be the fail-open direction.
+
+        FAILURE DIRECTION: towards routing. A false positive costs one redundant
+        ambassador task, deduplicated to one per turn. A false negative is the
+        defect itself - a buyer promised a colleague with nobody coming. So
+        every unreadable case counts as "no figure stated", including the figure
+        detection raising on itself (see `TurnTracker.record_guardrail`).
+        """
+        if not tracker.regenerated:
+            return
+        if tracker.handed_over:
+            # The composed fallback, which routed while the stream was still
+            # unwinding. The model's own tool call cannot have landed yet, so
+            # this is the only thing `handed_over` can mean at this point.
+            return
+        if tracker.regenerated_stated_figure:
+            return
+        self._route_to_human("regenerated reply stated no inventory figure")
 
     def _route_to_human(self, reason: str) -> None:
         """Notify a human ambassador. The one escalation mechanism, shared by

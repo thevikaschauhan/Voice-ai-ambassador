@@ -51,6 +51,7 @@ from adapter.confirmations import (
 from adapter.confirmations import compose as compose_confirmation
 from adapter.fallbacks import FallbackCopy, load_fallback_copy
 from ambassador.budget import BudgetPolicy, CurrencyVocabulary, load_currency_vocabulary
+from ambassador.figures import states_a_figure
 from ambassador.guardrails.pipeline import process_sentence
 from ambassador.guardrails.prohibited import ProhibitedPattern, load_patterns
 from ambassador.inventory import (
@@ -227,6 +228,12 @@ def _run_turn(
         turn_index=turn_index,
         already_regenerated=False,
     )
+    _backstop_regeneration(
+        regenerated=regenerated,
+        segments=segments,
+        reasons=reasons,
+        turn_index=turn_index,
+    )
     return TurnOutcome(
         buyer=buyer,
         model_text=reply.text,
@@ -236,6 +243,40 @@ def _run_turn(
         escalation_reasons=tuple(reasons),
         regenerated=regenerated,
     )
+
+
+def _backstop_regeneration(
+    *,
+    regenerated: bool,
+    segments: list[Spoken],
+    reasons: list[str],
+    turn_index: int,
+) -> None:
+    """Mirrors `adapter/agent.py:_backstop_regeneration`, which owns the
+    reasoning: a regenerated reply that ends the turn stating no figure has
+    refused, and a refusal promises a colleague, so it routes one
+    deterministically rather than depending on the model calling the tool
+    (issue #33 - Arabic fired 1/3 and temperature 0 did not repeat).
+
+    Every segment present after a regeneration came FROM the regeneration: the
+    retry branch only runs while nothing has been spoken yet, on both sides of
+    the twin.
+
+    Skipped when the composed fallback already routed, which is this harness's
+    equivalent of the adapter reading `tracker.handed_over`. A tool call the
+    model made is not checked, for the reason the adapter states: the live path
+    cannot see it yet, and one handover per turn is enforced there.
+    """
+    if not regenerated:
+        return
+    if any(segment.origin == "fallback" for segment in segments):
+        return
+    if any(
+        segment.origin == "model" and states_a_figure(segment.validated)
+        for segment in segments
+    ):
+        return
+    reasons.append(f"regenerated reply stated no inventory figure (turn {turn_index})")
 
 
 def _budget_confirmation(

@@ -349,3 +349,63 @@ def test_the_harness_and_the_adapter_split_sentences_identically():
         "AED 1.5 million and Q4 2026 stay whole",
     ):
         assert core_split(text) == adapter_split(text)
+
+
+# --- issue #33: the twin keeps the same structural promise ----------------
+#
+# The harness is a hand-maintained twin of the adapter's recovery policy, so a
+# backstop that only exists on the live path would leave every eval row scoring
+# the old behaviour. Pam's Arabic row is the acceptance for the fix and it runs
+# through here.
+
+
+def test_a_regeneration_that_refuses_in_words_hands_the_buyer_over(harness):
+    """No tool call, no figure, a promise in the words. 1/3 in Arabic live, so
+    the row cannot rest on the model choosing to call the tool."""
+    backend = ScriptedBackend(
+        ModelReply("Binghatti Sapphire Bay starts from AED 1,450,000."),
+        ModelReply("I do not have that project in our current listings."),
+    )
+    observed = run_case(case("What is Sapphire Bay?"), harness, backend)
+
+    assert "current listings" in spoken(observed)
+    assert "put you through" not in spoken(observed)  # the model spoke, not the fallback
+    assert observed.escalated
+
+
+def test_a_regeneration_that_corrects_itself_hands_over_nobody(harness):
+    """The designed happy recovery: told which figure was wrong, the model
+    quotes one that is in the inventory."""
+    backend = ScriptedBackend(
+        ModelReply("Binghatti Sapphire Bay starts from AED 1,450,000."),
+        ModelReply("Binghatti Skyrise starts from AED 985,000."),
+    )
+    observed = run_case(case("What does Skyrise cost?"), harness, backend)
+
+    assert "nine hundred and eighty-five thousand" in spoken(observed)
+    assert not observed.escalated
+
+
+def test_a_first_pass_reply_with_no_figure_hands_over_nobody(harness):
+    """Scope: the backstop is the regeneration path only, or ordinary
+    conversation pages an ambassador."""
+    backend = ScriptedBackend(
+        ModelReply("We have towers across Business Bay and Dubai Marina.")
+    )
+    observed = run_case(case("Which areas do you cover?"), harness, backend)
+
+    assert not observed.escalated
+
+
+def test_a_regeneration_blocked_twice_hands_over_once(harness):
+    """The composed fallback already routes (F2); the backstop must not add a
+    second reason for the same refusal."""
+    backend = ScriptedBackend(
+        ModelReply("Binghatti Sapphire Bay starts from AED 1,450,000."),
+        ModelReply("The price at Sapphire Bay is AED 1,450,000."),
+    )
+    observed = run_case(case("What is Sapphire Bay?"), harness, backend)
+
+    assert "put you through" in spoken(observed)
+    assert observed.escalated
+    assert len(observed.turns[0].escalation_reasons) == 1

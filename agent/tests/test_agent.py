@@ -1683,3 +1683,137 @@ async def test_a_later_turn_can_hand_over_again():
         ["escalate_to_human"],
         ["escalate_to_human"],
     ]
+
+
+# --- issue #33: the regeneration's promise becomes structural -------------
+#
+# #31 named `escalate_to_human` in the regeneration instruction's leading
+# imperative and it measured 3/3 English, 3/3 Hindi and 1/3 ARABIC - and the
+# three Arabic samples were byte-identical requests at temperature 0 that
+# disagreed, so wording cannot close the gap. Same move as F2 and the budget
+# handovers: a regenerated reply that ends the turn stating no figure has
+# refused, and a refusal promises a colleague, so code keeps the promise.
+
+REFUSAL = "I do not have that project in our current listings. "
+
+
+async def test_a_regeneration_that_refuses_in_words_hands_the_buyer_over():
+    """The Arabic residual, at the product level: the model refuses correctly,
+    promises a colleague in words, and calls nothing."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay starts from AED {FABRICATED}. "]),
+            HealthyStream([REFUSAL]),
+        ]
+    )
+
+    text = spoken(await run_llm_node(agent, user_ctx("What does Sapphire Bay cost?")))
+    # The buyer hears the model's own refusal, not the composed fallback: the
+    # retry was speakable, so there was nothing to recover from.
+    assert "current listings" in text
+    assert FALLBACK_COPY["en"] not in text
+    assert FABRICATED not in text
+
+    assert agent.tracker is not None
+    assert agent.tracker.actions == ["escalate_to_human"]
+
+    await log.aclose()
+    assert [e["routed_to"] for e in escalations(buf)] == ["human_ambassador"]
+
+
+async def test_a_regeneration_that_corrects_itself_does_not_hand_over():
+    """The designed happy recovery. The model was told which figure was not in
+    the inventory and came back with one that is - nobody needs paging, and an
+    agent that escalates on everything is as broken as one that never does."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay starts from AED {FABRICATED}. "]),
+            HealthyStream([f"A studio at Skyrise is AED {GROUNDED}. "]),
+        ]
+    )
+
+    text = spoken(await run_llm_node(agent, user_ctx()))
+    assert FALLBACK_COPY["en"] not in text
+    assert agent.tracker is not None
+    assert agent.tracker.actions == []
+
+    await log.aclose()
+    emitted = [ln["event"] for ln in json_lines(buf)]
+    assert "regeneration" in emitted  # the retry did happen
+    assert "escalation" not in emitted
+
+
+async def test_a_first_pass_reply_with_no_figure_does_not_hand_over():
+    """Scope. Most of a conversation carries no figure - "which areas do you
+    cover" is not a refusal - so the backstop is the regeneration path only."""
+    agent, log, buf, _ = make_agent(
+        [HealthyStream(["We have towers across Business Bay and Dubai Marina. "])]
+    )
+
+    await run_llm_node(agent, user_ctx("Which areas do you cover?"))
+    assert agent.tracker is not None
+    assert agent.tracker.actions == []
+
+    await log.aclose()
+    emitted = [ln["event"] for ln in json_lines(buf)]
+    assert "regeneration" not in emitted
+    assert "escalation" not in emitted
+
+
+async def test_a_regeneration_blocked_twice_hands_over_exactly_once():
+    """The composed fallback already routes (F2). The backstop must not page a
+    second ambassador for the same refusal."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay starts from AED {FABRICATED}. "]),
+            HealthyStream([f"Still AED {FABRICATED}. "]),
+        ]
+    )
+
+    assert FALLBACK_COPY["en"] in spoken(await run_llm_node(agent, user_ctx()))
+    assert agent.tracker is not None
+    assert agent.tracker.actions == ["escalate_to_human"]
+
+    await log.aclose()
+    assert len(escalations(buf)) == 1
+    assert not [ln for ln in json_lines(buf) if ln["event"] == "escalation_suppressed"]
+
+
+async def test_a_refusing_regeneration_that_also_calls_the_tool_pages_one_human():
+    """The 1-in-3 Arabic case and the 3-in-3 English case land on the same turn
+    shape. #31's notify-once guard is what keeps it one handover; both requests
+    stay in the record, because which path asked is the hook-2 claim."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay starts from AED {FABRICATED}. "]),
+            HealthyStream([REFUSAL]),
+        ]
+    )
+
+    await run_llm_node(agent, user_ctx())
+    # The framework executes the model's tool call after the node finishes.
+    await agent.escalate_to_human(None, "the figure is not in the inventory")
+
+    await log.aclose()
+    assert len(escalations(buf)) == 1
+    assert [ln["turn"] for ln in json_lines(buf) if ln["event"] == "escalation_suppressed"] == [1]
+    assert agent.tracker is not None
+    assert agent.tracker.actions == ["escalate_to_human", "escalate_to_human"]
+
+
+async def test_a_conversational_count_in_a_regeneration_is_not_a_corrected_figure():
+    """The 0-12 count exemption is not an answer about money. A retry that says
+    "there are 2 layouts" and quotes nothing has still refused."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay starts from AED {FABRICATED}. "]),
+            HealthyStream(["I cannot confirm that price. There are 2 layouts. "]),
+        ]
+    )
+
+    await run_llm_node(agent, user_ctx())
+    assert agent.tracker is not None
+    assert agent.tracker.actions == ["escalate_to_human"]
+
+    await log.aclose()
+    assert len(escalations(buf)) == 1

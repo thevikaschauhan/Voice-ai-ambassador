@@ -2,6 +2,7 @@ from ambassador.figures import (
     extract_figures,
     find_composed_arithmetic,
     normalise_digits,
+    states_a_figure,
 )
 
 
@@ -195,3 +196,47 @@ def test_latin_x_is_deliberately_not_an_arithmetic_operator():
     assert [m.figure.surface for m in find_composed_arithmetic("AED 8 x 10^5")] == [
         "10^5"
     ]
+
+
+# --- states_a_figure: does this sentence assert a figure at all? ----------
+#
+# The regeneration backstop's whole input (issue #33). A regenerated reply that
+# states no figure has refused, and a refusal promises a colleague; a reply that
+# states one corrected itself. Getting the count exemption wrong here either
+# pages an ambassador on every "there are 2 layouts" or lets a refusal through
+# unrouted.
+
+
+def test_a_sentence_with_no_digits_states_no_figure():
+    assert not states_a_figure("I do not have that project in our current listings.")
+    assert not states_a_figure("")
+
+
+def test_an_amount_is_a_figure():
+    assert states_a_figure("Binghatti Skyrise starts from AED 985,000.")
+
+
+def test_a_year_is_a_figure():
+    assert states_a_figure("Handover is Q4 2026.")
+
+
+def test_a_percent_is_a_figure():
+    assert states_a_figure("The down payment is 20%.")
+
+
+def test_a_conversational_count_is_not_a_figure():
+    """The documented 0-12 exemption. "There are 2 layouts" answers nothing
+    about money, so it must not read as a corrected figure."""
+    assert not states_a_figure("There are 2 layouts and 3 towers.")
+
+
+def test_a_currency_token_makes_even_a_small_integer_a_figure():
+    """`_classify` voids the count exemption beside a currency token, so the
+    sentence that priced a studio in dirhams cannot hide behind it."""
+    assert states_a_figure("It starts at AED 12.")
+
+
+def test_arabic_indic_digits_state_a_figure_too():
+    """The predicate runs on the normalising extractor, not on ASCII digits, or
+    the backstop would read every Arabic reply as a refusal."""
+    assert states_a_figure("يبدأ سعر المشروع من ٩٨٥٬٠٠٠ درهم.")

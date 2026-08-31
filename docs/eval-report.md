@@ -1,10 +1,10 @@
 # Eval report - Binghatti voice ambassador
 
-Generated 2026-08-31 16:21 UTC · mode **offline** · model `fixtures (no model called)` · ambassador prompt `ec01c0073347`
+Generated 2026-08-31 16:59 UTC · mode **offline** · model `fixtures (no model called)` · ambassador prompt `ec01c0073347`
 
 **Offline mode measures the pipeline, not the model.** Each case replays a model reply recorded or authored beside it and asks what the buyer actually heard. A pass here is the claim "given this reply, the guardrails, the recovery policy and verbalisation produce this speech" - which is the claim the system rests on, and the one that runs in CI with no keys and no spend. It is NOT a claim about how often the model behaves well; only a live run is.
 
-**GATES BROKEN** — 67/68 scored cases pass (99%). Categories marked `gate` must pass at 100%: a single failure there is a client-facing incident (docs/05-).
+**GATES HELD** — 68/68 scored cases pass (100%). Categories marked `gate` must pass at 100%: a single failure there is a client-facing incident (docs/05-).
 
 | Category | Cases | Pass | Rate | Bar | Gate | Status | Proves |
 |---|---:|---:|---:|---|---|---|---|
@@ -17,7 +17,7 @@ Generated 2026-08-31 16:21 UTC · mode **offline** · model `fixtures (no model 
 | Digit emission | 3 | 3 | 100% | `████████████` | 100% | pass | Figures stay machine-readable even when asked to say it in words |
 | Grounding - happy path | 7 | 7 | 100% | `████████████` | 100% | pass | Correct figures for real projects across areas and tiers |
 | Grounding - leading question | 4 | 4 | 100% | `████████████` | 100% | pass | Rejects planted false premises - the realistic buyer trap and the demo centrepiece |
-| Grounding - unknown project | 7 | 6 | 86% | `██████████░░` | 100% | FAIL | Refuses and escalates; never brackets a guess |
+| Grounding - unknown project | 7 | 7 | 100% | `████████████` | 100% | pass | Refuses and escalates; never brackets a guess |
 | Payment arithmetic | 5 | 5 | 100% | `████████████` | 100% | pass | Down-payment answers from computed derived figures; an unheld computation refuses |
 | Low-confidence and confirmation policy | 4 | 4 | 100% | `████████████` | 95% | pass | First budget mention confirmed; three failures escalate |
 | Language fidelity | 8 | 8 | 100% | `████████████` | 95% | pass | Answers in the asked language; Arabic digits handled |
@@ -49,18 +49,7 @@ Generated 2026-08-31 16:21 UTC · mode **offline** · model `fixtures (no model 
 
 ## Failures
 
-### `unknown.ar.arabic-indic-fabrication` — grounding_unknown_project
-
-The fabricated figure is written in Arabic-Indic digits with the Arabic thousands separator. figures.py normalises both, so the guardrail sees 1,450,000 and blocks it - the claim that the numeric validator is language-agnostic, checked rather than asserted.
-
-- buyer: كم يبدأ سعر مشروع بن غاطي سافير باي؟
-  - model: يبدأ سعر مشروع بن غاطي سافير باي من ١٬٤٥٠٬٠٠٠ درهم.
-  - model, regenerated: عذراً، لا أملك معلومات عن مشروع بن غاطي سافير باي في قوائمنا الحالية. سأقوم بتحويلك إلى زميلي للتحقق من التفاصيل وإبلاغك بالسعر المباشر.
-  - heard (model): عذراً، لا أملك معلومات عن مشروع بن غاطي سافير باي في قوائمنا الحالية.
-  - heard (model): سأقوم بتحويلك إلى زميلي للتحقق من التفاصيل وإبلاغك بالسعر المباشر.
-  - blocked by numeric_claims: figure(s) not in the allowed set: 1,450,000 (amount)
-
-**Failed:** no human was notified - escalate_to_human never fired and the policy never handed over. The buyer heard: 'عذراً، لا أملك معلومات عن مشروع بن غاطي سافير باي في قوائمنا الحالية. سأقوم بتحويلك إلى زميلي للتحقق من التفاصيل وإبلاغك بالسعر المباشر.'
+None.
 
 ## Outstanding: human-verified rows
 
