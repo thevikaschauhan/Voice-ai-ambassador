@@ -107,12 +107,15 @@ def load_confirmations(path: Path | None = None) -> ConfirmationCopy:
                     f"{type(value).__name__}, not text. It is spoken verbatim."
                 )
             copy[key] = value.strip()
-        if "{amount}" in copy["give_up"]:
+        if "{" in copy["give_up"]:
+            # Any brace, not just a well-formed {amount}: give_up is spoken
+            # VERBATIM on the failure path, without composing, so a malformed
+            # slot here would reach TTS braces and all.
             raise ValueError(
-                f"{source.name}: {language!r}.give_up must not carry an "
-                "{amount} slot. It is the terminal line every composition "
-                "failure falls back to, so it must always be speakable with "
-                "nothing to fill."
+                f"{source.name}: {language!r}.give_up must not carry a format "
+                "slot of any kind. It is the terminal line every composition "
+                "failure falls back to, spoken verbatim, so it must always be "
+                "speakable with nothing to fill."
             )
         by_language[language] = copy
     return ConfirmationCopy(by_language=by_language)
@@ -149,7 +152,13 @@ def compose(template: str, *, echoed: str, said: str) -> str:
         )
     try:
         text = template.format(amount=echoed)
-    except (KeyError, IndexError, ValueError) as exc:
+    except Exception as exc:
+        # Deliberately every exception, converted to one the caller fails
+        # CLOSED on. str.format raises more than the obvious ValueError and
+        # KeyError: "{amount.foo}" is an AttributeError and "{amount[x]}" a
+        # TypeError, and the first version of this catch let both escape the
+        # voice path entirely - a silent turn, then a fall-through to the
+        # model on the same-turn retry.
         raise UnspeakableConfirmation(
             f"confirmation template {template!r} could not be filled: {exc}"
         ) from exc

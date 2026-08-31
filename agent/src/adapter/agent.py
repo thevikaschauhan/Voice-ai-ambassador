@@ -56,7 +56,6 @@ from livekit.agents.voice import SpeechHandle
 from livekit.plugins import fishaudio, silero
 
 from ambassador.budget import BudgetPolicy, load_currency_vocabulary
-from ambassador.budget import Decision as BudgetDecision
 from ambassador.guardrails.prohibited import languages_covered, load_patterns
 from ambassador.inventory import (
     build_allowed_figures,
@@ -68,11 +67,7 @@ from ambassador.verbalise import load_spoken_forms
 
 from .brief import BriefExtractor
 from .config import Settings, load_settings
-from .confirmations import (
-    EchoNotInTranscript,
-    UnspeakableConfirmation,
-    load_confirmations,
-)
+from .confirmations import UnspeakableConfirmation, load_confirmations
 from .confirmations import compose as compose_confirmation
 from .disclosure import load_disclosures, resolve_opening
 from .events import EventLog, TurnTracker
@@ -344,11 +339,15 @@ class AmbassadorAgent(Agent):
         confirmation copy nobody has authored. Speaking English into an Arabic
         call would be worse than not asking.
 
-        Every failure in here fails CLOSED: if the confirmation cannot be
-        spoken, the buyer goes to a human, and the model never gets the turn
-        unconfirmed. The first version of this method returned None on error,
-        which read as fail-safe and was fail-open - the policy silently
-        switching itself off on the exact path it existed to protect.
+        ANY failure fails CLOSED: the buyer goes to a human, and the model
+        never gets the turn unconfirmed. The catch is deliberately Exception,
+        not a curated list: the first version curated (ValueError) and failed
+        open; the rework widened it (KeyError, IndexError) and a second
+        review found AttributeError and TypeError still escaping into a
+        silent turn - which the observe-once gate then converted into a
+        model turn on the same-turn retry. The direction is decided once,
+        here: a crash anywhere in the confirmation machinery is a handover,
+        never a model turn and never silence.
         """
         if not self._budget_policy_runs:
             return None
@@ -358,6 +357,27 @@ class AmbassadorAgent(Agent):
             # one reply.
             return None
         self._budget_observed_turn = tracker.turn_index
+        try:
+            return self._composed_confirmation(tracker)
+        except Exception:
+            logger.error("budget confirmation failed; handing over", exc_info=True)
+            self._budget.abandon()
+            self._route_to_human("budget confirmation failure")
+            self._budget_last_action = "give_up"
+            self._log.emit(
+                "budget_confirmation",
+                turn=tracker.turn_index,
+                action="give_up",
+                currency=None,
+                hands_over=True,
+            )
+            # Safe to speak verbatim: the loader guarantees give_up is
+            # non-empty for any language the policy runs in, and slot-free.
+            return self._confirmations.line(self._settings.language, "give_up")
+
+    def _composed_confirmation(self, tracker: TurnTracker) -> str | None:
+        """The happy path of `_budget_confirmation`; raises rather than
+        recovers, because the caller owns the failure direction."""
         decision = self._budget.observe(tracker.buyer_utterance)
         if not decision.speaks:
             if decision.currency is not None:
@@ -369,43 +389,30 @@ class AmbassadorAgent(Agent):
             return None
 
         template = self._confirmations.line(self._settings.language, decision.action)
-        try:
-            if decision.mention is not None:
-                # Every mention-bearing decision goes through compose(), slot
-                # or no slot: gating on a literal "{amount}" check let a
-                # template with a MISSPELLED slot skip composition and reach
-                # TTS braces and all.
-                text = compose_confirmation(
-                    template,
-                    echoed=decision.mention.surface,
-                    # The transcript the mention came from, NOT this turn's:
-                    # on a re-ask the current turn is the reply that failed to
-                    # answer, and the number is not in it.
-                    said=decision.mention.utterance,
-                )
-            elif "{" in template:
-                raise UnspeakableConfirmation(
-                    f"{decision.action!r} copy carries a slot and the decision "
-                    "has nothing to fill it with"
-                )
-            else:
-                text = template
-            if not text.strip():
-                raise UnspeakableConfirmation(
-                    f"no confirmation copy composed for {decision.action!r}"
-                )
-        except (EchoNotInTranscript, UnspeakableConfirmation):
-            # A defect in this policy or its copy, not in the buyer's reply.
-            # Fail closed: hand the buyer to a human and settle the policy so
-            # it cannot loop. The one direction this must never fail is open -
-            # returning None here hands the model an unconfirmed budget.
-            logger.error(
-                "budget confirmation could not be composed; handing over",
-                exc_info=True,
+        if decision.mention is not None:
+            # Every mention-bearing decision goes through compose(), slot or
+            # no slot: gating on a literal "{amount}" check let a template
+            # with a MISSPELLED slot skip composition and reach TTS braces
+            # and all.
+            text = compose_confirmation(
+                template,
+                echoed=decision.mention.surface,
+                # The transcript the mention came from, NOT this turn's: on a
+                # re-ask the current turn is the reply that failed to answer,
+                # and the number is not in it.
+                said=decision.mention.utterance,
             )
-            self._budget.abandon()
-            decision = BudgetDecision("give_up")
-            text = self._confirmations.line(self._settings.language, "give_up")
+        elif "{" in template:
+            raise UnspeakableConfirmation(
+                f"{decision.action!r} copy carries a slot and the decision "
+                "has nothing to fill it with"
+            )
+        else:
+            text = template
+        if not text.strip():
+            raise UnspeakableConfirmation(
+                f"no confirmation copy composed for {decision.action!r}"
+            )
 
         if decision.hands_over:
             # Speaking "let me put you through" without notifying anyone is

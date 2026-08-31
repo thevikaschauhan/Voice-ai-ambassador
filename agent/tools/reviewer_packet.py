@@ -272,6 +272,7 @@ def main(language: str) -> None:
     w("")
     w(bullet("denial words (like \"not\"):"))
     w(bullet("contradiction words (like \"no\" / \"wrong\"):"))
+    w(bullet("agreement words (like \"yes\" / \"correct\"):"))
     w("")
     w("## 4. How these names should sound")
     w("")

@@ -109,6 +109,7 @@ The system also reads a buyer's PUSH-BACK, so a rejected read-back is never reco
 
 - [ ] denial words (like "not"):
 - [ ] contradiction words (like "no" / "wrong"):
+- [ ] agreement words (like "yes" / "correct"):
 
 ## 4. How these names should sound
 

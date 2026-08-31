@@ -414,3 +414,88 @@ def test_abandon_settles_without_consent_and_the_policy_stays_silent(vocabulary)
     p.abandon()
     assert p.settled
     assert p.observe("My budget is 2 crore.").action == "none"
+
+
+# --- the second independent review's findings, pinned -----------------------
+#
+# Five classes reproduced through production code while 341 tests were green.
+# Each test below is one of those reproductions, verbatim.
+
+
+def test_a_contradiction_beats_a_currency_named_in_the_same_reply(vocabulary):
+    """"No, dirhams" rejects the read-back; the dirhams is grammar, not
+    consent. The currency used to win because it was read first."""
+    p = policy(vocabulary)
+    p.observe("My budget is 5 million dirhams.")
+    d = p.observe("No, dirhams.")
+    assert d.action == "ask_amount"
+    assert not p.settled
+
+
+def test_uncertainty_about_a_currency_never_settles_it(vocabulary):
+    """"I'm not sure about rupees" must not settle INR and hand over."""
+    p = policy(vocabulary)
+    p.observe("My budget is 2 crore.")
+    d = p.observe("I'm not sure about rupees.")
+    assert d.action == "ask_currency"
+    assert not p.settled
+    assert p.currency is None
+
+
+def test_a_doubted_currency_out_of_negation_reach_still_reads_as_doubt(vocabulary):
+    """"I don't think it was dirhams": the negator sits too far from the
+    currency to deny it, but it is still a contradiction, never consent."""
+    p = policy(vocabulary)
+    p.observe("My budget is 5 million dirhams.")
+    d = p.observe("I don't think it was dirhams.")
+    assert d.action == "ask_amount"
+    assert not p.settled
+
+
+def test_a_signal_free_reply_to_a_read_back_is_not_consent(vocabulary):
+    """"Can you repeat that?" carries no signal at all. Consent must be said
+    - it settled as agreement, which confuses a non-answer with a yes."""
+    p = policy(vocabulary)
+    p.observe("My budget is 5 million dirhams.")
+    d = p.observe("Can you repeat that?")
+    assert d.action == "confirm_amount"
+    assert not p.settled
+
+    d = p.observe("Yes, that's right.")
+    assert p.settled and d.currency == "AED"
+
+
+def test_a_currency_does_not_reach_across_a_clause_to_another_figure(vocabulary):
+    """The deposit's AED must not resolve the crore budget: that recreates
+    the 20x error the whole policy exists to prevent."""
+    mention = budget(
+        vocabulary, "My budget is 2 crore; I have AED 500,000 saved for the deposit."
+    )
+    assert mention.surface == "2 crore"
+    assert mention.needs_currency
+
+
+def test_a_keyword_tie_goes_to_the_figure_it_precedes(vocabulary):
+    """"The price is AED 985,000 and my budget is AED 2,000,000": the word
+    "budget" sits at the same gap from both figures, and the tie must go to
+    the buyer's number, not the quoted price."""
+    mention = budget(
+        vocabulary, "The price is AED 985,000 and my budget is AED 2,000,000."
+    )
+    assert mention.value == 2_000_000
+
+
+def test_a_currency_in_the_next_sentence_does_not_bind(vocabulary):
+    """Nearest-figure ownership alone cannot save this one: the dirhams is
+    the crore's nearest figure AND inside the distance window, and only the
+    sentence boundary says it belongs to different talk."""
+    mention = budget(
+        vocabulary, "My budget is 2 crore. My salary is paid in dirhams."
+    )
+    assert mention.surface == "2 crore"
+    assert mention.needs_currency
+
+
+def test_a_keyword_in_the_previous_sentence_does_not_mark(vocabulary):
+    mention = budget(vocabulary, "I went over our budget. Floor 15 is fine.")
+    assert mention is None

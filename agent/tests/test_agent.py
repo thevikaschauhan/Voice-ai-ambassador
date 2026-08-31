@@ -1084,3 +1084,70 @@ def test_the_prompt_keeps_the_model_confirming_where_the_policy_is_off():
     )
     assert "confirm the amount AND the currency" in off.instructions
     assert "The budget confirmation is handled by the system" not in off.instructions
+
+
+# --- the second independent review's seam findings, pinned ------------------
+
+
+def test_every_format_failure_is_unspeakable_not_an_escape():
+    """str.format raises more than ValueError and KeyError: "{amount.foo}"
+    is an AttributeError and "{amount[x]}" a TypeError, and both escaped the
+    first curated except into a silent turn."""
+    from adapter.confirmations import UnspeakableConfirmation
+    from adapter.confirmations import compose as compose_confirmation
+
+    for template in ("{amount.foo} - dirhams or rupees?", "{amount[x]} - right?"):
+        with pytest.raises(UnspeakableConfirmation):
+            compose_confirmation(template, echoed="2 crore", said="2 crore budget")
+
+
+async def test_a_template_attribute_error_still_hands_over_out_loud():
+    """The full fail-closed path for an exception class the curated catch
+    missed: the turn must speak the give-up line, notify a human, and never
+    fall through to the model - including on a same-turn second invocation."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    agent._confirmations = ConfirmationCopy(
+        by_language={
+            "en": {
+                "ask_currency": "{amount.foo} - dirhams or rupees?",
+                "confirm_amount": "{amount} - right?",
+                "ask_amount": "What is the budget?",
+                "cannot_convert": "An ambassador will help.",
+                "give_up": "Let me put you through to one of our ambassadors.",
+            }
+        }
+    )
+
+    reply = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "ambassadors" in reply
+    assert agent._budget.settled
+    assert "escalate_to_human" in agent.tracker.actions
+
+    # The same-turn retry (the observe-once gate) must not reach the model
+    # with the budget unconfirmed - the policy is settled and escalated, so
+    # the model turn that follows is a normal post-handover turn.
+    second = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "{" not in second
+
+    await log.aclose()
+    assert '"escalation"' in buf.getvalue()
+
+
+def test_the_give_up_line_may_carry_no_slot_of_any_kind(tmp_path):
+    """give_up is spoken verbatim on the failure path, so any format slot in
+    it - not just a well-formed {amount} - is a loader error."""
+    from adapter.confirmations import load_confirmations
+
+    bad = tmp_path / "confirmations.yaml"
+    bad.write_text(
+        "en:\n"
+        '  ask_currency: "{amount} - dirhams or rupees?"\n'
+        '  confirm_amount: "{amount} - right?"\n'
+        '  ask_amount: "What is the budget?"\n'
+        '  cannot_convert: "An ambassador will help."\n'
+        '  give_up: "Let me put you through {amount.foo}."\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="give_up"):
+        load_confirmations(bad)

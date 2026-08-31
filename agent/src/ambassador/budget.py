@@ -71,6 +71,12 @@ _KEYWORD_AFTER = 15
 _NEGATION_GAP = 6
 _PUNCTUATION = re.compile(r"[,.;:!?]")
 
+# A currency or keyword never reaches across one of these to a figure in
+# another clause: "my budget is 2 crore; I have AED 500,000 saved" must not
+# read the deposit's AED onto the crore. Commas and dashes stay bindable -
+# "2 crore, in rupees" is one clause.
+_CLAUSE_BREAK = re.compile(r"[;.!?]")
+
 # Multiplier words that make a bare number a budget on their own: nobody says
 # "two crore" about a bedroom count. Kept in step with figures._MULTIPLIERS,
 # minus the ones too small to imply money. Longest alternatives first, or
@@ -106,6 +112,10 @@ class CurrencyVocabulary:
     negators: dict[str, tuple[str, ...]]
     # "no", "wrong": the buyer is contradicting what was read back to them.
     contradictions: dict[str, tuple[str, ...]]
+    # "yes", "correct": explicit agreement with a read-back. Consent is never
+    # inferred from the absence of an objection - "can you repeat that?" is
+    # not a yes.
+    affirmations: dict[str, tuple[str, ...]]
     rate: ConversionRate
 
     def languages_covered(self) -> frozenset[str]:
@@ -193,6 +203,7 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
         budget_keywords=_word_lists(raw, "budget_keywords"),
         negators=_word_lists(raw, "negators"),
         contradictions=_word_lists(raw, "contradictions"),
+        affirmations=_word_lists(raw, "affirmations"),
         rate=rate,
     )
 
@@ -256,26 +267,6 @@ def _currency_hits(
     return hits
 
 
-def _currency_near(
-    text: str, start: int, end: int, vocabulary: CurrencyVocabulary, language: str
-) -> Currency | None:
-    """The currency named beside this figure, if any.
-
-    Nearest non-negated word wins, so "rupees, not dirhams, 2 crore" binds to
-    rupees: "dirhams" is being denied, and denials do not name a currency.
-    """
-    lowered = text.lower()
-    lo, hi = max(0, start - _BIND_WINDOW), end + _BIND_WINDOW
-    best: tuple[int, Currency] | None = None
-    for hit in _currency_hits(lowered, vocabulary, language):
-        if hit.negated or hit.end <= lo or hit.start >= hi:
-            continue
-        distance = min(abs(hit.start - start), abs(hit.start - end))
-        if best is None or distance < best[0]:
-            best = (distance, hit.currency)
-    return None if best is None else best[1]
-
-
 @dataclass(frozen=True)
 class ReplyReading:
     """What a reply to a confirmation actually said about it.
@@ -285,12 +276,14 @@ class ReplyReading:
     buyer pushed back on what was read to them - a contradiction word, or a
     negator that is not denying a currency ("no", "that's not right", "I'm
     not sure"). Uncertainty counts as contradiction on purpose: the one thing
-    a doubted read-back must never be treated as is consent.
+    a doubted read-back must never be treated as is consent. `agreed` means an
+    explicit agreement word was said; consent is never inferred from silence.
     """
 
     affirmed: tuple[Currency, ...]
     denied: tuple[Currency, ...]
     contradicted: bool
+    agreed: bool
 
 
 def read_reply(
@@ -335,7 +328,14 @@ def read_reply(
                     break
             if contradicted:
                 break
-    return ReplyReading(affirmed=affirmed, denied=denied, contradicted=contradicted)
+
+    agreed = any(
+        token and re.search(_token_pattern(token), lowered)
+        for token in vocabulary.affirmations.get(language, ())
+    )
+    return ReplyReading(
+        affirmed=affirmed, denied=denied, contradicted=contradicted, agreed=agreed
+    )
 
 
 def _other_currency(currency: Currency) -> Currency:
@@ -352,34 +352,95 @@ def find_budget(
 
     "Budget-like" means one of three things, because a bare number is usually
     not money: it carries a currency, it carries a lakh/crore/million-style
-    multiplier IN ITS OWN SURFACE, or a budget keyword sits within a short
-    window of it. The unit must come from the figure's own surface because
-    `extract_figures` already folds an adjacent multiplier in - a unit found
-    by looking further ahead belongs to the NEXT figure, which is how "Floor
-    15, 2 million" once read as a budget of 15.
+    multiplier IN ITS OWN SURFACE, or a budget keyword belongs to it. The unit
+    must come from the figure's own surface because `extract_figures` already
+    folds an adjacent multiplier in - a unit found by looking further ahead
+    belongs to the NEXT figure, which is how "Floor 15, 2 million" once read
+    as a budget of 15.
 
-    When several figures qualify, the one marked by a budget keyword wins over
+    Currency words and budget keywords are OWNED by their nearest figure, and
+    never reach across a clause break. Both rules exist because window-only
+    matching shipped defects: "my budget is 2 crore; I have AED 500,000 saved"
+    read the deposit's AED onto the crore, and in "the price is AED 985,000
+    and my budget is AED 2,000,000" the word "budget" fell inside the price's
+    window too and the price won.
+
+    When several figures qualify, the one owning a budget keyword wins over
     the ones that merely carry a currency or a unit: in "the villa is 5
     million dirhams but I only want to spend 2 crore rupees", the budget is
     what the buyer wants to spend, not the price they are quoting back.
     """
     text = normalise_digits(utterance)
     lowered = text.lower()
-    keywords = vocabulary.budget_keywords.get(language, ())
+    candidates = [
+        m
+        for m in sorted(extract_figures(text), key=lambda m: m.start)
+        if m.figure.kind == "amount"
+    ]
+    if not candidates:
+        return None
+    spans = [(m.start, m.end) for m in candidates]
 
-    def keyword_near(start: int, end: int) -> bool:
-        lo, hi = max(0, start - _KEYWORD_BEFORE), end + _KEYWORD_AFTER
-        window = lowered[lo:hi]
-        return any(k and k in window for k in keywords)
+    def owner(
+        start: int, end: int, *, prefer_following: bool = False
+    ) -> tuple[int, int]:
+        """(index, gap) of the figure this token belongs to.
+
+        `prefer_following` breaks exact ties toward the figure the token
+        precedes: budget keywords lead their figure in speech ("my budget is
+        X"), and in "the price is AED 985,000 and my budget is AED 2,000,000"
+        the word "budget" sits at the same gap from both figures - the tie
+        must go to the buyer's number, not the quoted price.
+        """
+        best_i, best_d, best_follows = 0, -1, False
+        for i, (s, e) in enumerate(spans):
+            if end <= s:
+                gap, follows = s - end, True
+            elif start >= e:
+                gap, follows = start - e, False
+            else:
+                gap, follows = 0, False
+            if (
+                best_d < 0
+                or gap < best_d
+                or (gap == best_d and prefer_following and follows and not best_follows)
+            ):
+                best_i, best_d, best_follows = i, gap, follows
+        return best_i, best_d
+
+    def crosses_clause(start: int, end: int, i: int) -> bool:
+        s, e = spans[i]
+        return bool(_CLAUSE_BREAK.search(lowered[min(end, e) : max(start, s)]))
+
+    currency_of: dict[int, tuple[int, Currency]] = {}
+    for hit in _currency_hits(lowered, vocabulary, language):
+        if hit.negated:
+            continue
+        i, distance = owner(hit.start, hit.end)
+        if distance > _BIND_WINDOW or crosses_clause(hit.start, hit.end, i):
+            continue
+        held = currency_of.get(i)
+        if held is None or distance < held[0]:
+            currency_of[i] = (distance, hit.currency)
+
+    marked: set[int] = set()
+    for keyword in vocabulary.budget_keywords.get(language, ()):
+        if not keyword:
+            continue
+        for found in re.finditer(_token_pattern(keyword), lowered):
+            i, distance = owner(found.start(), found.end(), prefer_following=True)
+            # Keywords lead in speech ("my budget is X"), so the reach behind
+            # a figure is wider than the reach ahead of it.
+            reach = _KEYWORD_BEFORE if found.end() <= spans[i][0] else _KEYWORD_AFTER
+            if distance <= reach and not crosses_clause(found.start(), found.end(), i):
+                marked.add(i)
 
     fallback: BudgetMention | None = None
-    for match in sorted(extract_figures(text), key=lambda m: m.start):
-        if match.figure.kind != "amount":
-            continue
-        currency = _currency_near(text, match.start, match.end, vocabulary, language)
+    for i, match in enumerate(candidates):
+        held = currency_of.get(i)
+        currency = None if held is None else held[1]
         unit = _BUDGET_UNITS.search(match.figure.surface)
-        marked = keyword_near(match.start, match.end)
-        if currency is None and unit is None and not marked:
+        if currency is None and unit is None and i not in marked:
             continue
         mention = BudgetMention(
             surface=match.figure.surface,
@@ -390,7 +451,7 @@ def find_budget(
             ),
             utterance=text,
         )
-        if marked:
+        if i in marked:
             return mention
         if fallback is None:
             fallback = mention
@@ -465,14 +526,17 @@ class BudgetPolicy:
     model never gets the chance to skip the question, because the adapter
     speaks the confirmation INSTEAD of running a turn.
 
-    While a question is open, every reply is read for four things, in order:
+    While a question is open, every reply is read for five things, in order:
     a restated budget (which replaces the stale mention and restarts the
     confirmation - "sorry, I meant 5 million dirhams" is about 5 million, not
-    about whatever was misheard first), a currency named without negation, a
-    currency denied ("not dirhams" names the other one, because there are
-    exactly two), and a contradiction ("no", "that's wrong", "I'm not sure"),
-    which reopens the amount rather than settling it. Only a confirm_amount
-    reply with none of those counts as consent.
+    about whatever was misheard first), a contradiction ("no", "that's
+    wrong", "I'm not sure") - read BEFORE any currency in the same reply, so
+    "no, dirhams" rejects the read-back rather than settling it - then a
+    currency named without negation, a currency denied ("not dirhams" names
+    the other one, because there are exactly two), and finally explicit
+    agreement ("yes", "correct") to a read-back. A reply carrying none of
+    those is a failed attempt, never consent: "can you repeat that?" is not
+    a yes, and three of them hand the buyer to a human.
     """
 
     def __init__(self, vocabulary: CurrencyVocabulary, language: str) -> None:
@@ -549,22 +613,28 @@ class BudgetPolicy:
             return self._confirm(fresh)
 
         reading = read_reply(said, self._vocabulary, self._language)
+        if reading.contradicted:
+            # Contradiction is read FIRST, before any currency in the same
+            # reply. "No, dirhams" and "I'm not sure about rupees" name a
+            # currency grammatically while rejecting or doubting the
+            # read-back, and letting the currency win recorded rejection as
+            # consent - a shipped defect twice over. A rejected read-back
+            # reopens the amount; a doubted currency question is asked again.
+            if self._asked == "confirm_amount":
+                return self._failed_attempt(reopen="ask_amount")
+            return self._failed_attempt()
+
         if len(reading.affirmed) == 1:
             return self._settle_currency(reading.affirmed[0])
         if not reading.affirmed and len(reading.denied) == 1:
             # Two currencies exist, so denying one names the other.
             return self._settle_currency(_other_currency(reading.denied[0]))
 
-        if self._asked == "confirm_amount":
-            if reading.contradicted:
-                # "No" to a read-back means the number is wrong. Ask for it
-                # again; treating rejection as consent was a shipped defect.
-                return self._failed_attempt(reopen="ask_amount")
-            if not reading.affirmed:
-                # The question was "have I got that right", and nothing in the
-                # reply pushed back: that is consent.
-                assert self._mention.currency is not None
-                return self._settle_currency(self._mention.currency)
+        if self._asked == "confirm_amount" and reading.agreed:
+            # Consent must be said, never inferred: "can you repeat that?"
+            # carries no signal at all and used to settle as agreement.
+            assert self._mention.currency is not None
+            return self._settle_currency(self._mention.currency)
 
         return self._failed_attempt()
 
