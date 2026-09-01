@@ -832,3 +832,101 @@ def test_a_folded_unit_is_still_money_without_a_dimension(vocabulary, said, valu
     mention = budget(vocabulary, said)
     assert mention is not None, said
     assert mention.value == value
+
+
+# --- PR #44 round two: four adjacent regressions ---------------------------
+#
+# All four got past a 49-utterance differential because the corpus lacked the
+# SHAPES, not the strings. Each group below is a shape class, not one example.
+
+
+@pytest.mark.parametrize(
+    "said,value",
+    [
+        # A dimension word suppressed every amount near it, not just the
+        # ambiguous folded "m" the rule exists for.
+        ("I have AED 800,000 for a room.", 800_000.0),
+        ("I have 800k for a wide balcony.", 800_000.0),
+        ("my budget is 2 crore for a room with a wide balcony", 20_000_000.0),
+        ("985,000 dirhams for a high floor", 985_000.0),
+        ("I can spend 1.5m on a place with a balcony", 1_500_000.0),
+    ],
+)
+def test_a_dimension_word_only_withholds_the_ambiguous_unit(
+    vocabulary, said, value
+):
+    """Round two, finding 1. "m" is the collision - metres against millions.
+    A currency-bearing figure, or one carrying any other money unit, is not
+    made ambiguous by a room being mentioned in the same breath."""
+    mention = budget(vocabulary, said)
+    assert mention is not None, said
+    assert mention.value == value
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # "Affordable" and "spend" without a first-person subject are the
+        # LISTING talking, not the buyer. The first of these recreated F3.
+        "The listing says AED 750,000 is affordable.",
+        "The brochure says buyers spend AED 750,000.",
+        "The website says AED 750,000 is affordable for most buyers.",
+        "The agent said people spend around 3 million here.",
+    ],
+)
+def test_ownership_needs_a_first_person_subject(vocabulary, said):
+    """Round two, finding 2. Ownership is the buyer claiming a figure. A bare
+    affordability or spending word claims nothing."""
+    assert budget(vocabulary, said) is None, said
+
+
+@pytest.mark.parametrize(
+    "said,value",
+    [
+        # Ownership can FOLLOW its amount. Binding forward to "the next figure
+        # in the clause" then confirmed the quoted one instead.
+        (
+            "The website says AED 750,000 is my budget, and AED 800,000 is the"
+            " listing price.",
+            750_000.0,
+        ),
+        (
+            "The listing says AED 750,000, which is my budget, and AED 800,000"
+            " is the asking price.",
+            750_000.0,
+        ),
+        # And the preposed order still has to win, which is what made a plain
+        # nearest-figure rule wrong in the first place.
+        ("The price is AED 985,000 and my budget is AED 2,000,000.", 2_000_000.0),
+    ],
+)
+def test_ownership_claims_its_own_figure_in_either_order(
+    vocabulary, said, value
+):
+    """Round two, finding 3. "Introduces" is not always forward."""
+    mention = budget(vocabulary, said)
+    assert mention is not None, said
+    assert mention.value == value
+
+
+@pytest.mark.parametrize(
+    "said,value",
+    [
+        # A contrastive conjunction ends the quoted claim, whatever words the
+        # buyer uses for their own money afterwards.
+        ("The listing says AED 750,000, but I have AED 800,000 available.", 800_000.0),
+        ("The listing says AED 750,000 but AED 800,000 works for me.", 800_000.0),
+        ("The price is AED 985,000, however I only have 2 crore.", 20_000_000.0),
+        ("It starts at 3 million though I was thinking 800k.", 800_000.0),
+        # The comma-then-first-person contrast, which is the same boundary
+        # without a conjunction.
+        ("The price is too high, I can do 2 million.", 2_000_000.0),
+    ],
+)
+def test_a_contrast_ends_the_quoted_claim(vocabulary, said, value):
+    """Round two, finding 4. Whole-clause attribution deliberately crosses a
+    comma, which is right for a quoted range and wrong for a contrast: the
+    buyer's "but" is where their own talk begins."""
+    mention = budget(vocabulary, said)
+    assert mention is not None, said
+    assert mention.value == value

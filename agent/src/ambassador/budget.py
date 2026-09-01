@@ -134,7 +134,15 @@ def _budget_units() -> re.Pattern[str]:
     return budget_unit_pattern(default_numerals())
 
 
-# Attribution, ownership and dimensions are bound by CLAUSE, not by character
+# Units that are money in the numeral table and something else in ordinary
+# property speech. "m" is millions and metres, and a folded "2m" is both "two
+# million" and "two metres". A dimension word therefore withholds THIS unit and
+# no other: suppressing every amount near a room was a regression, because "I
+# have AED 800,000 for a room" is a budget and a room does not make a currency
+# ambiguous.
+_AMBIGUOUS_UNITS = frozenset({"m"})
+
+# Attribution, ownership and dimensions are decided by SEGMENT, not by character
 # distance. The first attempt ran a distance contest - a source word within 14
 # characters, a budget keyword within 30 - and a natural modifier defeats it:
 # "My budget after checking your website is AED 750,000" puts "website" 8
@@ -176,9 +184,24 @@ class CurrencyVocabulary:
     # "the listing says", "priced at": the figures after these in the same
     # clause came from somewhere else, or are prices rather than budgets.
     attributions: dict[str, tuple[str, ...]]
-    # "my budget", "I can spend", "enough for me": the buyer saying a figure is
-    # THEIRS. Outranks attribution in the same clause, at any distance.
-    ownership: dict[str, tuple[str, ...]]
+    # "is it", "is that": the buyer ASKING about a figure. Cancelled by an
+    # affordability cue as well as by ownership.
+    interrogatives: dict[str, tuple[str, ...]]
+    # A first-person anchor plus a money term in the same segment is OWNERSHIP,
+    # and ownership is what restores an attributed figure. Two lists rather
+    # than one list of phrases: a phrase list misses every modifier a buyer
+    # inserts - "I can ONLY spend 2 crore" is not "I can spend" - and made the
+    # binding fragile, because "my budget" starts four characters earlier than
+    # "budget" and that was enough to claim the wrong figure.
+    first_person: dict[str, tuple[str, ...]]
+    money_terms: dict[str, tuple[str, ...]]
+    # "enough", "too much": cancels an interrogative opener only, never a
+    # source word. "The listing says AED 750,000 is affordable" is still the
+    # listing talking.
+    affordability: dict[str, tuple[str, ...]]
+    # "but", "however": these END a quoted claim. Attribution crosses a comma
+    # on purpose, which is right for a range and wrong for a contrast.
+    contrasts: dict[str, tuple[str, ...]]
     # "wide", "ceiling", "balcony": the figure measures something. "m" is a
     # money multiplier in the numeral table and the metre abbreviation in this
     # domain, and a folded unit is enough to make a figure budget-like.
@@ -192,6 +215,22 @@ class CurrencyVocabulary:
             for language, by_currency in self.words.items()
             if any(by_currency.values())
         )
+
+
+@dataclass(frozen=True)
+class _Claim:
+    """What one segment of an utterance is doing with the figures inside it.
+
+    Five independent questions, asked of a slice of text rather than of a
+    distance from a figure. That is the whole of the scope model: a marker
+    applies to the segment it is in, and nothing else.
+    """
+
+    quoted: bool  # a source word: a listing, our website, us on a call
+    asked: bool  # an interrogative opener
+    owned: bool  # a first-person anchor AND a money term
+    affordable: bool  # an affordability cue
+    measured: bool  # a dimension word
 
 
 @dataclass(frozen=True)
@@ -272,7 +311,11 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
         contradictions=_word_lists(raw, "contradictions"),
         affirmations=_word_lists(raw, "affirmations"),
         attributions=_word_lists(raw, "attributions"),
-        ownership=_word_lists(raw, "ownership"),
+        interrogatives=_word_lists(raw, "interrogatives"),
+        first_person=_word_lists(raw, "first_person"),
+        money_terms=_word_lists(raw, "money_terms"),
+        affordability=_word_lists(raw, "affordability"),
+        contrasts=_word_lists(raw, "contrasts"),
         dimensions=_word_lists(raw, "dimensions"),
         rate=rate,
     )
@@ -482,6 +525,89 @@ def find_budget(
         s, e = spans[i]
         return bool(_CLAUSE_BREAK.search(lowered[min(end, e) : max(start, s)]))
 
+    # --- who is talking about each figure, by segment ----------------------
+    #
+    # Segments, not distances. Three rounds of review turned on scope: which
+    # figure a marker applies to, and where its influence ends. A marker bound
+    # to its nearest figure let the second price of a quoted range escape; a
+    # character window lost a budget to one inserted modifier; binding forward
+    # claimed the wrong figure when ownership followed its amount. Splitting
+    # the utterance and classifying each piece answers all three, and needs no
+    # window, no tie-break and no direction rule.
+    def says(where: str, words: tuple[str, ...]) -> bool:
+        return any(
+            word and re.search(_token_pattern(word), where) for word in words
+        )
+
+    def segment_bounds() -> list[int]:
+        """Where one claim ends and the next begins.
+
+        Sentence punctuation, a contrastive conjunction, and a comma followed
+        by the buyer talking about themselves. The last two are the same
+        boundary with and without a conjunction: "the listing says X, but I
+        have Y" and "the price is too high, I can do Y".
+        """
+        cuts = {0, len(lowered)}
+        for found in _CLAUSE_BREAK.finditer(lowered):
+            cuts.add(found.end())
+        for word in vocabulary.contrasts.get(language, ()):
+            if not word:
+                continue
+            for found in re.finditer(_token_pattern(word), lowered):
+                cuts.add(found.start())
+        # A comma followed by the buyer talking about themselves, or by a
+        # coordinating "and" that starts a fresh statement. A comma alone is
+        # NOT a boundary, because that is how a quoted range is written
+        # ("AED 750,000, AED 800,000 or AED 900,000"), and neither is a bare
+        # "and" for the same reason ("start at X and go up to Y").
+        openers = tuple(vocabulary.first_person.get(language, ())) + ("and",)
+        for found in re.finditer(r",\s*", lowered):
+            rest = lowered[found.end() :]
+            if any(
+                word
+                and rest.startswith(word)
+                and (len(rest) == len(word) or not rest[len(word)].isalnum())
+                for word in openers
+            ):
+                cuts.add(found.end())
+        return sorted(cuts)
+
+    cuts = segment_bounds()
+    segments = list(zip(cuts, cuts[1:], strict=False))
+
+    def segment_for(i: int) -> tuple[int, int]:
+        figure_start = spans[i][0]
+        for bounds in segments:
+            if bounds[0] <= figure_start < bounds[1]:
+                return bounds
+        return segments[-1] if segments else (0, len(lowered))
+
+    def frames(words: tuple[str, ...], i: int) -> bool:
+        """Is there such a word BEFORE this figure, in its own segment?
+
+        Source words and question openers frame what follows them: "the listing
+        says X" and "is it X" are about X, while "I can do X, is that ok?" and
+        "I have X, what is the price?" are the buyer's own figure with a
+        question after it. Reading them without direction withheld both.
+        """
+        start, _ = segment_for(i)
+        return says(lowered[start : spans[i][0]], words)
+
+    def claim_for(i: int) -> _Claim:
+        start, end = segment_for(i)
+        whole = lowered[start:end]
+        return _Claim(
+            quoted=frames(vocabulary.attributions.get(language, ()), i),
+            asked=frames(vocabulary.interrogatives.get(language, ()), i),
+            owned=(
+                says(whole, vocabulary.first_person.get(language, ()))
+                and says(whole, vocabulary.money_terms.get(language, ()))
+            ),
+            affordable=says(whole, vocabulary.affordability.get(language, ())),
+            measured=says(whole, vocabulary.dimensions.get(language, ())),
+        )
+
+
     currency_of: dict[int, tuple[int, Currency]] = {}
     for hit in _currency_hits(lowered, vocabulary, language):
         if hit.negated:
@@ -502,87 +628,41 @@ def find_budget(
             # Keywords lead in speech ("my budget is X"), so the reach behind
             # a figure is wider than the reach ahead of it.
             reach = _KEYWORD_BEFORE if found.end() <= spans[i][0] else _KEYWORD_AFTER
-            if distance <= reach and not crosses_clause(found.start(), found.end(), i):
-                marked.add(i)
-
-    def in_clause(start: int, end: int, i: int) -> bool:
-        return not crosses_clause(start, end, i)
-
-    def bound(
-        words: tuple[str, ...], *, whole_clause: bool = False, leads: bool = False
-    ) -> set[int]:
-        """The figures these words claim.
-
-        `whole_clause` claims every figure AFTER the word in its clause rather
-        than only the nearest one, which is what a quoted range needs: "The
-        listing says AED 750,000 or AED 800,000" is quoting both prices, and
-        binding one token to one figure let the second walk straight past.
-
-        `leads` claims the figure the word INTRODUCES - the nearest one that
-        follows it in the clause, falling back to a preceding figure only when
-        none does. Nearest-with-a-tie-break is not enough for a phrase: the
-        single word "budget" sits at an exact tie between the two figures of
-        "The price is AED 985,000 and my budget is AED 2,000,000" and the
-        tie-break sends it forwards, but the PHRASE "my budget" starts four
-        characters earlier and reaches backwards to the quoted price instead.
-        A phrase that names an owner names what comes after it.
-        """
-        claimed: set[int] = set()
-        for word in words:
-            if not word:
+            if distance > reach or crosses_clause(found.start(), found.end(), i):
                 continue
-            for found in re.finditer(_token_pattern(word), lowered):
-                if whole_clause:
-                    claimed.update(
-                        i
-                        for i, (figure_start, _) in enumerate(spans)
-                        if figure_start >= found.end()
-                        and in_clause(found.start(), found.end(), i)
-                    )
-                    continue
-                if leads:
-                    following = [
-                        i
-                        for i, (figure_start, _) in enumerate(spans)
-                        if figure_start >= found.end()
-                        and in_clause(found.start(), found.end(), i)
-                    ]
-                    if following:
-                        claimed.add(following[0])
-                        continue
-                i, _ = owner(found.start(), found.end(), prefer_following=True)
-                if in_clause(found.start(), found.end(), i):
-                    claimed.add(i)
-        return claimed
-
-    # Quoted, not offered: attributed to a listing, to our own website, or to
-    # us on an earlier call - or framed as a price rather than as what the
-    # buyer will spend. Forward-only, so a source word cannot reach back over a
-    # figure the buyer stated before mentioning any source.
-    attributed = bound(vocabulary.attributions.get(language, ()), whole_clause=True)
-    # The buyer claiming a figure as their own. Overrides both withholding
-    # rules, at any distance inside the clause.
-    owned = bound(vocabulary.ownership.get(language, ()), leads=True)
-    # A measurement rather than a sum.
-    measured = bound(vocabulary.dimensions.get(language, ()))
+            # And only inside its own segment. "AED 750,000, which is my
+            # budget, and AED 800,000 is the asking price" puts the keyword
+            # nearer the second figure by pure distance, while the statement it
+            # belongs to is the first.
+            start, end = segment_for(i)
+            if start <= found.start() < end:
+                marked.add(i)
 
     fallback: BudgetMention | None = None
     for i, match in enumerate(candidates):
         held = currency_of.get(i)
         currency = None if held is None else held[1]
         unit = _budget_units().search(match.figure.surface)
-        if (i in attributed or i in measured) and i not in owned:
-            # Withheld: quoted from somewhere else, or measuring something.
-            #
-            # Only OWNERSHIP overrides this, never a plain budget keyword, and
-            # the difference is a quoted range: "up to" is a budget keyword and
-            # it appears in "Prices start at AED 750,000 and go up to AED
-            # 900,000", where it belongs to the range rather than to the buyer.
-            # A generic keyword says which figure is the budget once we know
-            # one of them is; only the buyer saying "my budget" or "I can
-            # spend" says that a quoted figure is theirs after all - and
-            # withholding a real budget is the expensive direction, so that
-            # list is generous.
+        claim = claim_for(i)
+        # Quoted from somewhere else. Only OWNERSHIP restores it, never a
+        # plain budget keyword: "up to" is a budget keyword and it lives
+        # inside "prices go up to AED 900,000". A generic keyword says WHICH
+        # figure is the budget once we know one of them is; only the buyer
+        # says a quoted figure is theirs after all.
+        if claim.quoted and not claim.owned:
+            continue
+        # Asked rather than offered - and an affordability cue turns the same
+        # question round: "Is it 750k?" asks our price, "Is this AED 800,000
+        # enough?" asks whether the buyer's own amount stretches.
+        if claim.asked and not (claim.owned or claim.affordable):
+            continue
+        # Measuring something, and only for the unit that is genuinely both.
+        if (
+            claim.measured
+            and not claim.owned
+            and unit is not None
+            and unit.group(1).lower() in _AMBIGUOUS_UNITS
+        ):
             continue
         if currency is None and unit is None and i not in marked:
             continue
