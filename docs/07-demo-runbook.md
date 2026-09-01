@@ -2,6 +2,8 @@
 
 The meeting script. Rehearse it end to end three consecutive clean times on day 5. Total demo time: 20-25 minutes plus open mic.
 
+**What "clean" means - outcome-determinism, not identical transcripts.** Temperature 0 is measurably not deterministic (issue #33: byte-identical requests disagreed), so the model's wording may vary between runs and that is expected, not a failure. A run is clean when every OUTCOME repeats: the same figures spoken (they are computed, not generated), the same guardrail decisions, the same confirmations asked, the same escalations routed - all of which are code, not sampling. If a rehearsal run differs in an outcome, that is a defect; if it differs in phrasing, that is the model being a model.
+
 ## Setup, before anyone arrives
 
 - Demo machine + external microphone, tested in the actual room if possible

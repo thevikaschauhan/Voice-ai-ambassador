@@ -342,9 +342,16 @@ def build_llm(
         model=settings.llm_model,
         client=client,
         base_url=settings.llm_base_url,
-        # Deterministic by choice: the demo runbook wants three consecutive
-        # identical runs, and sampling variance showed up as the escalation
-        # tool firing on some runs and not others for the same question.
+        # Variance reduction, NOT determinism. Temperature 0 was measured
+        # giving non-identical outputs on byte-identical requests - three
+        # Arabic samples disagreed about calling the escalation tool (issue
+        # #33) - so nothing may rest on this producing identical runs. What
+        # the demo's "three consecutive clean runs" actually rests on is
+        # outcome-determinism from the code layer: the policies, guardrails
+        # and computed figures make the same decisions every run, and any
+        # behaviour that must ALWAYS happen has a code path, never only a
+        # prompt (e.g. the regeneration backstop). Temperature 0 stays
+        # because lower variance is still worth having.
         temperature=0.0,
         extra_body=extra_body or lk_openai.llm.NOT_GIVEN,  # type: ignore[attr-defined]
     )
