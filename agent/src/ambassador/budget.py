@@ -140,12 +140,6 @@ def _budget_units() -> re.Pattern[str]:
 # no other: suppressing every amount near a room was a regression, because "I
 # have AED 800,000 for a room" is a budget and a room does not make a currency
 # ambiguous.
-# How far back the subject of a saying verb may sit. "I clearly said" and "We
-# already told you" are the buyer; an immediate-token test lost both, and the
-# scan stops at a source noun anyway, so the window only has to cover ordinary
-# adverbs.
-_SUBJECT_TOKENS = 4
-
 _AMBIGUOUS_UNITS = frozenset({"m"})
 
 
@@ -221,6 +215,8 @@ class CurrencyVocabulary:
     anaphora: dict[str, tuple[str, ...]]
     # A first-person anchor plus a money term. Deliberately WEAKER than a
     # source frame: reported speech is full of first-person pronouns.
+    # Pronouns that can HEAD a clause, so they can be a saying verb's subject.
+    subject_pronouns: dict[str, tuple[str, ...]]
     first_person: dict[str, tuple[str, ...]]
     money_terms: dict[str, tuple[str, ...]]
     # A first-person affordability shape, not a bare word.
@@ -379,6 +375,7 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
         naming_terms=_word_lists(raw, "naming_terms"),
         copulas=_word_lists(raw, "copulas"),
         anaphora=_word_lists(raw, "anaphora"),
+        subject_pronouns=_word_lists(raw, "subject_pronouns"),
         first_person=_word_lists(raw, "first_person"),
         money_terms=_word_lists(raw, "money_terms"),
         affordability_shapes=_word_lists(raw, "affordability_shapes"),
@@ -742,7 +739,35 @@ def find_budget(
             for word in word_list("question_openers")
         )
 
-    def has_source(segment: str, i: int) -> bool:
+    def clause_start(position: int) -> int:
+        """Where the clause containing `position` begins.
+
+        A clause, not a segment. Segments cut on every comma and conjunction so
+        that MARKS are conclusive, but a subject can sit on the far side of such
+        a cut - "I very clearly AND repeatedly said 2 crore" puts the adverbs'
+        own conjunction between the subject and its verb.
+
+        So the boundary is sentence punctuation, or a conjunction that is
+        immediately followed by a nominal - which is what tells a coordinated
+        CLAUSE ("..., but I said 2 crore") from a coordinated adverb ("clearly
+        and repeatedly"). Structural, from closed lists, and with no counting.
+        """
+        start = enclosing(sentences, position)[0]
+        nominals = set(word_list("subject_pronouns")) | set(
+            word_list("source_nouns")
+        )
+        for word in word_list("conjunctions"):
+            if not word:
+                continue
+            for found in re.finditer(_token_pattern(word), lowered):
+                if not start <= found.start() < position:
+                    continue
+                after = re.findall(r"[^\W_]+", lowered[found.end() : position])
+                if after and after[0] in nominals:
+                    start = max(start, found.end())
+        return start
+
+    def has_source(start: int, end: int, i: int) -> bool:
         """Three closed shapes, never a bare noun (G5).
 
         1. A noun and a SAYING verb - with a first-person exemption, because
@@ -753,8 +778,9 @@ def find_budget(
         3. A price noun and a copula either side of the figure, so both "the
            price is X" and "X is the asking price" are sourced.
         """
-        if says(segment, word_list("perception_verbs")) or says(
-            segment, word_list("pricing_verbs")
+        region = lowered[start:end]
+        if says(region, word_list("perception_verbs")) or says(
+            region, word_list("pricing_verbs")
         ):
             return True
         # The first-person exemption is about WHO IS SAYING, so it keys on the
@@ -764,41 +790,64 @@ def find_budget(
         # speech whose possessive belongs to the speaker, not to the buyer.
         # Reading the exemption as "any first person anywhere" let a source
         # noun like "you" defeat it in "I told you 2 crore".
-        def subject_is_first_person(before: str) -> bool:
-            """Is the subject of this saying verb the buyer?
+        def subject_is_the_buyer(before: str) -> bool:
+            """Is the SUBJECT of this saying verb the buyer?
 
-            Looked for over the last few word tokens rather than the one
-            immediately before the verb: "I CLEARLY said 2 crore" and "We
-            ALREADY told you 2 crore" are the buyer restating their own budget,
-            and an immediate-token test lost both. The scan stops at a source
-            noun, because that noun IS the subject - "the agent told me I could
-            afford 2m" is the agent talking whatever pronouns follow.
+            The subject is the clause-initial nominal, found left to right: the
+            first token that is either a pronoun able to head a clause or a
+            source noun. Everything before it is a determiner, everything after
+            it belongs to a modifier, and neither can change who is speaking.
+
+            There is no token count anywhere, and that is the point. A reverse
+            scan over a fixed window is a distance rule wearing a subject's
+            clothes, and it failed at both boundaries: "The agent from my
+            office said" met the possessive inside the agent's own modifier and
+            exempted the seller, while "I very clearly and repeatedly said"
+            pushed the real subject out of the window and lost the buyer's
+            budget.
             """
-            tokens = re.findall(r"[^\W_]+", before)[-_SUBJECT_TOKENS:]
-            for token in reversed(tokens):
-                if token in word_list("first_person"):
-                    return True
-                if token in word_list("source_nouns"):
-                    return False
+            subjects = word_list("subject_pronouns")
+            nominals = set(subjects) | set(word_list("source_nouns"))
+            for token in re.findall(r"[^\W_]+", before):
+                if token in nominals:
+                    return token in subjects
             return False
 
         for verb in word_list("saying_verbs"):
             if not verb:
                 continue
-            for found in re.finditer(_token_pattern(verb), segment):
-                if subject_is_first_person(segment[: found.start()]):
+            for found in re.finditer(_token_pattern(verb), lowered):
+                if not start <= found.start() < end:
+                    continue
+                # The subject is read from the CLAUSE start, not from this
+                # segment's, because a segment cut can fall between a subject
+                # and its verb.
+                verb_at = found.start()
+                if subject_is_the_buyer(lowered[clause_start(verb_at) : verb_at]):
                     continue
                 return True
         return copular(i, word_list("price_nouns"), reach=2)
 
-    def copular(i: int, terms: tuple[str, ...], *, reach: int = 0) -> bool:
+    def copular(
+        i: int,
+        terms: tuple[str, ...],
+        *,
+        reach: int = 0,
+        within: tuple[int, int] | None = None,
+    ) -> bool:
         """A term and a copula on one side of this figure or the other.
 
         "my budget is X" and "X is my budget" are the same claim, and so are
         "the price is X" and "X is the asking price", which is why one helper
         serves both the naming mark and the copular half of the source mark.
         """
+        region_start, region_end = within or (0, len(lowered))
         figure_start, figure_end = spans[i]
+        if not region_start <= figure_start < region_end:
+            # The figure is not in the region being asked about, so nothing
+            # inside that region can be a copular claim about it. Unbounded
+            # slices here are how a price in one sentence gated another.
+            return False
         # A currency token may sit between the copula and the figure - "the
         # price is AED 985,000" - and it belongs to the figure, not to the gap.
         money = "|".join(
@@ -841,24 +890,60 @@ def find_budget(
                     rf"^\s*{re.escape(copula)}\s+{crossing}"
                     rf"(?:the|a|an)?\s*{re.escape(term)}(?!\w)"
                 )
-                if re.search(before, lowered[:figure_start]) or re.match(
-                    after, lowered[figure_end:]
-                ):
+                if re.search(
+                    before, lowered[region_start:figure_start]
+                ) or re.match(after, lowered[figure_end:region_end]):
                     return True
         return False
 
-    def is_quotative(segment: str) -> bool:
-        """Does this segment carry a saying verb with its reporting comma?
+    def reported_regions() -> list[tuple[int, int]]:
+        """Every stretch of the utterance that is somebody else's words.
 
-        Approved amendment 1: naming does not apply inside one. The possessive
-        in `They said, "our maximum is AED 2m."` belongs to the speaker being
-        quoted, not to the buyer - while `The website says AED 750,000 is my
-        budget` has no such comma, so naming still beats source there.
+        Two shapes: text between a pair of quote marks, and - when the speech
+        is unquoted - everything from a saying verb's reporting comma to the end
+        of its sentence. Computed ONCE and consulted through `naming_allowed`
+        below, which is the whole point: the gate was previously applied on one
+        naming path and not the other, so the anaphoric form walked round it.
         """
-        return any(
-            word and re.search(rf"(?<!\w){re.escape(word)}\s*,", segment)
-            for word in word_list("saying_verbs")
-        )
+        regions: list[tuple[int, int]] = []
+        opens: list[int] = []
+        for found in re.finditer(r'["\u201c\u201d]', lowered):
+            if opens:
+                regions.append((opens.pop(), found.end()))
+            else:
+                opens.append(found.start())
+        quoted = list(regions)
+        for word in word_list("saying_verbs"):
+            if not word:
+                continue
+            for found in re.finditer(rf"(?<!\w){re.escape(word)}\s*,", lowered):
+                _, sentence_end = enclosing(sentences, found.start())
+                if any(
+                    found.end() <= open_at and close_at <= sentence_end
+                    for open_at, close_at in quoted
+                ):
+                    # Quote marks delimit this speech, so they are the extent of
+                    # it. Adding comma-to-end-of-sentence on top would swallow
+                    # what the buyer says AFTER the closing quote: 'They said,
+                    # "AED 750,000", and that is my budget' names 750,000.
+                    continue
+                regions.append((found.end(), sentence_end))
+        return regions
+
+    reported = reported_regions()
+
+    def naming_allowed(position: int) -> bool:
+        """THE quotative gate. Every naming path asks this, and nothing else
+        decides it.
+
+        A naming phrase inside reported speech belongs to the speaker being
+        quoted, not to the buyer: `They said, "our maximum is AED 2m."` and
+        `They said, "AED 750,000, which is my budget."` are both the speaker.
+        A naming the buyer adds OUTSIDE the quotation still counts, which is
+        why the gate is keyed to the position of the naming phrase rather than
+        to the figure's segment.
+        """
+        return not any(start <= position < end for start, end in reported)
 
     def has_naming(i: int) -> bool:
         """The buyer naming this figure as their budget.
@@ -868,15 +953,9 @@ def find_budget(
         my budget". The pronoun refers to the figure in its own segment or the
         one immediately before it, so both are checked.
         """
-        seg_start, seg_end = enclosing(segments, spans[i][0])
-        # Amendment 1 excludes naming INSIDE reported speech, which is the
-        # direct copular form - the possessive belongs to the speaker being
-        # quoted. It does not reach an anaphor the buyer adds afterwards:
-        # 'They said, "AED 750,000", and that is my budget' names the figure
-        # from outside the quotation, so the anaphoric check below still runs.
-        if not is_quotative(lowered[seg_start:seg_end]) and copular(
-            i, word_list("naming_terms")
-        ):
+        # Both paths below go through `naming_allowed`, keyed to where the
+        # naming PHRASE sits. The direct form sits against the figure.
+        if naming_allowed(spans[i][0]) and copular(i, word_list("naming_terms")):
             return True
         naming = word_list("naming_terms")
         anaphors = word_list("anaphora")
@@ -895,7 +974,11 @@ def find_budget(
             (s for s, _ in spans if s > after_here), len(lowered)
         )
         window = lowered[after_here:next_figure]
-        return any(re.search(shape, window) for shape in shapes)
+        for shape in shapes:
+            found = re.search(shape, window)
+            if found and naming_allowed(after_here + found.start()):
+                return True
+        return False
 
     def sentence_has_source(sent_start: int, sent_end: int) -> bool:
         """Does ANY figure in this sentence carry a source mark?
@@ -906,12 +989,11 @@ def find_budget(
         "Would 2 crore be enough, given AED 750,000 is the sale price?" carries
         a source, on the second figure.
         """
-        sentence = lowered[sent_start:sent_end]
         return any(
-            has_source(sentence, j)
+            has_source(sent_start, sent_end, j)
             for j, (figure_start, _) in enumerate(spans)
             if sent_start <= figure_start < sent_end
-        ) or has_source(sentence, 0)
+        )
 
     def marks_for(i: int) -> _Marks:
         seg_start, seg_end = enclosing(segments, spans[i][0])
@@ -920,7 +1002,7 @@ def find_budget(
         sentence = lowered[sent_start:sent_end]
         return _Marks(
             naming=has_naming(i),
-            source=has_source(segment, i),
+            source=has_source(seg_start, seg_end, i),
             affordability=(
                 says(sentence, word_list("affordability_shapes"))
                 or (

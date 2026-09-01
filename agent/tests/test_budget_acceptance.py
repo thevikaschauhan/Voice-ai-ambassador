@@ -437,3 +437,119 @@ def test_a_parenthetical_does_not_lose_the_keyword(vocabulary):
         "en",
     )
     assert mention is not None and mention.value == 750_000.0
+
+
+# --- slip round 2: the structures, tested as CLASSES ------------------------
+#
+# Both earlier slip rounds had the same shape: an approximation stood in where
+# the spec names a structure. So these are not more examples of the reviewer's
+# strings - they are arbitrary members of each class, on BOTH sides of the
+# boundary, which is what an approximation cannot satisfy.
+
+
+@pytest.mark.parametrize(
+    "adverbs",
+    ["", "clearly ", "very clearly ", "very clearly and repeatedly ",
+     "honestly, truly, and quite deliberately ",
+     "after much thought very carefully and repeatedly "],
+)
+@pytest.mark.parametrize("verb", ["said", "told you"])
+def test_any_adverb_stack_leaves_the_buyer_as_the_subject(vocabulary, adverbs, verb):
+    """P1, buyer side. An adverb never consumes the subject, however many of
+    them there are - a fixed-window scan lost the subject at four tokens."""
+    said = f"I {adverbs}{verb} 2 crore."
+    mention = find_budget(said, vocabulary, "en")
+    assert mention is not None and mention.value == 20_000_000.0, said
+
+
+@pytest.mark.parametrize(
+    "modifier",
+    ["", " from my office", " from my own agency", " who called me yesterday",
+     " that I spoke to about my budget",
+     " from the office near my building that I visited with my wife"],
+)
+def test_any_modifier_on_the_subject_keeps_it_the_seller(vocabulary, modifier):
+    """P1, seller side. A first-person token inside the subject's own modifier
+    does not make the buyer the speaker - a backward scan met it first and
+    exempted the seller's statement."""
+    said = f"The agent{modifier} said AED 750,000."
+    assert find_budget(said, vocabulary, "en") is None, said
+
+
+@pytest.mark.parametrize(
+    "said,expected",
+    [
+        # P3, both figure orders. A copular source in one sentence cannot gate
+        # another: the committed guard tested only the order where the
+        # questioned figure happened to be global figure 0.
+        ("AED 750,000 is the sale price. Would 2 crore be enough?", 20_000_000.0),
+        ("Would 2 crore be enough? AED 750,000 is the sale price.", 20_000_000.0),
+        ("The listing says AED 750,000. Would 2 crore be enough?", 20_000_000.0),
+        ("Would 2 crore be enough? The listing says AED 750,000.", 20_000_000.0),
+        # And the same-sentence guard, which must still withhold.
+        ("Would 2 crore be enough, given AED 750,000 is the sale price?", None),
+        # Reordered, the QUESTION mark does not fire - it needs an
+        # utterance-INITIAL auxiliary and this opens with "Given" - so
+        # precedence 7 confirms. My first draft of this row expected None and
+        # was wrong about which mark applies. Worth knowing that the two orders
+        # differ, and that the difference leans to over-asking here, which is
+        # the safe side; reported to god as an observation.
+        ("Given AED 750,000 is the sale price, would 2 crore be enough?", 20_000_000.0),
+    ],
+)
+def test_a_source_gates_only_its_own_sentence(vocabulary, said, expected):
+    mention = find_budget(said, vocabulary, "en")
+    assert (None if mention is None else mention.value) == expected, said
+
+
+@pytest.mark.parametrize(
+    "said,expected",
+    [
+        # P4, the DIRECT naming path inside the quote.
+        ('They said, "our maximum is AED 2m."', None),
+        ('The agent said, "my budget is AED 750,000."', None),
+        # P4, the ANAPHORIC naming path inside the quote - the path that used to
+        # walk round the gate entirely.
+        ('They said, "AED 750,000, which is my budget."', None),
+        ('The agent said, "AED 800,000, and that is my budget."', None),
+        # Both paths still name from OUTSIDE the quotation.
+        ('They said, "AED 750,000", and that is my budget.', 750_000.0),
+        ('The agent said, "AED 800,000", which is my budget.', 800_000.0),
+        # Unquoted reported speech, where the reporting comma is the extent.
+        ("The agent said, I can afford 2m.", None),
+        # And no reported speech at all: naming still beats source.
+        ("The website says AED 750,000 is my budget", 750_000.0),
+    ],
+)
+def test_both_naming_paths_consult_the_one_quotative_gate(
+    vocabulary, said, expected
+):
+    mention = find_budget(said, vocabulary, "en")
+    assert (None if mention is None else mention.value) == expected, said
+
+
+def test_the_quotative_gate_is_a_single_choke_point(vocabulary):
+    """The structural claim, asserted structurally rather than by example.
+
+    Both naming paths must go through `naming_allowed`. If a future third path
+    is added that does not, this fails - which is the property the last round's
+    per-path patch did not have.
+    """
+    import inspect
+
+    from ambassador import budget
+
+    source = inspect.getsource(budget.find_budget)
+    body = source[source.index("def has_naming("):]
+    body = body[: body.index("\n    def ", 1)] if "\n    def " in body[1:] else body
+    # Every `return True` inside has_naming is a naming decision, and each must
+    # be guarded by the gate.
+    decisions = [
+        line for line in body.splitlines() if line.strip() == "return True"
+    ]
+    assert decisions, "has_naming no longer returns a positive decision"
+    assert body.count("naming_allowed") >= len(decisions), (
+        "a naming path does not consult naming_allowed: the quotative gate has "
+        f"{body.count('naming_allowed')} consultations for {len(decisions)} "
+        "positive decisions"
+    )

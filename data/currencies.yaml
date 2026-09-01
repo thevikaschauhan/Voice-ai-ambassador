@@ -176,6 +176,17 @@ anaphora:
 # than a source frame on purpose - reported speech is full of first-person
 # pronouns ("the agent told me I could afford 2m"), and treating those as the
 # buyer speaking is what this precedence exists to stop.
+# Pronouns that can HEAD a clause, so they can be the subject of a saying verb.
+# "my" and "me" cannot: "my agent said" has the agent as its subject, and "the
+# agent told me" has the agent. Keeping these apart is what makes the subject
+# test structural instead of a proximity guess.
+subject_pronouns:
+  en: ["i", "we", "i'm", "i've", "we're", "we've"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
 first_person:
   en: ["i", "me", "my", "mine", "we", "us", "our", "ours", "i'm", "i've", "we're", "we've"]
   ar: []
