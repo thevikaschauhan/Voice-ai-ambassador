@@ -17,10 +17,16 @@ from __future__ import annotations
 import json
 from dataclasses import fields
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
+from ambassador.schemas import Language
+
 from adapter.config import (
+    PROVISIONAL_VOICE_ID_AR,
+    PROVISIONAL_VOICE_ID_EN,
+    PROVISIONAL_VOICE_ID_HI,
     Settings,
     _is_credential,
     load_settings,
@@ -368,3 +374,76 @@ def test_the_failure_message_echoes_no_value(env_file):
     ):
         if value:
             assert value not in message
+
+
+# --- provisional voice ids ------------------------------------------------
+#
+# TTS_VOICE_ID_EN/_AR/_HI were empty, so every run fell through to
+# `fishaudio.tts.DEFAULT_VOICE_ID` - one English voice nobody selected, used
+# for Arabic and Hindi as well. They now default to the top register match in
+# each language's shortlist (docs/voice-shortlist.md), marked PROVISIONAL: the
+# client chooses at the meeting, and these only stop the demo choosing by
+# accident in the meantime.
+
+
+def test_every_shipped_language_has_a_provisional_voice_without_any_env():
+    """A fresh clone, CI, a container with no .env: no language may fall
+    through to Fish's own default voice, and no two languages may share an id -
+    sharing one is the bug this replaces, wearing a different hat."""
+    settings = load_settings(Path("/nonexistent/.env"))
+    ids = {language: settings.voice_id(language) for language in get_args(Language)}
+    assert all(ids.values()), ids
+    assert len(set(ids.values())) == len(ids), ids
+
+
+def test_the_shipped_example_and_the_code_default_agree():
+    """The drift this repository has already had once, one variable deeper.
+
+    `parse_env_file` records a bare `TTS_VOICE_ID_EN=` as an empty STRING, and
+    an empty string is a value - `_resolve` returns it and the code default
+    never runs. So an example left blank would silently switch the default off
+    for every operator who copied it, which is exactly how ADR-017's recogniser
+    default came to disagree with the shipped example. Both surfaces carry the
+    ids, and this is what notices when only one of them is updated.
+    """
+    assert EXAMPLE_ENV.exists()
+    settings = load_settings(EXAMPLE_ENV)
+    assert settings.voice_id("en") == PROVISIONAL_VOICE_ID_EN
+    assert settings.voice_id("ar") == PROVISIONAL_VOICE_ID_AR
+    assert settings.voice_id("hi") == PROVISIONAL_VOICE_ID_HI
+
+
+def test_a_blank_entry_in_a_local_env_still_wins_over_the_default(tmp_path):
+    """Kept deliberately, and the reason this file has to repeat the ids rather
+    than rely on the code. An operator who blanks the line in their own
+    `agent/.env` is asking for Fish's default voice back, and gets it. That is
+    the same mechanism that would have made a blank `.env.example` a silent
+    regression, so the behaviour is pinned rather than assumed."""
+    path = tmp_path / ".env"
+    path.write_text("TTS_VOICE_ID_EN=\n", encoding="utf-8")
+    assert load_settings(path).voice_id("en") == ""
+
+
+def test_a_local_env_overrides_the_provisional_pick(tmp_path):
+    """How a candidate gets auditioned without committing to it."""
+    path = tmp_path / ".env"
+    path.write_text("TTS_VOICE_ID_AR=some-other-voice\n", encoding="utf-8")
+    settings = load_settings(path)
+    assert settings.voice_id("ar") == "some-other-voice"
+    assert settings.voice_id("en") == PROVISIONAL_VOICE_ID_EN
+
+
+def test_the_provisional_ids_are_the_ones_the_shortlist_names():
+    """The doc and the code are one decision written twice, so they are checked
+    against each other. A voice id is 32 hex characters and unreadable; nobody
+    reviewing a diff would catch a transposed one, and the failure mode is a
+    demo speaking in a voice nobody picked."""
+    shortlist = (
+        Path(__file__).resolve().parents[2] / "docs" / "voice-shortlist.md"
+    ).read_text(encoding="utf-8")
+    for voice_id in (
+        PROVISIONAL_VOICE_ID_EN,
+        PROVISIONAL_VOICE_ID_AR,
+        PROVISIONAL_VOICE_ID_HI,
+    ):
+        assert f"`{voice_id}`" in shortlist, voice_id

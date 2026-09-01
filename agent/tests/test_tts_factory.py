@@ -20,6 +20,7 @@ from livekit.agents.tts import AudioEmitter  # noqa: E402
 from livekit.agents.utils import aio  # noqa: E402
 from livekit.plugins import fishaudio  # noqa: E402
 
+from adapter.config import Settings  # noqa: E402
 from adapter.tts_factory import (  # noqa: E402
     OUTPUT_FORMAT,
     SAMPLE_RATE,
@@ -92,8 +93,36 @@ def test_the_low_latency_mode_and_the_configured_voice_survive():
 
 
 def test_an_unset_voice_falls_back_to_the_plugin_default():
+    """Still reachable, and deliberately: an operator who blanks the line in
+    their own `agent/.env` is asking for Fish's default voice back."""
     tts = build_tts(make_settings(tts_voice_id_en=""))
     assert tts.voice_id == fishaudio.tts.DEFAULT_VOICE_ID
+
+
+def test_a_checkout_with_no_env_speaks_in_a_shortlisted_voice_not_fish_s_default():
+    """What a listener actually hears, through the real path rather than a
+    fixture.
+
+    The config tests check the resolved value; this one carries it into the
+    synthesiser the session builds, which is where "no voice configured"
+    previously became "an English voice nobody selected, used for Arabic and
+    Hindi too". Every earlier test here passes an explicit id, so none of them
+    would have noticed the default staying empty.
+    """
+    from pathlib import Path
+
+    from adapter.config import PROVISIONAL_VOICE_ID_AR, load_settings
+
+    loaded = load_settings(Path("/nonexistent/.env")).redacted()
+    # A placeholder key only: the plugin refuses to construct without one, and
+    # nothing here reaches the network.
+    english = Settings(**{**loaded, "fish_api_key": "placeholder"})  # type: ignore[arg-type]
+    assert build_tts(english).voice_id != fishaudio.tts.DEFAULT_VOICE_ID
+
+    arabic = Settings(  # type: ignore[arg-type]
+        **{**loaded, "fish_api_key": "placeholder", "language": "ar"}
+    )
+    assert build_tts(arabic).voice_id == PROVISIONAL_VOICE_ID_AR
 
 
 def test_the_session_start_event_says_which_audio_path_ran():
