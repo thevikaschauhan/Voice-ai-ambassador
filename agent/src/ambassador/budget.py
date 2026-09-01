@@ -217,6 +217,7 @@ class CurrencyVocabulary:
     # source frame: reported speech is full of first-person pronouns.
     # Pronouns that can HEAD a clause, so they can be a saying verb's subject.
     subject_pronouns: dict[str, tuple[str, ...]]
+    determiners: dict[str, tuple[str, ...]]
     first_person: dict[str, tuple[str, ...]]
     money_terms: dict[str, tuple[str, ...]]
     # A first-person affordability shape, not a bare word.
@@ -376,6 +377,7 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
         copulas=_word_lists(raw, "copulas"),
         anaphora=_word_lists(raw, "anaphora"),
         subject_pronouns=_word_lists(raw, "subject_pronouns"),
+        determiners=_word_lists(raw, "determiners"),
         first_person=_word_lists(raw, "first_person"),
         money_terms=_word_lists(raw, "money_terms"),
         affordability_shapes=_word_lists(raw, "affordability_shapes"),
@@ -739,31 +741,50 @@ def find_budget(
             for word in word_list("question_openers")
         )
 
-    def clause_start(position: int) -> int:
-        """Where the clause containing `position` begins.
+    def clause_start(verb_at: int) -> int:
+        """Where the clause owning the saying verb at `verb_at` begins.
 
         A clause, not a segment. Segments cut on every comma and conjunction so
         that MARKS are conclusive, but a subject can sit on the far side of such
         a cut - "I very clearly AND repeatedly said 2 crore" puts the adverbs'
         own conjunction between the subject and its verb.
 
-        So the boundary is sentence punctuation, or a conjunction that is
-        immediately followed by a nominal - which is what tells a coordinated
-        CLAUSE ("..., but I said 2 crore") from a coordinated adverb ("clearly
-        and repeatedly"). Structural, from closed lists, and with no counting.
+        So the boundary is sentence punctuation, or a conjunction that heads a
+        coordinated CLAUSE. A conjunction heads one when a NEW SUBJECT opens
+        between it and the verb, and a new subject shows itself two ways: a
+        nominal ("but I said"), or a determiner, which is the head marker of a
+        noun phrase ("but THE agent said", "and MY agent said"). "and
+        repeatedly said" has neither. Asking only about the token immediately
+        after the conjunction let a determiner or an adjective stack hide the
+        boundary, and the scan then reached back past it for the earlier
+        clause's pronoun and exempted a seller.
+
+        The determiner half is what makes this the noun-phrase STRUCTURE rather
+        than a roster: "and the broker said", "and a colleague said" and "and
+        their rep said" all open a new subject whether or not this file lists
+        that particular noun. Where the new subject is unlisted the subject test
+        simply finds no buyer and the figure stays a source, which is the safe
+        direction.
+
+        A bare shared subject ("The agent called me and said AED 750,000") has
+        no nominal after its conjunction, so the earlier subject still rules,
+        which is correct - it is the same subject. Structural, from closed
+        lists, and with no counting anywhere.
         """
-        start = enclosing(sentences, position)[0]
-        nominals = set(word_list("subject_pronouns")) | set(
-            word_list("source_nouns")
+        start = enclosing(sentences, verb_at)[0]
+        opens_a_subject = (
+            set(word_list("subject_pronouns"))
+            | set(word_list("source_nouns"))
+            | set(word_list("determiners"))
         )
         for word in word_list("conjunctions"):
             if not word:
                 continue
             for found in re.finditer(_token_pattern(word), lowered):
-                if not start <= found.start() < position:
+                if not start <= found.start() < verb_at:
                     continue
-                after = re.findall(r"[^\W_]+", lowered[found.end() : position])
-                if after and after[0] in nominals:
+                between = re.findall(r"[^\W_]+", lowered[found.end() : verb_at])
+                if any(token in opens_a_subject for token in between):
                     start = max(start, found.end())
         return start
 

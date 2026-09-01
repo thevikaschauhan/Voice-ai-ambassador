@@ -553,3 +553,114 @@ def test_the_quotative_gate_is_a_single_choke_point(vocabulary):
         f"{body.count('naming_allowed')} consultations for {len(decisions)} "
         "positive decisions"
     )
+
+
+# --- slip round 3: a coordinated clause, whatever heads its subject ----------
+#
+# `clause_start` used to accept a coordinated clause only when the token
+# IMMEDIATELY after the conjunction was a nominal, so a determiner, possessive
+# or adjective stack hid the boundary; the subject scan then reached back into
+# the EARLIER clause, found the buyer's pronoun and exempted a seller. Both
+# sides of that boundary are classes, so both are tested as classes.
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "the agent",  # determiner
+        "my agent",  # possessive
+        "their agent",  # third-person possessive
+        "the pushy agent",  # adjective
+        "the very pushy senior agent",  # adjective stack
+        "the broker",  # a noun this file does not list
+        "a colleague of mine",  # unlisted noun behind an article
+        "their sales rep",  # unlisted noun behind a possessive
+    ],
+)
+@pytest.mark.parametrize("conjunction", ["but", "and"])
+def test_a_coordinated_clause_moves_the_subject_whatever_heads_it(
+    vocabulary, subject, conjunction
+):
+    """The seller side: the buyer's earlier pronoun must not reach across.
+
+    The unlisted nouns are the point of the determiner half. Where the new
+    subject is a noun the vocabulary does not know, the subject test finds no
+    buyer and the figure stays a source, which is the safe direction.
+    """
+    said = f"I like it, {conjunction} {subject} said AED 750,000."
+    assert find_budget(said, vocabulary, "en") is None, said
+
+
+@pytest.mark.parametrize(
+    "subject", ["I", "we"]
+)
+@pytest.mark.parametrize("conjunction", ["but", "and"])
+def test_a_coordinated_clause_can_also_hand_the_turn_to_the_buyer(
+    vocabulary, subject, conjunction
+):
+    """The buyer side of the same boundary, which must still be found."""
+    said = f"The agent was pushy, {conjunction} {subject} said 2 crore."
+    mention = find_budget(said, vocabulary, "en")
+    assert mention is not None and mention.value == 20_000_000.0, said
+
+
+@pytest.mark.parametrize(
+    "adverbs",
+    [
+        "repeatedly",
+        "firmly",
+        "quite deliberately",
+        "after much thought very carefully",
+    ],
+)
+def test_coordinated_adverbs_are_not_a_clause_boundary(vocabulary, adverbs):
+    """The guard: no new subject opens, so the buyer's own subject still rules.
+
+    This is the string the boundary must NOT move. It is the reason the test is
+    for a new SUBJECT rather than for any word at all after the conjunction.
+    """
+    said = f"I clearly and {adverbs} said 2 crore."
+    mention = find_budget(said, vocabulary, "en")
+    assert mention is not None and mention.value == 20_000_000.0, said
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "The agent called me and said AED 750,000.",
+        "The agent read the listing and said AED 750,000.",
+        "The broker rang and said AED 750,000.",
+    ],
+)
+def test_a_shared_subject_keeps_the_earlier_subject(vocabulary, said):
+    """The other guard: nothing opens between the conjunction and the verb.
+
+    A bare shared subject is the SAME subject, so reaching back for it is
+    correct. If the boundary moved here, the seller's own clause would lose its
+    subject and the price would be confirmed as a budget.
+    """
+    assert find_budget(said, vocabulary, "en") is None, said
+
+
+def test_the_clause_boundary_uses_no_token_count(vocabulary):
+    """The structural claim: distance never re-enters through this door.
+
+    Both slip rounds were caused by an approximation of a structure, and in
+    both the approximation was a count. `clause_start` must stay countless.
+    """
+    import inspect
+
+    from ambassador import budget
+
+    source = inspect.getsource(budget.find_budget)
+    body = source[source.index("def clause_start(") :]
+    body = body[: body.index("\n    def ", 1)]
+    code = "\n".join(
+        line for line in body.splitlines() if not line.strip().startswith("#")
+    )
+    code = code.split('"""')[0] + code.split('"""')[-1]
+    for smell in ("[-", "[:", "reversed(", "_TOKENS", "range("):
+        assert smell not in code, (
+            f"clause_start has grown a positional rule ({smell!r}); the "
+            "boundary is a structure, not a distance"
+        )

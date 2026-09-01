@@ -97,6 +97,18 @@ budget_keywords:
 # website" marks nothing, because the buyer is describing what they did rather
 # than quoting what the website said. This shape is what makes the mark
 # conclusive instead of suggestive.
+# DETERMINERS mark the head of a noun phrase, which is how a coordinated CLAUSE
+# is told from a coordinated adverb when the clause's own subject is a noun this
+# file does not list: "and THE broker said" opens a new subject, "and repeatedly
+# said" does not. A closed function-word list, so the discriminator is the
+# STRUCTURE (a noun phrase) rather than a growing roster of seller nouns.
+determiners:
+  en: [the, a, an, this, that, these, those, my, our, your, their, his, her, its]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
 source_nouns:
   en: [listing, listings, website, site, page, brochure, advert, ad, portal, agent, seller, developer, you, they, he, she, it, price, prices, units, unit]
   ar: []
