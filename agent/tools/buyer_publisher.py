@@ -66,6 +66,7 @@ import json
 import os
 import sys
 import time
+import wave
 from pathlib import Path
 
 import aiohttp
@@ -157,6 +158,56 @@ async def synthesise(tts: fishaudio.TTS, text: str) -> list[rtc.AudioFrame]:
     # 700ms of silence: comfortably past Silero's min-silence default so the
     # end-of-speech mark is the detector's decision, not our truncation.
     return frames + [_silence() for _ in range(700 // FRAME_MS)]
+
+
+class AgentRecorder:
+    """Write the agent's own output track to a WAV, for an ear check.
+
+    #41 switched Fish to raw pcm and said plainly that no test in the repository
+    can clear that change: a raw path handed something that is not s16 mono
+    produces noise and raises nothing. The only verification is a human
+    listening, and a human cannot listen to a room they were not in - so the
+    harness saves what the agent actually sent.
+
+    This is the agent's PUBLISHED track as it arrived over WebRTC, which is the
+    honest thing to check: it includes whatever the transport did to it, not
+    just what Fish returned.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._writer: wave.Wave_write | None = None
+        self._tasks: list[asyncio.Task[None]] = []
+        self.frames = 0
+
+    def watch(self, room: rtc.Room) -> None:
+        @room.on("track_subscribed")
+        def _subscribed(track, publication, participant) -> None:  # noqa: ANN001
+            if track.kind != rtc.TrackKind.KIND_AUDIO:
+                return
+            print(f"  recording {participant.identity}'s audio", flush=True)
+            self._tasks.append(asyncio.create_task(self._drain(track)))
+
+    async def _drain(self, track) -> None:  # noqa: ANN001
+        async for event in rtc.AudioStream(track):
+            frame = event.frame
+            if self._writer is None:
+                self._writer = wave.open(str(self._path), "wb")
+                self._writer.setnchannels(frame.num_channels)
+                self._writer.setsampwidth(2)  # rtc.AudioFrame is 16-bit pcm
+                self._writer.setframerate(frame.sample_rate)
+            self._writer.writeframes(bytes(frame.data))
+            self.frames += 1
+
+    def close(self) -> str | None:
+        for task in self._tasks:
+            task.cancel()
+        if self._writer is None:
+            return None
+        rate = self._writer.getframerate()
+        channels = self._writer.getnchannels()
+        self._writer.close()
+        return f"{self._path} ({rate} Hz, {channels} channel, {self.frames} frames)"
 
 
 class EventTail:
@@ -268,6 +319,11 @@ async def run(args: argparse.Namespace) -> int:
 
     tail = EventTail(Path(args.log))
     room = rtc.Room()
+    recorder = AgentRecorder(Path(args.record_agent)) if args.record_agent else None
+    if recorder is not None:
+        # Registered before connect, or the agent's track can be subscribed
+        # before the handler exists and the recording starts mid-sentence.
+        recorder.watch(room)
     await room.connect(url, token)
     print(f"joined {args.room} as synthetic-buyer", flush=True)
 
@@ -320,6 +376,9 @@ async def run(args: argparse.Namespace) -> int:
         await mouth.aclose()
         await room.disconnect()
         tail.poll()
+        if recorder is not None:
+            written = recorder.close()
+            print(f"agent audio: {written or 'nothing recorded'}", flush=True)
 
     print(f"\nran {len(turns)} turns; {len(tail.seen)} events on the stream", flush=True)
     return 0
@@ -338,6 +397,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--barge-in-delay", type=float, default=0.6)
     parser.add_argument("--gap-seconds", type=float, default=1.0)
     parser.add_argument("--disclosure-seconds", type=float, default=8.0)
+    parser.add_argument(
+        "--record-agent",
+        default="",
+        help="write the agent's own audio to this WAV, for #41's ear check",
+    )
     args = parser.parse_args(argv)
     return asyncio.run(run(args))
 
