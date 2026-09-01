@@ -40,7 +40,8 @@ def case() -> EvalCase:
 
 def request(fixture=None, *, detail=None) -> ModelRequest:
     return ModelRequest(
-        case=case(),
+        case_id="t",
+        language="en",
         system_prompt="SYSTEM",
         messages=(("user", "hello"),),
         fixture=fixture,

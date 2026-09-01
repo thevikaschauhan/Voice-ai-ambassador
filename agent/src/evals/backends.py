@@ -30,7 +30,9 @@ from typing import Any, Protocol
 
 import httpx
 
-from .cases import EvalCase, ModelFixture
+from ambassador.schemas import Language
+
+from .cases import ModelFixture
 
 # The tools the ambassador exposes mid-turn, mirroring the `@function_tool`
 # methods on `adapter.agent.AmbassadorAgent`. The names are what the categories
@@ -126,7 +128,13 @@ class BackendError(RuntimeError):
 
 @dataclass(frozen=True)
 class ModelRequest:
-    case: EvalCase
+    # The case's id and language, not the case. A backend needs to say WHICH
+    # request failed and WHICH language it was in, and nothing else off an
+    # `EvalCase` - carrying the whole object made the eval harness the only
+    # thing that could ever call one, which is why text mode could not reuse
+    # this pipeline without fabricating a case to satisfy a validator.
+    case_id: str
+    language: Language
     system_prompt: str
     # (role, content) pairs, oldest first, ending with the buyer turn to answer.
     messages: tuple[tuple[str, str], ...]
@@ -151,14 +159,14 @@ class FixtureBackend:
         fixture = request.fixture
         if fixture is None:
             raise BackendError(
-                f"{request.case.id}: no model fixture for this turn. Offline mode "
+                f"{request.case_id}: no model fixture for this turn. Offline mode "
                 "has nothing to replay, and a case that cannot run must fail "
                 "rather than disappear from the denominator."
             )
         if request.regeneration_detail is not None:
             if fixture.retry is None:
                 raise BackendError(
-                    f"{request.case.id}: the first reply was blocked and this "
+                    f"{request.case_id}: the first reply was blocked and this "
                     "fixture authors no `retry`, so the regeneration the "
                     "recovery policy allows cannot be replayed."
                 )
@@ -241,12 +249,12 @@ class LiveBackend:
                 json=body,
             )
         except httpx.HTTPError as exc:
-            raise BackendError(f"{request.case.id}: live call failed: {exc}") from exc
+            raise BackendError(f"{request.case_id}: live call failed: {exc}") from exc
         if response.status_code >= 400:
             # The body carries the provider's reason (rate limit, credit
             # balance) and no credential.
             raise BackendError(
-                f"{request.case.id}: live call returned {response.status_code}: "
+                f"{request.case_id}: live call returned {response.status_code}: "
                 f"{response.text[:300]}"
             )
         try:
@@ -254,7 +262,7 @@ class LiveBackend:
             message = payload["choices"][0]["message"]
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
             raise BackendError(
-                f"{request.case.id}: unparseable live response: {exc}"
+                f"{request.case_id}: unparseable live response: {exc}"
             ) from exc
 
         calls = message.get("tool_calls") or []
@@ -323,16 +331,16 @@ class LiveBackend:
             )
         except httpx.HTTPError as exc:
             raise BackendError(
-                f"{request.case.id}: the post-tool-call inference failed: {exc}"
+                f"{request.case_id}: the post-tool-call inference failed: {exc}"
             ) from exc
         if response.status_code >= 400:
             raise BackendError(
-                f"{request.case.id}: the post-tool-call inference returned "
+                f"{request.case_id}: the post-tool-call inference returned "
                 f"{response.status_code}: {response.text[:300]}"
             )
         try:
             return response.json()["choices"][0]["message"].get("content") or ""
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
             raise BackendError(
-                f"{request.case.id}: unparseable post-tool-call response: {exc}"
+                f"{request.case_id}: unparseable post-tool-call response: {exc}"
             ) from exc

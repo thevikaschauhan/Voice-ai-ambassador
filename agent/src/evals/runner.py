@@ -164,16 +164,18 @@ class Harness:
 
 def run_case(case: EvalCase, harness: Harness, backend: ModelBackend) -> Observed:
     """Every turn of one case, in order, with the state the buyer's call has."""
-    policies = harness.coordinator(case.language)
-    system_prompt = harness.prompt(case.language)
+    language = case.language
+    policies = harness.coordinator(language)
+    system_prompt = harness.prompt(language)
     history: list[tuple[str, str]] = []
     turns: list[TurnOutcome] = []
 
     for turn in case.turns:
         history.append(("user", turn.buyer))
         try:
-            outcome = _run_turn(
-                case=case,
+            outcome = run_turn(
+                language=language,
+                case_id=case.id,
                 turn_index=len(turns),
                 buyer=turn.buyer,
                 fixture=turn.model,
@@ -185,7 +187,7 @@ def run_case(case: EvalCase, harness: Harness, backend: ModelBackend) -> Observe
             )
         except BackendError as exc:
             return Observed(
-                language=case.language,
+                language=language,
                 forms=harness.forms,
                 turns=tuple(turns),
                 error=str(exc),
@@ -199,13 +201,14 @@ def run_case(case: EvalCase, harness: Harness, backend: ModelBackend) -> Observe
             history.append(("assistant", spoken))
 
     return Observed(
-        language=case.language, forms=harness.forms, turns=tuple(turns)
+        language=language, forms=harness.forms, turns=tuple(turns)
     )
 
 
-def _run_turn(
+def run_turn(
     *,
-    case: EvalCase,
+    language: Language,
+    case_id: str,
     turn_index: int,
     buyer: str,
     fixture: ModelFixture | None,
@@ -215,7 +218,7 @@ def _run_turn(
     system_prompt: str,
     history: tuple[tuple[str, str], ...],
 ) -> TurnOutcome:
-    confirmation = _confirmation(policies, buyer, harness, case.language)
+    confirmation = _confirmation(policies, buyer, harness, language)
     if confirmation is not None:
         text, action, hands_over = confirmation
         return TurnOutcome(
@@ -233,7 +236,8 @@ def _run_turn(
         )
 
     request = ModelRequest(
-        case=case,
+        case_id=case_id,
+        language=language,
         system_prompt=system_prompt,
         messages=history,
         fixture=fixture,
@@ -248,7 +252,7 @@ def _run_turn(
     regenerated = _speak(
         text=reply.text,
         harness=harness,
-        language=case.language,
+        language=language,
         segments=segments,
         blocked=blocked,
         reasons=reasons,
