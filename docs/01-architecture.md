@@ -152,6 +152,10 @@ The session opens with fixed, native-reviewed disclosure copy (never model-gener
 
 ### ADR-015 - STT is Qwen3-ASR-1.7B via OpenRouter, Arabic gated on day 0 (decided 2026-08-27; amended same day, superseding whisper-on-Groq)
 
+**SUPERSEDED 2026-08-29 by ADR-017 (Deepgram streaming), below. Everything down to the fired revisit clause is the record of a decision that no longer holds.**
+
+That includes `STT_MODEL_AR` and the day-0 head-to-head that would have set it. The variable still exists and still routes Arabic on the OpenRouter path, which stays selectable as the escape hatch - but the bake-off cannot produce a value worth shipping, because ADR-017 retired that path on an **architecture** finding rather than a model-choice one: base64 HTTP round-trips per utterance miss the post-endpoint budget by 6-25x whichever model sits behind them. Expect `STT_MODEL_AR` to stay empty. The live Arabic recognition question is `DEEPGRAM_MODEL` plus `deepgram_language()`, where the bare `ar` rather than a country locale is deliberate: Gulf vs Egyptian vs Levantine is a native-review decision, not a locale string.
+
 **Decision.** Speech recognition defaults to `qwen/qwen3-asr-1.7b` through OpenRouter's transcription endpoint (`POST /api/v1/audio/transcriptions`, base64 audio in, JSON text plus usage out), one request per finalised utterance - which is exactly our turn flow (steps 1-2). Because language is selected before the call (ADR-010), **STT routes per language** via `STT_MODEL_AR`, decided by the day 0 head-to-head: `qwen3-asr-1.7b` vs `qwen3-asr-flash` vs whisper - all three servable from the same OpenRouter key, so the bake-off needs no extra accounts. This consolidates the stack: LLM and STT now share one vendor account, and Groq drops out entirely.
 
 **Why it fits.** Qwen3-ASR-1.7B (open weights, released 2026-01, built on Qwen3-Omni) supports 30 languages including Arabic and Hindi, language identification, and word-level timestamps, and benchmarks as state-of-the-art among open ASR models. A 1.7B model is small enough that hosted per-utterance latency should sit inside the 100-300ms post-endpoint budget - measured on day 1, not assumed. Streaming partials and word confidence remain things this architecture deliberately does not depend on: transcription happens on endpoint, and the confirmation policy (ADR-011) is deterministic.
@@ -165,7 +169,7 @@ The session opens with fixed, native-reviewed disclosure copy (never model-gener
 
 **Revisit when** day 0 recordings show a contender beating 1.7b on Arabic or Hinglish, or day 1 shows hosted latency missing the budget - either way a per-language config swap (whisper stays available on the same key as the escape hatch), not a rebuild.
 
-**SUPERSEDED 2026-08-29 by ADR-017 (Deepgram streaming). Kept because the measurements below are why.**
+Kept because the measurements below are why it was superseded.
 
 **REVISIT CLAUSE FIRED - measured 2026-08-29.** Once credits landed, the bake-off ran on a 4-second English utterance ("My budget is two million dirhams for a Binghatti Skyrise studio"), three runs each:
 
@@ -246,9 +250,10 @@ LLM_THINKING=off               # NEVER on for the voice path - thinking precedes
 BRIEF_MODEL=qwen/qwen3.7-flash # same model, thinking off; separate var so it can diverge later
 STT_PROVIDER=deepgram          # decided, ADR-017 - streaming; openrouter is the retired path, still selectable
 DEEPGRAM_API_KEY=              # required whenever STT_ENABLED is set and the provider is deepgram
-DEEPGRAM_MODEL=nova-3
+DEEPGRAM_MODEL=nova-3          # Arabic dialect handling is this plus deepgram_language()
 STT_MODEL_DEFAULT=qwen/qwen3-asr-1.7b   # openrouter path only
-STT_MODEL_AR=                  # openrouter path only: qwen3-asr-1.7b | qwen3-asr-flash | whisper (same key)
+STT_MODEL_AR=                  # openrouter path only, and expected to stay empty: ADR-015's day-0
+                               # bake-off was retired with the path, so nothing will fill it
 TTS_PROVIDER=fishaudio         # decided, ADR-014
 FISH_API_KEY=
 FISH_TTS_MODEL=s2.1-pro        # s2.1-pro-free for dev; paid model for the demo (SLA + commercial licence)

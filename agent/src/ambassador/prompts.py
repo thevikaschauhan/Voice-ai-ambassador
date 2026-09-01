@@ -95,9 +95,6 @@ REGENERATION_INSTRUCTION = (
     "Never restate the figure that was blocked."
 )
 
-# Constraint 8 depends on who owns the budget confirmation on THIS call. When
-# the deterministic policy runs (ADR-011), the system takes the turn and the
-# model must not ask again. When it does not - a language with no authored
 # Constraint 8 depends on who owns each confirmation on THIS call. Where the
 # deterministic policy runs (ADR-011), the system takes the turn and the model
 # must not ask again. Where it does not - a language with no authored
