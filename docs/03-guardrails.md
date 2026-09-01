@@ -59,16 +59,32 @@ This is the same shape of gap as the English-only prohibited patterns below, dis
 
 ## Validator 2 - prohibited language
 
-`guardrails/prohibited.py`, patterns in `data/prohibited-patterns.yaml` - one language-neutral file, reviewable by a non-engineer.
+`guardrails/prohibited.py`, patterns in `data/prohibited-patterns.yaml` - one file, reviewable by a non-engineer.
 
 **English patterns only in the POC. Disclose this in the meeting.** The distinction to draw: the critical guardrail (numeric claims) is language-agnostic because it operates on digits, so the guarantee that a fabricated price cannot be spoken holds in all three languages. The stylistic layer is English-only until a native reviewer writes the Arabic and Hindi patterns. Never ship patterns nobody on the team can read - `VERIFY:` native review.
 
-Both halves of that are now verified by execution rather than asserted, and each has a wrinkle worth carrying into the room:
+**The routing rule, and the exact claim it supports (issue #14).** `language` on a pattern is provenance AND routing, under one deliberately asymmetric rule:
+
+> **English patterns always apply, plus the sentence's own language.**
+
+Say it as one sentence per language and it is precise rather than reassuring:
+
+| Call language | What is checked | What is not |
+|---|---|---|
+| English | every English pattern | nothing |
+| Arabic | every English pattern, so a reply that code-switches into English to promise "guaranteed returns" is blocked | a violation written wholly in Arabic script |
+| Hindi | every English pattern, same code-switch coverage | a violation written wholly in Devanagari script |
+
+The English half is the load-bearing one and is not a convenience: Arabic-English code-switching is the default Dubai register, and it is the only form of ar/hi violation catchable at all today. Routing purely by the call's language would silently give that up, so the rule is asymmetric on purpose and a test asserts the code-switch case in both scripts. The per-language half exists so that the Arabic patterns a reviewer eventually writes apply to Arabic calls and not to Hindi ones, where a false positive is a sentence the buyer never hears. Because the shipped file is English-only, the rule changes no behaviour today; it landed before the patterns rather than with them, so nobody re-derives the policy under demo pressure.
+
+`data/prohibited-patterns.yaml` carries the Arabic and Hindi slots explicitly - one per category, `patterns: []`, marked `VERIFY:` - so the gap is validated data rather than a comment, and filling it in is adding regexes to a list. A declared-but-empty slot deliberately does not count as coverage: `languages_covered()` still reports English alone. Three guards go with the rule, all of them start-up failures rather than demo-time ones. `check_prohibited()` takes the language with no default, because a default makes the routing rule skippable by omission on the compliance validator. `language` must be one of the codes the product offers, because under routing an unknown code switches a whole group off in silence where it used to be harmless. And the (category, language) matrix is validated - no duplicate pairs, exactly one slot per language for every category that appears - because the nastier mislabel is a VALID wrong code: relabel the English return-guarantees group as `ar` and the file loads, Arabic calls still catch "risk-free", and English calls silently stop. Nothing about that group looks broken, so the guard is structural: the edit duplicates the target language's slot and empties the source language's, and both are refused. It cannot prove the semantic language of arbitrary regex text; it catches the ordinary single-field mislabel that the explicit empty-slot design makes easy to commit.
+
+Both halves of the English-only disclosure are verified by execution rather than asserted, and each has a wrinkle worth carrying into the room:
 
 - **The numeric claim holds across scripts for digits, and only for digits.** `figures.py` normalises Arabic-Indic, extended Arabic-Indic and Devanagari digits along with the Arabic separators `٬` and `٫`, one character to one so verbalisation spans stay valid, and sentence splitting already breaks on `؟` and `।`. A fabricated price written `١٬٢٥٠٬٠٠٠` is caught and an allowed `٩٨٥٬٠٠٠` passes. This is the half a tech lead will expect to be broken. The wrinkle is the one disclosed above: where the magnitude lives in a native WORD rather than the digits (`٨ مليون`), it is not read yet, and the figure keeps its small-integer exemption.
-- **The stylistic layer does cover code-switching, which is the register that matters.** Every pattern runs against every sentence whatever language the call is in, so a reply in Arabic that slips into English to say "guaranteed returns" is caught. `language` on a pattern is provenance - the competence its author needed - and is deliberately never used for routing, because routing by the call's language would give exactly this up. What is not covered is a violation written wholly in Arabic or Devanagari script.
+- **The stylistic layer does cover code-switching, which is the register that matters.** English patterns run against every sentence whatever language the call is in, so a reply in Arabic that slips into English to say "guaranteed returns" is caught. That is the English half of the routing rule above, and it is the half never traded away. What is not covered is a violation written wholly in Arabic or Devanagari script.
 
-The `prohibited_coverage` event at session start reports which languages actually have patterns, so the demo record states the real coverage instead of implying uniform protection.
+The `prohibited_coverage` event at session start reports which languages actually have patterns AUTHORED, so the demo record states the real coverage instead of implying uniform protection. Read it as authorship, not protection: a language absent from that set is still checked against the English patterns, and what it lacks is cover against a violation in its own script.
 
 | Category | Catches | Action |
 |---|---|---|
