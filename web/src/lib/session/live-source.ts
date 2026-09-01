@@ -14,7 +14,23 @@ import type { Emit, SessionSource } from '@/lib/session/source'
  * It never talks to the agent directly. The token lives on the Next server, so
  * this speaks same-origin to Next and Next speaks loopback to the agent.
  */
-export function liveSource(url = '/api/session/stream'): SessionSource {
+export interface LiveSourceOptions {
+  url?: string
+  /**
+   * Infer who is speaking from the agent's turn events.
+   *
+   * On by default, and turned OFF when a LiveKit room is attached: the room
+   * measures the same thing from the actual audio, and two sources writing one
+   * indicator means `turn_complete` can silence a speaker who is still talking.
+   * The measurement wins over the inference wherever both exist.
+   */
+  deriveTransport?: boolean
+}
+
+export function liveSource({
+  url = '/api/session/stream',
+  deriveTransport = true,
+}: LiveSourceOptions = {}): SessionSource {
   return {
     start(emit: Emit, onEnd?: () => void) {
       const source = new EventSource(url)
@@ -35,7 +51,9 @@ export function liveSource(url = '/api/session/stream'): SessionSource {
         const parsed = parse((event as MessageEvent<string>).data)
         if (parsed === null) return
         emit(parsed)
-        for (const derived of transportSignals(parsed)) emit(derived)
+        if (deriveTransport) {
+          for (const derived of transportSignals(parsed)) emit(derived)
+        }
       })
 
       source.addEventListener('close', () => {

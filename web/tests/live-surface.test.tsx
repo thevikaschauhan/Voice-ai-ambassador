@@ -48,8 +48,8 @@ class StubEventSource {
   }
 }
 
-function renderLive() {
-  render(<DemoSurface projects={PROJECTS} languages={LANGUAGES} live />)
+function renderLive(room = false) {
+  render(<DemoSurface projects={PROJECTS} languages={LANGUAGES} live room={room} />)
 }
 
 async function attach() {
@@ -283,5 +283,34 @@ describe('attached to a running agent', () => {
 
     expect(StubEventSource.instances).toHaveLength(1)
     expect(StubEventSource.current().closed).toBe(false)
+  })
+
+  it('keeps the honest placeholder when the room cannot be joined', async () => {
+    // The state this was written against: LiveKit is configured, so the surface
+    // asks for a ticket, and the answer is 503. A room client that turned a
+    // missing room into a broken page would make the demo more fragile than the
+    // placeholder it replaced.
+    vi.stubGlobal(
+      'fetch',
+      (async () =>
+        new Response(JSON.stringify({ room: null, reason: 'no room' }), {
+          status: 503,
+        })) as unknown as typeof fetch,
+    )
+    renderLive(true)
+    await attach()
+    await send({
+      event: 'user_turn',
+      turn: 1,
+      text: 'Still gets the transcript.',
+    })
+
+    expect(
+      within(screen.getByLabelText('Transcript')).getByText('Still gets the transcript.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/No audio track attached/)).toBeInTheDocument()
+    expect(
+      screen.queryByText(/Measured from the call’s own audio/),
+    ).not.toBeInTheDocument()
   })
 })

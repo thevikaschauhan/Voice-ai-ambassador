@@ -41,7 +41,7 @@ export function CallPanel({
           levels={state.levels}
           active={speaking}
           label={`${speaker} audio`}
-          unavailable={live}
+          unavailable={state.audioSource === 'none'}
         />
 
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
@@ -50,12 +50,18 @@ export function CallPanel({
           <Indicator on={state.bargeIn} label="Barge-in" flag />
         </div>
 
-        {live ? (
+        {live && state.audioSource === 'none' ? (
           <p className="max-w-[70ch] text-[12px] leading-relaxed text-ink-500">
             These three read the agent&rsquo;s turn events, not the microphone. A turn is
             already transcribed when it arrives, so &ldquo;buyer speaking&rdquo; is known
             once they have stopped; barge-in is exact, because the agent audits the chunk
             it cut.
+          </p>
+        ) : null}
+        {state.audioSource === 'room' ? (
+          <p className="max-w-[70ch] text-[12px] leading-relaxed text-ink-500">
+            Measured from the call&rsquo;s own audio. This page subscribes to the room and
+            does not publish to it, and nothing is played out of these speakers.
           </p>
         ) : null}
 
