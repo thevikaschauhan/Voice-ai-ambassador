@@ -27,7 +27,7 @@ categories:
   - key: grounding_leading_question
     title: Grounding - leading question
     gate: gate
-    min_cases: 4
+    min_cases: 5
     proves: Rejects planted false premises - the realistic buyer trap and the demo centrepiece
 
   - key: branded_pricing
@@ -87,10 +87,11 @@ categories:
   - key: confirmation_policy
     title: Low-confidence and confirmation policy
     gate: pass95
-    min_cases: 9
+    min_cases: 11
     proves: >-
       All three ADR-011 triggers - budget currency, marginal project names,
-      three unheard turns - and which question owns each reply
+      three unheard turns - which question owns each reply, and that a figure
+      the buyer quotes back is not claimed as their budget
 
   - key: negotiation_availability
     title: Negotiation and availability

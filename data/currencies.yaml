@@ -62,6 +62,188 @@ budget_keywords:
   hi: []
   # VERIFY: native-authored.
 
+# Whose figure is it (ADR-011, issue #25). The design is god's, round three:
+# the deterministic layer decides only what is LOCALLY CONCLUSIVE from these
+# closed lists, in a FIXED precedence, and every ambiguity falls to over-asking
+# - which is ADR-011's safe direction. No distances, no bindings, no clever
+# comma rules; three earlier mechanisms built from those all shipped adjacent
+# regressions.
+#
+# THE PRECEDENCE, first match wins, per figure:
+#   1. copular_naming in its segment  -> budget
+#   2. source in its segment          -> WITHHELD
+#   3. affordability in its sentence  -> budget
+#   4. question                       -> WITHHELD
+#   5. ownership in its segment       -> budget
+#   6. budget keyword in its segment  -> budget
+#   7. otherwise                      -> budget (over-ask)
+# and a withheld figure is never selected while a live one exists.
+#
+# Read the direction before editing any list here. `source` and `question` are
+# the only two that can LOSE a budget, and a missed budget is an unconfirmed
+# twenty-times risk where an extra read-back costs one question.
+
+# SOURCE: a noun and a verb together, never a bare noun. "After checking your
+# website" marks nothing, because the buyer is describing what they did rather
+# than quoting what the website said. This shape is what makes the mark
+# conclusive instead of suggestive.
+source_nouns:
+  en: [listing, listings, website, site, page, brochure, advert, ad, portal, agent, seller, developer, you, they, he, she, it, price, prices, units, unit]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# SAYING verbs keep a first-person exemption: "I said 2 crore" is the buyer
+# restating their own budget, and withholding that is the expensive direction.
+# A quotative comma after one of these does not split the segment (G1), because
+# the words being reported are the same claim as the verb reporting them.
+saying_verbs:
+  en: [says, say, said, tells, tell, told, quotes, quoted, mentions, mentioned, shows, showed, lists, listed, asks, asked, writes, wrote, advertised, calls, called, describes, described, states, stated, claims, claimed, advertises]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# PERCEPTION verbs take ANY subject, first person included: you do not SEE your
+# own budget. "I saw AED 750,000 online" is a figure from somewhere else.
+perception_verbs:
+  en: [saw, see, seen, read, found, spotted, noticed, heard]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# Verbs that state a price directly, with any subject.
+pricing_verbs:
+  en: [costs, cost, "starts from", "starts at", "start from", "start at", "starting from", "starting at", "priced at", "goes for", "go for", asking, retails]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# COPULAR PRICE-NAMING: a price noun and a copula either side of the figure -
+# "the price is X" and "X is the asking price" are both the seller's number.
+# The mirror of naming_terms below, and the reason SOURCE needed more than a
+# noun-plus-verb shape.
+price_nouns:
+  en: [price, prices, cost, "asking price", "list price", "listed price", "sale price", rate, premium]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# COPULAR-NAMING: the buyer naming a figure as their budget across a copula,
+# in either order - "my budget is X" and "X is my budget". The strongest mark
+# there is, so it outranks a source frame: "The website says AED 750,000 is my
+# budget" is a budget of 750,000.
+naming_terms:
+  en: ["my budget", "our budget", "my maximum", "our maximum", "my max", "my limit", "our limit", "my price range", "our price range", "my ceiling"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+copulas:
+  en: [is, "is about", "is around", was, "will be", "would be", "'s", are, "comes to"]
+
+# ANAPHORIC NAMING (G6): a pronoun standing in for the figure just mentioned,
+# then a copula, then the buyer's own naming term - "750,000, which is my
+# budget". Applies to the figure in the same segment or the one immediately
+# before it, because that is what the pronoun refers to.
+anaphora:
+  en: [that, which, this, it]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# OWNERSHIP: a first-person anchor and a money term in the same segment. Weaker
+# than a source frame on purpose - reported speech is full of first-person
+# pronouns ("the agent told me I could afford 2m"), and treating those as the
+# buyer speaking is what this precedence exists to stop.
+first_person:
+  en: ["i", "me", "my", "mine", "we", "us", "our", "ours", "i'm", "i've", "we're", "we've"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+money_terms:
+  en: [budget, spend, spending, afford, "price range", maximum, max, limit, available, works, "to work with"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# AFFORDABILITY: a first-person affordability SHAPE, not a bare word. "Enough
+# for me" is the buyer; "the listing says AED 750,000 is affordable" is the
+# listing, and that is why this is a shape list and why a source frame still
+# beats it.
+affordability_shapes:
+  en: ["enough for me", "enough for us", "enough for a", "can i afford", "can we afford", "could i afford", "could we afford", "i can afford", "we can afford", "afford it", "within my", "within our", "too much for me", "too much for us", "works for me", "works for us", "work for me", "work for us", "suits me", "suits us", "fine for me", "fine for us"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# QUESTION: an auxiliary or copula opening the utterance. It marks every
+# segment of its sentence, because "Is AED 750,000 the asking price?" puts the
+# telling words after the figure. Four hard-coded "is + pronoun" phrases missed
+# the whole class.
+question_openers:
+  en: [is, are, was, were, am, do, does, did, will, would, shall, should, can, could, may, might, has, have, had]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# RANGE FUSION: figures joined by nothing but one of these fuse into a single
+# segment and share one fate. That is how a quoted range survives segmentation
+# on every comma and conjunction: "says AED 750,000, and AED 800,000" is one
+# quoted claim, while "750k works, and I have 800k" is two statements because
+# words intervene.
+range_connectors:
+  en: [and, or, to, "up to", "through", "between"]
+
+# Verbs a range may carry between its two figures without ceasing to be one
+# range: "start at AED 750,000 and GO UP TO AED 900,000" (G2).
+range_verbs:
+  en: [go, goes, going, rise, rises, rising, climb, climbs, reach, reaches, run, runs, extend, extends]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# DIMENSIONS (G4): a measurement rather than a sum. Scoped to genuinely
+# ambiguous unit surfaces only - a bare multiplier like "2m", which is both two
+# million and two metres - and never to a plain-currency figure, because "I have
+# AED 800,000 for a room" is a budget and a room does not make a currency
+# ambiguous.
+dimensions:
+  en: [wide, width, long, length, high, height, tall, deep, depth, ceiling, ceilings, balcony, terrace, room, rooms, metre, metres, meter, meters, square, sqft, "sq ft", "floor area", frontage]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# Conjunctions that end a segment. Every comma does too, which is why range
+# fusion above has to exist.
+conjunctions:
+  en: [and, or, but, however, though, although, whereas, plus]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
 # Negators: a currency these directly precede is being DENIED, not named.
 # "Not dirhams" and "not in dirhams" deny dirhams; punctuation breaks the
 # bind, so "no, dirhams" affirms them. A negator that is not denying a

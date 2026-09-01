@@ -36,12 +36,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import yaml
 
-from .figures import extract_figures, normalise_digits
+from .figures import Numerals, default_numerals, extract_figures, normalise_digits
 
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
@@ -77,13 +78,90 @@ _PUNCTUATION = re.compile(r"[,.;:!?]")
 # "2 crore, in rupees" is one clause.
 _CLAUSE_BREAK = re.compile(r"[;.!?]")
 
-# Multiplier words that make a bare number a budget on their own: nobody says
-# "two crore" about a bedroom count. Kept in step with the multiplier table
-# in data/numerals.yaml, minus the ones too small to imply money. Longest
-# alternatives first, or "lakhs" matches as "lakh" and fails the boundary.
-_BUDGET_UNITS = re.compile(
-    r"\b(thousand|million|lakhs|lakh|lacs|lac|crores|crore|k|m)\b", re.IGNORECASE
-)
+# A multiplier this size makes a bare number a budget on its own: nobody says
+# "two crore" about a bedroom count, and nobody says "three hundred" about a
+# price. Thousand and up.
+_MONEY_UNIT_FACTOR = 1000
+
+
+def budget_unit_pattern(numerals: Numerals) -> re.Pattern[str]:
+    """The money-sized multipliers, matched against a FIGURE'S OWN SURFACE.
+
+    Derived from the same table the extractor uses, not hand-kept beside it.
+    The list here used to be a literal "kept in step with data/numerals.yaml",
+    and two of its ten tokens could never match anything: `extract_figures`
+    folds an adjacent multiplier INTO the surface, so a k/m budget arrives as
+    "800k", and `\bk\b` cannot match there because there is no word boundary
+    between "0" and "k". A k/m budget was therefore only ever detected when a
+    budget keyword happened to sit nearby - "around 800k" returned nothing.
+    That is the regex-that-looks-live-and-never-fires trap, and deriving the
+    pattern is what stops a multiplier added to the data file being silently
+    unreachable here.
+
+    Hence the boundary: a unit may sit directly against the digits ("800k") or
+    stand as its own word ("3 million").
+
+    Longest alternatives first so the match is deterministic rather than
+    dependent on the data file's key order. It is NOT load-bearing for
+    correctness - "3 lakhs" matches either way, because a shorter alternative
+    that fails its own trailing boundary backtracks into the longer one - and
+    the earlier version of this comment claimed otherwise. A mutation that
+    removed the sort left the suite green, which is how the claim was caught.
+    """
+    words = sorted(
+        (
+            word
+            for word, factor in numerals.multipliers.items()
+            if factor >= _MONEY_UNIT_FACTOR
+        ),
+        key=len,
+        reverse=True,
+    )
+    if not words:
+        raise ValueError(
+            "no money-sized multipliers in the numeral table, so no figure can "
+            "ever read as a budget on its unit alone. Check data/numerals.yaml."
+        )
+    alternatives = "|".join(re.escape(word) for word in words)
+    return re.compile(rf"(?:(?<=\d)|\b)({alternatives})\b", re.IGNORECASE)
+
+
+@lru_cache(maxsize=1)
+def _budget_units() -> re.Pattern[str]:
+    """The shipped pattern, compiled once. `budget_unit_pattern` is the part
+    that decides anything and takes its vocabulary explicitly, the same split
+    `figures.py` uses."""
+    return budget_unit_pattern(default_numerals())
+
+
+# Units that are money in the numeral table and something else in ordinary
+# property speech. "m" is millions and metres, and a folded "2m" is both "two
+# million" and "two metres". A dimension word therefore withholds THIS unit and
+# no other: suppressing every amount near a room was a regression, because "I
+# have AED 800,000 for a room" is a budget and a room does not make a currency
+# ambiguous.
+_AMBIGUOUS_UNITS = frozenset({"m"})
+
+
+def _ambiguous_unit(surface: str) -> bool:
+    """Does this figure's own surface carry a unit that is money in the numeral
+    table and a measurement in ordinary property speech?
+
+    Only such a surface can be withheld by a dimension word (G4). A
+    plain-currency figure is unambiguous whatever else the segment mentions:
+    "I have AED 800,000 for a room" is a budget, and a room does not make a
+    currency ambiguous.
+    """
+    found = _budget_units().search(surface)
+    return bool(found) and found.group(1).lower() in _AMBIGUOUS_UNITS
+
+# Attribution, ownership and dimensions are decided by SEGMENT, not by character
+# distance. The first attempt ran a distance contest - a source word within 14
+# characters, a budget keyword within 30 - and a natural modifier defeats it:
+# "My budget after checking your website is AED 750,000" puts "website" 8
+# characters from the figure and "budget" 36, so the source word won and a
+# stated budget went unconfirmed. Who owns a figure is not a question about
+# spacing, and both numbers are gone.
 
 
 @dataclass(frozen=True)
@@ -116,6 +194,42 @@ class CurrencyVocabulary:
     # inferred from the absence of an objection - "can you repeat that?" is
     # not a yes.
     affirmations: dict[str, tuple[str, ...]]
+    # Whose figure is it (issue #25, god's round-three design). Closed lists,
+    # fixed precedence, every ambiguity falling to over-asking. See
+    # data/currencies.yaml for the precedence itself.
+    #
+    # A SOURCE mark is a noun AND a verb together, never a bare noun: "after
+    # checking your website" is the buyer describing what they did.
+    source_nouns: dict[str, tuple[str, ...]]
+    # Saying verbs keep a first-person exemption ("I said 2 crore" is the buyer);
+    # perception verbs take any subject (you do not see your own budget).
+    saying_verbs: dict[str, tuple[str, ...]]
+    perception_verbs: dict[str, tuple[str, ...]]
+    pricing_verbs: dict[str, tuple[str, ...]]
+    # "the price is X" / "X is the asking price" - a source shape in both orders.
+    price_nouns: dict[str, tuple[str, ...]]
+    # The buyer naming a figure as their budget across a copula, either order.
+    naming_terms: dict[str, tuple[str, ...]]
+    copulas: dict[str, tuple[str, ...]]
+    # "that/which/it is my budget" - a pronoun standing in for the figure.
+    anaphora: dict[str, tuple[str, ...]]
+    # A first-person anchor plus a money term. Deliberately WEAKER than a
+    # source frame: reported speech is full of first-person pronouns.
+    first_person: dict[str, tuple[str, ...]]
+    money_terms: dict[str, tuple[str, ...]]
+    # A first-person affordability shape, not a bare word.
+    affordability_shapes: dict[str, tuple[str, ...]]
+    # An auxiliary opening the utterance, which marks every segment of its
+    # sentence - the telling words can follow the figure.
+    question_openers: dict[str, tuple[str, ...]]
+    # Figures joined by nothing but one of these fuse and share one fate.
+    range_connectors: dict[str, tuple[str, ...]]
+    # A range may carry one of these between its figures: "start at X and go up
+    # to Y" is still one range.
+    range_verbs: dict[str, tuple[str, ...]]
+    # A measurement rather than a sum, and only for an ambiguous unit surface.
+    dimensions: dict[str, tuple[str, ...]]
+    conjunctions: dict[str, tuple[str, ...]]
     rate: ConversionRate
 
     def languages_covered(self) -> frozenset[str]:
@@ -125,6 +239,51 @@ class CurrencyVocabulary:
             for language, by_currency in self.words.items()
             if any(by_currency.values())
         )
+
+
+# The precedence, as data. First match wins, per figure, and the boolean is
+# whether that mark makes the figure the buyer's budget. Written out so the
+# order is readable in one place rather than implied by a chain of ifs - three
+# earlier designs hid their precedence inside the control flow and every review
+# round turned on it.
+_PRECEDENCE: Final = (
+    ("naming", True),  # "my budget is X" / "X is my budget"
+    ("source", False),  # "the listing says X" - beats affordability
+    ("affordability", True),  # "is X enough for me?"
+    ("question", False),  # "Does it cost X?"
+    ("dimension", False),  # "a 2m wide balcony" - ambiguous unit only
+    ("keyword", True),  # a plain budget keyword
+    # OWNERSHIP is deliberately NOT a step here. It ranks below everything that
+    # withholds, and its outcome equals the default, so it could never change
+    # an answer - verified by deleting it and running the whole accumulated
+    # string set: not one of the fifty distinguished it. The MARK is still
+    # computed, because range fusion is cancelled by it (G3).
+)
+
+
+@dataclass(frozen=True)
+class _Marks:
+    """Which marks apply to one figure. Segment-level except where noted."""
+
+    naming: bool
+    source: bool
+    affordability: bool  # sentence-level
+    question: bool  # sentence-level
+    dimension: bool
+    # Not in the precedence - see _PRECEDENCE. Kept because fusion-cancel reads
+    # it: a figure the buyer claims is not part of a quoted range.
+    ownership: bool
+    keyword: bool
+
+    @property
+    def withheld(self) -> bool:
+        """The precedence, applied. Default is BUDGET: an ambiguity the closed
+        lists cannot settle becomes one extra question, never a silent guess.
+        """
+        for mark, is_budget in _PRECEDENCE:
+            if getattr(self, mark):
+                return not is_budget
+        return False
 
 
 @dataclass(frozen=True)
@@ -204,6 +363,22 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
         negators=_word_lists(raw, "negators"),
         contradictions=_word_lists(raw, "contradictions"),
         affirmations=_word_lists(raw, "affirmations"),
+        source_nouns=_word_lists(raw, "source_nouns"),
+        saying_verbs=_word_lists(raw, "saying_verbs"),
+        perception_verbs=_word_lists(raw, "perception_verbs"),
+        pricing_verbs=_word_lists(raw, "pricing_verbs"),
+        price_nouns=_word_lists(raw, "price_nouns"),
+        naming_terms=_word_lists(raw, "naming_terms"),
+        copulas=_word_lists(raw, "copulas"),
+        anaphora=_word_lists(raw, "anaphora"),
+        first_person=_word_lists(raw, "first_person"),
+        money_terms=_word_lists(raw, "money_terms"),
+        affordability_shapes=_word_lists(raw, "affordability_shapes"),
+        question_openers=_word_lists(raw, "question_openers"),
+        range_connectors=_word_lists(raw, "range_connectors"),
+        range_verbs=_word_lists(raw, "range_verbs"),
+        dimensions=_word_lists(raw, "dimensions"),
+        conjunctions=_word_lists(raw, "conjunctions"),
         rate=rate,
     )
 
@@ -412,6 +587,281 @@ def find_budget(
         s, e = spans[i]
         return bool(_CLAUSE_BREAK.search(lowered[min(end, e) : max(start, s)]))
 
+    # --- whose figure is it (issue #25, god's round-three design) -----------
+    #
+    # Segment on sentence punctuation, EVERY comma and EVERY conjunction, then
+    # fuse a quoted range back together; mark each segment from closed lists;
+    # apply one fixed precedence per figure. Nothing here measures a distance
+    # or binds a marker to a figure, because three designs built that way each
+    # shipped adjacent regressions.
+    def says(where: str, words: tuple[str, ...]) -> bool:
+        return any(
+            word and re.search(_token_pattern(word), where) for word in words
+        )
+
+    def word_list(name: str) -> tuple[str, ...]:
+        return getattr(vocabulary, name).get(language, ())
+
+    def sentence_bounds() -> list[tuple[int, int]]:
+        cuts = [0]
+        for found in _CLAUSE_BREAK.finditer(lowered):
+            cuts.append(found.end())
+        cuts.append(len(lowered))
+        return [
+            (a, b) for a, b in zip(cuts, cuts[1:], strict=False) if lowered[a:b].strip()
+        ] or [(0, len(lowered))]
+
+    def segment_bounds() -> list[tuple[int, int]]:
+        """Sentence punctuation, every comma, every conjunction - then fusion.
+
+        Cutting on every comma and conjunction is what makes the marks
+        conclusive: a segment is a single short claim. It also cuts quoted
+        ranges in half, which is what RANGE FUSION below puts back.
+        """
+        cuts = {0, len(lowered)}
+        for found in _CLAUSE_BREAK.finditer(lowered):
+            cuts.add(found.end())
+        # G1, QUOTATIVE COMMA: a comma straight after a saying verb reports
+        # what follows rather than starting a new claim, so it does not split.
+        # "The agent said, I can afford 2m" is one claim by the agent. STT
+        # transcripts mostly lack the comma anyway; this closes the text form.
+        saying = word_list("saying_verbs")
+        for found in re.finditer(r",", lowered):
+            before = lowered[: found.start()].rstrip().rstrip('"\u201c\u2018')
+            if any(
+                word and re.search(rf"(?<!\w){re.escape(word)}$", before)
+                for word in saying
+            ):
+                continue
+            cuts.add(found.end())
+        for word in word_list("conjunctions"):
+            if not word:
+                continue
+            for found in re.finditer(_token_pattern(word), lowered):
+                cuts.add(found.start())
+
+        bounds = [
+            (a, b) for a, b in zip(sorted(cuts), sorted(cuts)[1:], strict=False)
+        ]
+
+        # RANGE FUSION. Two figures joined by NOTHING but a connector, a
+        # currency token and punctuation are one quoted range sharing one fate:
+        # "says AED 750,000, and AED 800,000" is a single claim. "750k works,
+        # and I have 800k" is two, because words intervene.
+        connectors = word_list("range_connectors")
+        currency_tokens = [
+            token.lower()
+            for tokens in vocabulary.words.get(language, {}).values()
+            for token in tokens
+        ] + [
+            symbol.lower()
+            for symbols in vocabulary.symbols.values()
+            for symbol in symbols
+        ]
+
+        # G2: a range may carry a verb between its figures - "start at X and go
+        # up to Y" is still one range - so the range verbs are strippable too.
+        strippable = sorted(
+            connectors + word_list("range_verbs") + tuple(currency_tokens),
+            key=len,
+            reverse=True,
+        )
+
+        def only_a_connector(gap: str) -> bool:
+            rest = gap
+            for token in strippable:
+                if token:
+                    rest = re.sub(_token_pattern(token), " ", rest)
+            return not re.search(r"[^\W_]", rest)
+
+        def buyer_claims_the_second(right_end: int) -> bool:
+            """G3, FUSION-CANCEL. The gap between two figures can look like a
+            range while the second figure is plainly the buyer's: "the listing
+            says 750k and 800k works for me". So a naming, affordability or
+            ownership mark after the second figure cancels the fusion."""
+            tail = lowered[right_end:]
+            stop = next((s for s, _ in spans if s >= right_end), len(lowered))
+            tail = lowered[right_end:stop] if stop > right_end else tail
+            return (
+                says(tail, word_list("affordability_shapes"))
+                or says(tail, word_list("naming_terms"))
+                or (
+                    says(tail, word_list("first_person"))
+                    and says(tail, word_list("money_terms"))
+                )
+            )
+
+        for left, right in zip(spans, spans[1:], strict=False):
+            if not only_a_connector(lowered[left[1] : right[0]]):
+                continue
+            if buyer_claims_the_second(right[1]):
+                continue
+            merged = []
+            for a, b in bounds:
+                if a <= left[0] and b > left[0]:
+                    start_a = a
+                elif a <= right[0] < b:
+                    merged.append((start_a, b))
+                    continue
+                elif left[0] < a and b <= right[0]:
+                    continue
+                else:
+                    merged.append((a, b))
+            bounds = sorted(set(merged)) or bounds
+        return bounds
+
+    sentences = sentence_bounds()
+    segments = segment_bounds()
+
+    def enclosing(bounds: list[tuple[int, int]], position: int) -> tuple[int, int]:
+        for a, b in bounds:
+            if a <= position < b:
+                return a, b
+        return bounds[-1]
+
+    def is_question(sentence: str) -> bool:
+        """An auxiliary or copula opening the utterance marks the WHOLE
+        sentence, because the telling words can follow the figure: "Is AED
+        750,000 the asking price?"."""
+        opening = sentence.strip()
+        return any(
+            word
+            and (
+                opening.startswith(word + " ")
+                or opening.startswith(word + "'")
+            )
+            for word in word_list("question_openers")
+        )
+
+    def has_source(segment: str, i: int) -> bool:
+        """Three closed shapes, never a bare noun (G5).
+
+        1. A noun and a SAYING verb - with a first-person exemption, because
+           "I said 2 crore" is the buyer restating their own budget and
+           withholding that is the expensive direction.
+        2. Any subject and a PERCEPTION or PRICING verb: you do not SEE your own
+           budget, and "it costs X" is the seller's number whoever says it.
+        3. A price noun and a copula either side of the figure, so both "the
+           price is X" and "X is the asking price" are sourced.
+        """
+        if says(segment, word_list("perception_verbs")) or says(
+            segment, word_list("pricing_verbs")
+        ):
+            return True
+        # The first-person exemption is about WHO IS SAYING, so it keys on the
+        # subject of the saying verb rather than on any first-person token in
+        # the segment. "I said 2 crore" and "I told you 2 crore" are the buyer
+        # restating their own budget; "they said our maximum is 2m" is reported
+        # speech whose possessive belongs to the speaker, not to the buyer.
+        # Reading the exemption as "any first person anywhere" let a source
+        # noun like "you" defeat it in "I told you 2 crore".
+        for verb in word_list("saying_verbs"):
+            if not verb:
+                continue
+            for found in re.finditer(_token_pattern(verb), segment):
+                subject = segment[: found.start()].rstrip()
+                if any(
+                    word and re.search(rf"(?<!\w){re.escape(word)}$", subject)
+                    for word in word_list("first_person")
+                ):
+                    continue
+                return True
+        return copular(i, word_list("price_nouns"))
+
+    def copular(i: int, terms: tuple[str, ...]) -> bool:
+        """A term and a copula on one side of this figure or the other.
+
+        "my budget is X" and "X is my budget" are the same claim, and so are
+        "the price is X" and "X is the asking price", which is why one helper
+        serves both the naming mark and the copular half of the source mark.
+        """
+        figure_start, figure_end = spans[i]
+        # A currency token may sit between the copula and the figure - "the
+        # price is AED 985,000" - and it belongs to the figure, not to the gap.
+        money = "|".join(
+            re.escape(token)
+            for token in sorted(
+                {
+                    t.lower()
+                    for tokens in vocabulary.words.get(language, {}).values()
+                    for t in tokens
+                }
+                | {
+                    s.lower()
+                    for symbols in vocabulary.symbols.values()
+                    for s in symbols
+                },
+                key=len,
+                reverse=True,
+            )
+            if token
+        )
+        gap = rf"\s*(?:(?:{money})\s*)?$" if money else r"\s*$"
+        for term in terms:
+            if not term:
+                continue
+            for copula in word_list("copulas"):
+                if not copula:
+                    continue
+                before = rf"(?<!\w){re.escape(term)}\s+{re.escape(copula)}{gap}"
+                after = rf"^\s*{re.escape(copula)}\s+(the\s+)?{re.escape(term)}(?!\w)"
+                if re.search(before, lowered[:figure_start]) or re.match(
+                    after, lowered[figure_end:]
+                ):
+                    return True
+        return False
+
+    def has_naming(i: int) -> bool:
+        """The buyer naming this figure as their budget.
+
+        Direct - "my budget is X" / "X is my budget" - or ANAPHORIC (G6), where
+        a pronoun stands in for the figure just mentioned: "750,000, which is
+        my budget". The pronoun refers to the figure in its own segment or the
+        one immediately before it, so both are checked.
+        """
+        if copular(i, word_list("naming_terms")):
+            return True
+        naming = word_list("naming_terms")
+        anaphors = word_list("anaphora")
+        copulas = word_list("copulas")
+        shapes = [
+            rf"(?<!\w){re.escape(a)}\s+{re.escape(c)}\s+{re.escape(n)}(?!\w)"
+            for a in anaphors
+            for c in copulas
+            for n in naming
+            if a and c and n
+        ]
+        # The anaphor has to follow this figure, and no later figure may sit
+        # between them - otherwise it is referring to that one instead.
+        after_here = spans[i][1]
+        next_figure = next(
+            (s for s, _ in spans if s > after_here), len(lowered)
+        )
+        window = lowered[after_here:next_figure]
+        return any(re.search(shape, window) for shape in shapes)
+
+    def marks_for(i: int) -> _Marks:
+        seg_start, seg_end = enclosing(segments, spans[i][0])
+        segment = lowered[seg_start:seg_end]
+        sent_start, sent_end = enclosing(sentences, spans[i][0])
+        sentence = lowered[sent_start:sent_end]
+        return _Marks(
+            naming=has_naming(i),
+            source=has_source(segment, i),
+            affordability=says(sentence, word_list("affordability_shapes")),
+            question=is_question(sentence),
+            dimension=(
+                says(segment, word_list("dimensions"))
+                and _ambiguous_unit(candidates[i].figure.surface)
+            ),
+            ownership=(
+                says(segment, word_list("first_person"))
+                and says(segment, word_list("money_terms"))
+            ),
+            keyword=says(segment, word_list("budget_keywords")),
+        )
+
+
     currency_of: dict[int, tuple[int, Currency]] = {}
     for hit in _currency_hits(lowered, vocabulary, language):
         if hit.negated:
@@ -432,14 +882,24 @@ def find_budget(
             # Keywords lead in speech ("my budget is X"), so the reach behind
             # a figure is wider than the reach ahead of it.
             reach = _KEYWORD_BEFORE if found.end() <= spans[i][0] else _KEYWORD_AFTER
-            if distance <= reach and not crosses_clause(found.start(), found.end(), i):
+            if distance > reach or crosses_clause(found.start(), found.end(), i):
+                continue
+            # And only inside its own segment: a keyword selects the figure of
+            # the claim it belongs to.
+            start, end = enclosing(segments, spans[i][0])
+            if start <= found.start() < end:
                 marked.add(i)
 
     fallback: BudgetMention | None = None
     for i, match in enumerate(candidates):
         held = currency_of.get(i)
         currency = None if held is None else held[1]
-        unit = _BUDGET_UNITS.search(match.figure.surface)
+        unit = _budget_units().search(match.figure.surface)
+        if marks_for(i).withheld:
+            # Not the buyer's figure to confirm. The precedence that decided
+            # this is `_Marks.withheld`, and it is deliberately the only place
+            # the question is answered.
+            continue
         if currency is None and unit is None and i not in marked:
             continue
         mention = BudgetMention(
