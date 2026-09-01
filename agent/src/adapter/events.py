@@ -553,6 +553,15 @@ class TurnTracker:
         # `record_escalation`.
         self.handed_over: bool = False
         self.regenerated: bool = False
+        # `llm_node` reached this turn before its final transcript existed, so
+        # the tracker was opened lazily on whatever the chat context held. True
+        # on the voice path (preemptive generation) AND on the text path, where
+        # there is no separate final transcript to arrive - `adopted` is what
+        # distinguishes them.
+        self.opened_on_partial: bool = False
+        # A final transcript was adopted onto work already begun, which only
+        # happens under preemptive generation.
+        self.adopted: bool = False
         # Whether any sentence the REGENERATED reply actually spoke asserted a
         # figure. Read by `AmbassadorAgent._backstop_regeneration` (issue #33),
         # which documents why False is the routing direction.
@@ -566,6 +575,32 @@ class TurnTracker:
 
     def elapsed(self) -> float:
         return time.perf_counter() - self.t0
+
+    def adopt_final_utterance(self, utterance: str) -> None:
+        """Take the final transcript onto a turn the model already started.
+
+        `preemptive_generation` is enabled by default
+        (`livekit/agents/voice/turn.py`): the framework runs `llm_node` on the
+        PARTIAL transcript and only then calls `on_user_turn_completed` with the
+        final one. Opening a second tracker there split one buyer turn across
+        two records - the LLM and guardrail work on the first, the endpointing
+        and audio marks on the second - so `turn_complete` reported
+        `sentences: 0` on the half that carried the timings and
+        `since_first_sentence_ms` was null on every real turn, which is the
+        metric issue #18's barge-in delta is defined in.
+
+        The clock is deliberately NOT reset. `t0` is the moment the model began
+        working, which is earlier than this hook and is the honest start for
+        "how long did the buyer wait" - resetting it here would hide the head
+        start that preemptive generation exists to buy.
+
+        docs/02- says `buyer_utterance` is the final STT text, so the partial is
+        replaced rather than kept alongside. The emitted stream redacts it
+        either way; the in-memory record is what the audit and the ambassador
+        view read.
+        """
+        self.buyer_utterance = utterance
+        self.adopted = True
 
     def record_endpointing(
         self,
@@ -888,6 +923,11 @@ class TurnTracker:
             sentences=len(self.generated_sentences),
             violations=len(self.violations),
             regenerated=self.regenerated,
+            # The model started before the final transcript arrived, so part of
+            # the LLM latency on this turn was spent while the buyer was still
+            # being transcribed. The meter needs that to read llm_ttft_ms
+            # honestly against its budget row.
+            preemptive=self.adopted,
             actions=self.actions,
             reasoning_tokens=self.reasoning_tokens,
             audit_incomplete=audit_incomplete,

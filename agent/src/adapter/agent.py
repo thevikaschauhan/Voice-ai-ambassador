@@ -400,12 +400,37 @@ class AmbassadorAgent(Agent):
     async def on_user_turn_completed(
         self, turn_ctx: lk_llm.ChatContext, new_message: lk_llm.ChatMessage
     ) -> None:
-        # Fires on the STT path. Text-driven turns (console --text, the eval
-        # harness, session.run) never reach this hook, so llm_node opens a
-        # tracker lazily instead of relying on it.
-        self._start_tracker(new_message.text_content or "")
+        """The final transcript for this buyer turn.
+
+        Fires on the STT path only. Text-driven turns (console --text, the eval
+        harness, session.run) never reach this hook, so `llm_node` opens a
+        tracker lazily instead of relying on it.
+
+        AND ON THE VOICE PATH IT FIRES SECOND. `preemptive_generation` is
+        enabled by default, so the framework runs `llm_node` on the partial
+        transcript first and this hook arrives afterwards with the final one -
+        the reverse of the text path. Starting a tracker unconditionally here
+        therefore split every real turn in two, which the first live audio run
+        measured (#51). When a turn is already open on a partial, the final
+        transcript is adopted onto it instead.
+        """
+        text = new_message.text_content or ""
+        tracker = self._tracker
+        if tracker is not None and tracker.opened_on_partial and not tracker.adopted:
+            tracker.adopt_final_utterance(text)
+            return
+        self._start_tracker(text)
 
     def _ensure_tracker(self, chat_ctx: lk_llm.ChatContext) -> TurnTracker:
+        """The turn `llm_node` is running for, opening one if nothing has yet.
+
+        Opening here marks the tracker `opened_on_partial`: whatever the chat
+        context holds is the best transcript available, and on the voice path it
+        is a PARTIAL that `on_user_turn_completed` will supersede. That flag is
+        what lets the final transcript be adopted rather than start a second
+        turn, and it is cleared by adoption so one partial can only ever be
+        superseded once.
+        """
         if self._tracker is not None:
             return self._tracker
         last_user = ""
@@ -413,7 +438,9 @@ class AmbassadorAgent(Agent):
             if getattr(item, "role", None) == "user":
                 last_user = item.text_content or ""
                 break
-        return self._start_tracker(last_user)
+        tracker = self._start_tracker(last_user)
+        tracker.opened_on_partial = True
+        return tracker
 
     def note_upstream_status(self, status: int) -> None:
         """A non-2xx the SDK is about to retry. Logged so the latency meter can
