@@ -762,3 +762,24 @@ def test_residual_unlisted_non_ly_filler_withholds(vocabulary, filler):
     """
     said = f"I clearly and {filler} said 2 crore."
     assert find_budget(said, vocabulary, "en") is None, said
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "RESIDUAL (e), god's call, and the cost of the adjudicated -ly "
+        "refinement rather than a slip. Casing is the ONLY marker separating "
+        "'kelly' from 'repeatedly', so an -ly proper name that reaches us "
+        "uncapitalised reads as an adverb, the earlier clause's buyer subject "
+        "leaks across the conjunction and the seller's figure confirms. It is "
+        "the unsafe direction, and doubly conditioned: it needs an -ly name "
+        "AND a casing failure in transcription, where ADR-017's default "
+        "(Deepgram smart formatting) capitalises proper nouns. There is no "
+        "structural close - distrusting uncapitalised -ly would gut every "
+        "adverb stack, including the round-2 must-pass 'I very clearly and "
+        "repeatedly said 2 crore'. Not closed by invention; disclosed."
+    ),
+)
+def test_residual_a_lowercase_ly_name_reads_as_an_adverb(vocabulary):
+    """The one input the capitalisation refinement cannot separate."""
+    assert find_budget("I like it, but kelly said AED 750,000.", vocabulary, "en") is None
