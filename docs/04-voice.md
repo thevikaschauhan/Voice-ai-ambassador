@@ -8,8 +8,9 @@ Planning targets; every figure gets measured against the real stack by the laten
 
 | Stage | Budget | Notes |
 |---|---|---|
-| Endpointing decision | 200-500ms | Semantic endpointing beats fixed silence thresholds |
-| STT final after endpoint | 100-300ms **only if streaming** - MET: Deepgram measured 258-327ms (ADR-017) | **The budget line and the chosen model disagree, and the line was written first.** 100-300ms assumes a streaming recogniser: partials arrive during speech, so only the tail after endpoint is charged. Qwen3-ASR is whole-utterance - nothing starts until the buyer stops - so its entire cost is additive. Measured on the hosted path: p50 1081ms, p90 2826ms. A faster host reduces this; only a streaming recogniser removes it from the critical path |
+| **End of speech → turn committed** | 200-500ms - **and this row CONTAINS the next one; they are nested, not additive** | Measured p50 577ms (n=8, [issue #7](https://github.com/thevikaschauhan/binghatti-ambassador/issues/7)). Semantic endpointing beats fixed silence thresholds. The framework reports this as `EOUMetrics.end_of_utterance_delay`, anchored on VAD's end-of-speech mark - the same anchor `transcription_delay` uses, which is why the two must be subtracted rather than summed |
+| ├ of which STT final | 100-300ms **only if streaming** - MET: Deepgram measured 258-327ms (ADR-017); re-measured p50 466ms in the room | **The budget line and the chosen model disagree, and the line was written first.** 100-300ms assumes a streaming recogniser: partials arrive during speech, so only the tail after endpoint is charged. Qwen3-ASR is whole-utterance - nothing starts until the buyer stops - so its cost cannot be hidden behind speech at all. Measured on that hosted path: p50 1081ms, p90 2826ms. A faster host reduces this; only a streaming recogniser removes it from the critical path |
+| └ of which turn-detector wait, once the words are in hand | no separate target | Measured p50 ~150ms, min 2.5ms, max 2009ms. This is the ONLY part of the row above that optimising endpointing could recover - the rest is transcription |
 | LLM time to first token | 200-600ms | measured 685ms with caching live (ADR-017). Qwen 3.7 Flash (ADR-016) with thinking DISABLED - thinking on would add seconds here; prompt caching on the inventory block reduces variance; measure day 1 |
 | LLM first complete sentence | +150-400ms | Sentence boundary, not full response |
 | Guardrail validation | under 10ms | Regex extraction + set membership |
@@ -17,6 +18,10 @@ Planning targets; every figure gets measured against the real stack by the laten
 | TTS time to first audio | 75-300ms | Fish S2.1-Pro claims ~70-90ms (ADR-014); measure, don't trust |
 | Network and playback | 100-200ms | WebRTC via LiveKit Cloud |
 | **Voice-to-voice first audio** | **target under 1,200ms p50, ceiling 1,500ms** | Measured, displayed |
+
+**Read the first row as a container, not a summand.** The nesting above is not presentation: adding "endpointing 200-500ms" to "STT 100-300ms" double-counts the same milliseconds, because both are measured from VAD's end-of-speech mark and the endpoint figure is not reached until the transcript exists. The first live measurement of this row (2026-09-01, n=8 turns, English, synthetic buyer speech published as a room track) decomposed as **p50 577ms total = 466ms STT + ~150ms detector wait**. Full figures and caveats are on [issue #7](https://github.com/thevikaschauhan/binghatti-ambassador/issues/7) rather than duplicated here; the two that change how you read them are that synthetic speech ends abruptly, so the VAD anchor is a **best case**, and that n=8 is a small sample.
+
+**The budget an audience experiences is the tail, not the median.** Six of those eight turns clustered at 577-630ms; **two hit ~2500ms**, with ~2000ms of it the turn detector waiting out a maximum *after* the transcript had already landed. A two-second silence before the agent answers is what a room notices, and it happened on a quarter of turns. Nothing in the median tells you that, which is the argument for the meter showing a distribution rather than a number.
 
 Two lines to carry into the meeting: the LLM dominates, not the safety layer (guardrails cost ~10ms against a 1,200ms turn - have the meter on screen when you say it); and sentence chunking is the difference between usable and unusable (waiting for the full response adds one to three seconds).
 
