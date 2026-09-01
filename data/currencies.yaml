@@ -62,99 +62,67 @@ budget_keywords:
   hi: []
   # VERIFY: native-authored.
 
-# Attribution: words that say a figure came from SOMEBODY ELSE - a listing, a
-# brochure, our own website, us on an earlier call - or that frame it as a
-# price rather than as what the buyer will spend.
+# Whose figure is it (ADR-011, issue #25). The design is god's, round three:
+# the deterministic layer decides only what is LOCALLY CONCLUSIVE from these
+# closed lists, in a FIXED precedence, and every ambiguity falls to over-asking
+# - which is ADR-011's safe direction. No distances, no bindings, no clever
+# comma rules; three earlier mechanisms built from those all shipped adjacent
+# regressions.
 #
-# Why this list exists. `find_budget` treated any figure carrying a currency or
-# a lakh/crore/million unit as a budget mention, so "the listing says AED
-# 750,000" was read back as "750,000 - have I got that right?" - and because
-# the policy takes the turn, the buyer's actual question went unanswered. Worse,
-# a confirmed figure SETTLES the policy, and a settled policy never speaks
-# again: one quoted price suppressed every real budget mention for the rest of
-# the call.
+# THE PRECEDENCE, first match wins, per figure:
+#   1. copular_naming in its segment  -> budget
+#   2. source in its segment          -> WITHHELD
+#   3. affordability in its sentence  -> budget
+#   4. question                       -> WITHHELD
+#   5. ownership in its segment       -> budget
+#   6. budget keyword in its segment  -> budget
+#   7. otherwise                      -> budget (over-ask)
+# and a withheld figure is never selected while a live one exists.
 #
-# The direction here is the opposite of the budget keywords above, so read it
-# carefully before adding a word. A missed budget is an unconfirmed
-# twenty-times risk; an extra read-back costs one question. So these words only
-# ever WITHHOLD a mention, they bind within a tight window of the figure they
-# frame (much tighter than a budget keyword's reach), and a budget keyword
-# beside the same figure outranks them - "the listing says AED 750,000 but my
-# budget is 2 million" is still a budget of 2 million.
-attributions:
-  en:
-    # Where the figure came from.
-    - listing
-    - listings
-    - brochure
-    - website
-    - advert
-    - portal
-    - "you said"
-    - "you quoted"
-    - "you mentioned"
-    # Third-person reported speech. Never bare "said": "I said 2 crore" is the
-    # buyer restating their own budget, and withholding that is the expensive
-    # direction. "My agent said 750,000" IS withheld, correctly - the buyer is
-    # relaying someone else's figure.
-    - agent
-    - "they said"
-    - "he said"
-    - "she said"
-    - "someone said"
-    - "i saw"
-    - "i read"
-    - "i heard"
-    - quotes
-    - quoted
-    # Framed as a price rather than as a budget.
-    - price
-    - prices
-    - priced
-    - asking
-    - "listed at"
-    - "goes for"
-    - "starts from"
-    - "starts at"
-    - "start at"
-    - "starting from"
-    - "starting at"
-  ar: []
-  # VERIFY: native-authored. Until these exist an Arabic buyer quoting a
-  # listing back has that figure read as their budget, which is the behaviour
-  # every language had before this list.
-  hi: []
-  # VERIFY: native-authored. Same rule.
+# Read the direction before editing any list here. `source` and `question` are
+# the only two that can LOSE a budget, and a missed budget is an unconfirmed
+# twenty-times risk where an extra read-back costs one question.
 
-# Asked, not offered. "Is it 750k?" is a question ABOUT the price, and
-# reading it back as a budget is the same defect wearing no source word at all -
-# the buyer's actual question goes unanswered.
-#
-# Kept apart from the source words above because it is cancelled by more: an
-# AFFORDABILITY cue turns the same opener into the buyer asking whether THEIR
-# amount is enough. "Is it 750k?" is our price; "Is this AED 800,000 enough for
-# a studio?" is their budget.
-interrogatives:
-  en: ["is it", "is that", "is this", "is the"]
+# SOURCE: a noun and a verb together, never a bare noun. "After checking your
+# website" marks nothing, because the buyer is describing what they did rather
+# than quoting what the website said. This shape is what makes the mark
+# conclusive instead of suggestive.
+source_nouns:
+  en: [listing, listings, website, site, page, brochure, advert, ad, portal, agent, seller, developer, you, they, he, she, it, price, prices, units, unit]
   ar: []
   # VERIFY: native-authored.
   hi: []
   # VERIFY: native-authored.
 
-# Ownership is a first-person ANCHOR plus a MONEY TERM in the same segment, and
-# it is what restores a figure the buyer claims as their own.
-#
-# Two lists rather than one list of phrases, because phrases were the bug. A
-# fixed phrase list misses every modifier a buyer inserts - "I can ONLY spend 2
-# crore" is not "I can spend" - and it made binding fragile: "my budget" starts
-# four characters earlier than "budget", which was enough to reach the wrong
-# figure. An anchor and a term anywhere in the same segment needs no distance
-# rule at all.
-#
-# The anchor requirement is the other half. "The listing says AED 750,000 is
-# affordable" and "buyers spend AED 750,000" are the LISTING talking, and
-# treating a bare affordability or spending word as ownership recreated the
-# original defect.
+source_verbs:
+  en: [says, say, said, tells, tell, told, quotes, quoted, mentions, mentioned, shows, showed, lists, listed, costs, cost, "starts from", "starts at", "start from", "start at", "starting from", "starting at", "priced at", asking, advertised, goes for]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# COPULAR-NAMING: the buyer naming a figure as their budget across a copula,
+# in either order - "my budget is X" and "X is my budget". The strongest mark
+# there is, so it outranks a source frame: "The website says AED 750,000 is my
+# budget" is a budget of 750,000.
+naming_terms:
+  en: ["my budget", "our budget", "my maximum", "our maximum", "my max", "my limit", "our limit", "my price range", "our price range", "my ceiling"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+copulas:
+  en: [is, "is about", "is around", was, "will be", "would be", "'s", are, "comes to"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# OWNERSHIP: a first-person anchor and a money term in the same segment. Weaker
+# than a source frame on purpose - reported speech is full of first-person
+# pronouns ("the agent told me I could afford 2m"), and treating those as the
+# buyer speaking is what this precedence exists to stop.
 first_person:
   en: ["i", "me", "my", "mine", "we", "us", "our", "ours", "i'm", "i've", "we're", "we've"]
   ar: []
@@ -163,79 +131,50 @@ first_person:
   # VERIFY: native-authored.
 
 money_terms:
-  en:
-    - budget
-    - spend
-    - spending
-    - afford
-    - affordable
-    - "price range"
-    - maximum
-    - max
-    - limit
-    - available
-    - works
+  en: [budget, spend, spending, afford, "price range", maximum, max, limit, available, works, "to work with"]
   ar: []
   # VERIFY: native-authored.
   hi: []
   # VERIFY: native-authored.
 
-# Affordability cues, which cancel an INTERROGATIVE opener only - never a
-# source word. "The listing says AED 750,000 is affordable" is still the
-# listing talking; "Is this AED 800,000 enough?" is the buyer asking whether
-# their own amount stretches.
-affordability:
-  en: [enough, afford, affordable, "too much", "within"]
+# AFFORDABILITY: a first-person affordability SHAPE, not a bare word. "Enough
+# for me" is the buyer; "the listing says AED 750,000 is affordable" is the
+# listing, and that is why this is a shape list and why a source frame still
+# beats it.
+affordability_shapes:
+  en: ["enough for me", "enough for us", "enough for a", "can i afford", "can we afford", "could i afford", "could we afford", "i can afford", "we can afford", "afford it", "within my", "within our", "too much for me", "too much for us"]
   ar: []
   # VERIFY: native-authored.
   hi: []
   # VERIFY: native-authored.
 
-# Contrastive conjunctions. These END a quoted claim: whole-segment attribution
-# deliberately crosses a comma, which is right for a quoted range ("AED 750,000
-# or AED 800,000") and wrong for a contrast ("the listing says AED 750,000, but
-# I have AED 800,000"). The buyer's "but" is where their own talk begins.
-contrasts:
-  en: [but, however, though, although, whereas, instead]
+# QUESTION: an auxiliary or copula opening the utterance. It marks every
+# segment of its sentence, because "Is AED 750,000 the asking price?" puts the
+# telling words after the figure. Four hard-coded "is + pronoun" phrases missed
+# the whole class.
+question_openers:
+  en: [is, are, was, were, am, do, does, did, will, would, shall, should, can, could, may, might, has, have, had]
   ar: []
   # VERIFY: native-authored.
   hi: []
   # VERIFY: native-authored.
 
-# Dimensions: words that make a figure a MEASUREMENT rather than a sum.
-#
-# "m" is a money multiplier in data/numerals.yaml and the metre abbreviation in
-# the exact domain this agent sells in, so once a folded unit was enough on its
-# own, "I need a 2m wide balcony" took the deterministic budget turn and asked
-# the buyer which currency their balcony was in. A budget keyword or an
-# ownership phrase outranks these, so "my budget is 2m for a wide balcony" is
-# still a budget.
-dimensions:
-  en:
-    - wide
-    - width
-    - long
-    - length
-    - high
-    - height
-    - tall
-    - deep
-    - depth
-    - ceiling
-    - ceilings
-    - balcony
-    - terrace
-    - room
-    - rooms
-    - metre
-    - metres
-    - meter
-    - meters
-    - square
-    - sqft
-    - "sq ft"
-    - "floor area"
-    - frontage
+# RANGE FUSION: figures joined by nothing but one of these fuse into a single
+# segment and share one fate. That is how a quoted range survives segmentation
+# on every comma and conjunction: "says AED 750,000, and AED 800,000" is one
+# quoted claim, while "750k works, and I have 800k" is two statements because
+# words intervene.
+range_connectors:
+  en: [and, or, to, "up to", "through", "between"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# Conjunctions that end a segment. Every comma does too, which is why range
+# fusion above has to exist.
+conjunctions:
+  en: [and, or, but, however, though, although, whereas, plus]
   ar: []
   # VERIFY: native-authored.
   hi: []
