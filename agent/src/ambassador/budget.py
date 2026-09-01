@@ -217,7 +217,7 @@ class CurrencyVocabulary:
     # source frame: reported speech is full of first-person pronouns.
     # Pronouns that can HEAD a clause, so they can be a saying verb's subject.
     subject_pronouns: dict[str, tuple[str, ...]]
-    determiners: dict[str, tuple[str, ...]]
+    connective_adverbs: dict[str, tuple[str, ...]]
     first_person: dict[str, tuple[str, ...]]
     money_terms: dict[str, tuple[str, ...]]
     # A first-person affordability shape, not a bare word.
@@ -377,7 +377,7 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
         copulas=_word_lists(raw, "copulas"),
         anaphora=_word_lists(raw, "anaphora"),
         subject_pronouns=_word_lists(raw, "subject_pronouns"),
-        determiners=_word_lists(raw, "determiners"),
+        connective_adverbs=_word_lists(raw, "connective_adverbs"),
         first_person=_word_lists(raw, "first_person"),
         money_terms=_word_lists(raw, "money_terms"),
         affordability_shapes=_word_lists(raw, "affordability_shapes"),
@@ -749,42 +749,44 @@ def find_budget(
         a cut - "I very clearly AND repeatedly said 2 crore" puts the adverbs'
         own conjunction between the subject and its verb.
 
-        So the boundary is sentence punctuation, or a conjunction that heads a
-        coordinated CLAUSE. A conjunction heads one when a NEW SUBJECT opens
-        between it and the verb, and a new subject shows itself two ways: a
-        nominal ("but I said"), or a determiner, which is the head marker of a
-        noun phrase ("but THE agent said", "and MY agent said"). "and
-        repeatedly said" has neither. Asking only about the token immediately
-        after the conjunction let a determiner or an adjective stack hide the
-        boundary, and the scan then reached back past it for the earlier
-        clause's pronoun and exempted a seller.
+        So a conjunction heads a coordinated CLAUSE **unless** everything
+        between it and the verb is affirmatively SHARED-SUBJECT material, which
+        in English is adverbial: a connective adverb, an uncapitalised -ly
+        adverb, or another conjunction joining two of them. Nothing at all
+        between them is a coordinated verb phrase, which is the same subject.
 
-        The determiner half is what makes this the noun-phrase STRUCTURE rather
-        than a roster: "and the broker said", "and a colleague said" and "and
-        their rep said" all open a new subject whether or not this file lists
-        that particular noun. Where the new subject is unlisted the subject test
-        simply finds no buyer and the figure stays a source, which is the safe
-        direction.
-
-        A bare shared subject ("The agent called me and said AED 750,000") has
-        no nominal after its conjunction, so the earlier subject still rules,
-        which is correct - it is the same subject. Structural, from closed
-        lists, and with no counting anywhere.
+        The test is inverted on purpose, and it took three rounds to get here.
+        Nouns are an OPEN class, so every version that tried to RECOGNISE the
+        new subject met one it did not know: first a noun outside the roster,
+        then a bare proper name, which takes no determiner either. Adverbs
+        between a conjunction and its verb are a closed class, so the question
+        that CAN be answered is the negative one. The asymmetry settles which
+        way the default falls: a missed adverb withholds a buyer's figure and
+        the buyer is asked again, while a missed noun confirms a seller's figure
+        as the buyer's budget. Unknown material therefore means NEW SUBJECT.
         """
         start = enclosing(sentences, verb_at)[0]
-        opens_a_subject = (
-            set(word_list("subject_pronouns"))
-            | set(word_list("source_nouns"))
-            | set(word_list("determiners"))
-        )
-        for word in word_list("conjunctions"):
-            if not word:
-                continue
+        adverbs = set(word_list("connective_adverbs"))
+        joiners = {word for word in word_list("conjunctions") if word}
+
+        def shared_subject_filler(token: str) -> bool:
+            lower = token.lower()
+            if lower in adverbs or lower in joiners:
+                return True
+            # The -ly suffix is honoured only on an uncapitalised token.
+            # "Kelly" and "repeatedly" are morphologically identical, and
+            # reading a name as an adverb hands the seller's clause the buyer's
+            # subject. Capitalisation is weak evidence, so it is consulted only
+            # in the direction where being wrong is safe: an unrecognised
+            # adverb withholds a figure, it never confirms one.
+            return lower.endswith("ly") and token == lower
+
+        for word in joiners:
             for found in re.finditer(_token_pattern(word), lowered):
                 if not start <= found.start() < verb_at:
                     continue
-                between = re.findall(r"[^\W_]+", lowered[found.end() : verb_at])
-                if any(token in opens_a_subject for token in between):
+                between = re.findall(r"[^\W_]+", text[found.end() : verb_at])
+                if between and not all(map(shared_subject_filler, between)):
                     start = max(start, found.end())
         return start
 

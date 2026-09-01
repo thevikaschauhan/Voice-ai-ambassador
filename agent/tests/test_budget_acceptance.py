@@ -607,17 +607,22 @@ def test_a_coordinated_clause_can_also_hand_the_turn_to_the_buyer(
 @pytest.mark.parametrize(
     "adverbs",
     [
-        "repeatedly",
+        "repeatedly",  # -ly morphology
         "firmly",
-        "quite deliberately",
-        "after much thought very carefully",
+        "quite deliberately",  # closed-list degree adverb plus -ly
+        "very carefully",
+        "then",  # closed-list connective adverb alone
+        "again",
+        "then again",
+        "repeatedly and firmly",  # a conjunction joining two adverbs
     ],
 )
 def test_coordinated_adverbs_are_not_a_clause_boundary(vocabulary, adverbs):
     """The guard: no new subject opens, so the buyer's own subject still rules.
 
-    This is the string the boundary must NOT move. It is the reason the test is
-    for a new SUBJECT rather than for any word at all after the conjunction.
+    This is the string the boundary must NOT move, and under the inverted test
+    it is the ONLY thing that holds the boundary back, so it carries both
+    adverbial markers: the -ly suffix and the closed list.
     """
     said = f"I clearly and {adverbs} said 2 crore."
     mention = find_budget(said, vocabulary, "en")
@@ -664,3 +669,96 @@ def test_the_clause_boundary_uses_no_token_count(vocabulary):
             f"clause_start has grown a positional rule ({smell!r}); the "
             "boundary is a structure, not a distance"
         )
+
+
+# --- slip round 4: the discriminator is inverted -----------------------------
+#
+# Rounds 2 and 3 both asked "is there a recognised subject here", and a noun is
+# an OPEN class, so each round met one it did not know: a noun outside the
+# roster, then a bare proper name, which takes no determiner either. The test is
+# now the negative one, over the closed class: a conjunction heads a new clause
+# UNLESS everything between it and the verb is affirmatively adverbial.
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "Alice",  # bare proper name - takes no determiner at all
+        "Ahmed",
+        "Kelly",  # a proper name carrying the -ly suffix
+        "Sally",
+        "colleague",  # bare common noun, no determiner
+        "rep",
+        "agent",  # STT-style determiner drop on a noun we DO list
+        "then Alice",  # adverb and noun mixed - not ALL adverbial
+        "then the broker",
+        "the agent",  # the round-3 forms must still hold
+        "my agent",
+        "the very pushy senior agent",
+        "a colleague of mine",
+        "their sales rep",
+    ],
+)
+@pytest.mark.parametrize("conjunction", ["but", "and"])
+def test_anything_not_wholly_adverbial_opens_a_new_clause(
+    vocabulary, subject, conjunction
+):
+    """The seller side: unknown material means a NEW SUBJECT.
+
+    A bare proper name is the case that broke both previous rounds. Nothing here
+    needs to be recognised as a subject: it is enough that it is not adverbial.
+    """
+    said = f"I like it, {conjunction} {subject} said AED 750,000."
+    assert find_budget(said, vocabulary, "en") is None, said
+
+
+@pytest.mark.parametrize(
+    "adverbs", ["then", "again", "also", "just", "clearly", "repeatedly"]
+)
+@pytest.mark.parametrize("conjunction", ["but", "and"])
+def test_a_wholly_adverbial_filler_keeps_the_buyers_subject(
+    vocabulary, adverbs, conjunction
+):
+    """The buyer side of the inverted test, in both markers.
+
+    If this direction ever fails the inversion has swallowed the buyer, which is
+    the cost side of defaulting unknown material to a new subject.
+    """
+    said = f"I looked at it {conjunction} {adverbs} said 2 crore."
+    mention = find_budget(said, vocabulary, "en")
+    assert mention is not None and mention.value == 20_000_000.0, said
+
+
+def test_a_capitalised_ly_token_is_a_name_not_an_adverb(vocabulary):
+    """Why the -ly marker is honoured only on an uncapitalised token.
+
+    "Kelly" and "repeatedly" are morphologically identical. Reading the name as
+    an adverb hands the seller's clause the buyer's subject and confirms the
+    seller's figure, which is the unsafe direction, so capitalisation is
+    consulted - and only here, where being wrong about it withholds.
+    """
+    assert find_budget("I like it, but Kelly said AED 750,000.", vocabulary, "en") is None
+    buyer = find_budget("I like it, but quickly said 2 crore.", vocabulary, "en")
+    assert buyer is not None and buyer.value == 20_000_000.0
+
+
+@pytest.mark.parametrize(
+    "filler",
+    [
+        "after much thought very carefully",  # a prepositional phrase
+        "thereupon",  # an adverb this file does not list
+        "REPEATEDLY",  # all-caps transcription of a real adverb
+    ],
+)
+def test_residual_unlisted_non_ly_filler_withholds(vocabulary, filler):
+    """Disclosed residual (d), and the price of the inverted default.
+
+    Material that IS shared-subject but is neither -ly nor listed reads as a new
+    subject, so the buyer's own figure is withheld. That is the safe direction -
+    the confirmation flow asks again - and it is the direction the asymmetry
+    chooses deliberately: the alternative default confirms a seller's price as
+    the buyer's budget. Pinned so that widening the adverb list is a visible
+    change rather than a drift.
+    """
+    said = f"I clearly and {filler} said 2 crore."
+    assert find_budget(said, vocabulary, "en") is None, said
