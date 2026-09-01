@@ -197,3 +197,47 @@ cases:
     assertions:
       - kind: must_confirm
       - kind: must_escalate
+
+  # --- issue #25: quoted figures, and units that never fired ----------------
+
+  - id: confirm.a-quoted-price-is-not-a-budget
+    category: confirmation_policy
+    language: en
+    note: >-
+      F3. "The listing says AED 750,000" was read back as "750,000 - have I got
+      that right?", and because the policy takes the turn the buyer's actual
+      question went unanswered. The model fixture below is the regression: if
+      the policy claims the figure again, the confirmation copy reaches the
+      buyer instead of this reply and the figure assertion fails.
+    turns:
+      - buyer: The listing says AED 750,000 for a studio at Skyrise, is that right?
+        model:
+          source: authored
+          intent: compliant
+          note: >-
+            No confirmation was owed, so the model answered and corrected the
+            premise from inventory.
+          text: >-
+            A studio at Binghatti Skyrise starts from AED 985,000. Would you
+            like me to go through the payment plan?
+          tools: []
+    assertions:
+      - kind: must_contain_figure
+        value: 985000
+      - kind: must_not_escalate
+
+  - id: confirm.a-folded-unit-budget-is-confirmed
+    category: confirmation_policy
+    language: en
+    note: >-
+      F4. `extract_figures` folds the multiplier into the surface, so a k/m
+      budget arrives as "800k" and the old `\bk\b` could not match inside it -
+      "around 800k" was detected only when a budget keyword happened to sit
+      nearby. `model: null` is the regression: it asserts the policy takes this
+      turn, and the runner fails loudly if it does not.
+    turns:
+      - buyer: We are looking at around 800k.
+        model: null
+    assertions:
+      - kind: must_confirm
+      - kind: must_not_escalate
