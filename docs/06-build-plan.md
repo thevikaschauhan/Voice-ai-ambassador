@@ -44,7 +44,7 @@ Swap to Russian only if Binghatti signals that channel matters more AND a native
 
 ### Day 0 (two hours, before the week starts)
 
-1. Run ten real Gulf-Arabic recordings through `qwen3-asr-1.7b`, `qwen3-asr-flash` and whisper - all on the one OpenRouter key; the winner takes `STT_MODEL_AR` (ADR-015). Note Flash does not support Hindi, so it competes for the Arabic slot only. Include Hindi-English and Arabic-English code-switched recordings against 1.7b - code-switching for our pairs is unproven. Retires the highest risk (R1) for the cost of an hour.
+1. ~~Run ten real Gulf-Arabic recordings through `qwen3-asr-1.7b`, `qwen3-asr-flash` and whisper - all on the one OpenRouter key; the winner takes `STT_MODEL_AR` (ADR-015).~~ **Cancelled 2026-08-29 by ADR-017.** The bake-off was between three models on a path that measured 6-25x over the post-endpoint budget whichever model ran, so no winner was shippable; STT is Deepgram `nova-3` streaming and `STT_MODEL_AR` stays empty. The risk it was meant to retire (R1) is NOT retired and moves with the vendor: Arabic dialect quality and ar-en/hi-en code-switching are still unproven, now on Deepgram, and still want ten real Gulf-Arabic recordings and a code-switching speaker before the demo. Keyterm boosting covers the brand name that the old path could not hear.
 2. Listen to Fish S2.1-Pro Gulf-Arabic and Hindi voices on real sentences from the spoken-forms tables. Hindi is claimed but not named in Fish's material; if it disappoints, the swap decision happens now, not on day 3.
 3. Request the price sheet from Binghatti's contact (A3).
 

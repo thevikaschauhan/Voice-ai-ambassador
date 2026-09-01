@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 dist/
+.coverage
 
 # Node (web/, day 4)
 node_modules/
