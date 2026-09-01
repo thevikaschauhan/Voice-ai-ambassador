@@ -24,6 +24,18 @@ from __future__ import annotations
 import logging
 
 from livekit.agents import stt
+# Module scope, not inside `build_stt`, and not a style choice: importing a
+# `livekit.plugins.*` module REGISTERS a plugin, and
+# `livekit/agents/plugin.py:register_plugin` raises if that happens off the main
+# thread. Console mode runs the job in a worker thread, so a lazy import here
+# crashed the job the moment #46 made Deepgram the default - after the agent had
+# fully constructed, with `lexicon` the last event on the stream and no
+# `stt_enabled`. At module scope it registers once, on whichever thread first
+# imports the adapter, which is the main one at worker boot. Every other plugin
+# in this adapter is already imported this way (fishaudio, openai, silero); this
+# one was the exception. tests/test_plugin_registration.py holds the rule for the
+# whole adapter, not just for this line.
+from livekit.plugins import deepgram
 
 from .config import Settings
 from .stt_openrouter import OpenRouterSTT
@@ -62,8 +74,6 @@ def build_stt(settings: Settings, *, keyterms: tuple[str, ...] = BRAND_KEYTERMS)
     provider = settings.stt_provider.lower()
 
     if provider == "deepgram":
-        from livekit.plugins import deepgram
-
         return deepgram.STT(
             model=settings.deepgram_model,
             language=settings.deepgram_language(settings.language),
