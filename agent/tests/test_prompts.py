@@ -33,7 +33,12 @@ ESCALATING = {2, 3, 4, 6, 7}
 
 
 def _constraints() -> dict[int, str]:
-    prompt = build_ambassador_prompt("INVENTORY BLOCK", "en", system_confirms_budget=True)
+    prompt = build_ambassador_prompt(
+        "INVENTORY BLOCK",
+        "en",
+        system_confirms_budget=True,
+        system_confirms_project=True,
+    )
     body = prompt.split("ABSOLUTE CONSTRAINTS\n", 1)[1].split("\n\nINVENTORY (", 1)[0]
     numbered = {}
     for line in body.splitlines():
@@ -79,7 +84,12 @@ def test_the_unlisted_computation_is_an_escalation_not_a_calculation():
 
 
 def test_the_product_voice_holds():
-    prompt = build_ambassador_prompt("INVENTORY BLOCK", "en", system_confirms_budget=True)
+    prompt = build_ambassador_prompt(
+        "INVENTORY BLOCK",
+        "en",
+        system_confirms_budget=True,
+        system_confirms_project=True,
+    )
     assert "!" not in prompt
     # Regulatory, not stylistic (AGENTS.md hard rules).
     for banned in ("guaranteed", "assured return", "risk-free"):

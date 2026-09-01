@@ -1,10 +1,10 @@
 # Eval report - Binghatti voice ambassador
 
-Generated 2026-08-31 16:59 UTC · mode **offline** · model `fixtures (no model called)` · ambassador prompt `ec01c0073347`
+Generated 2026-08-31 18:42 UTC · mode **offline** · model `fixtures (no model called)` · ambassador prompt `43904c2c25ce`
 
 **Offline mode measures the pipeline, not the model.** Each case replays a model reply recorded or authored beside it and asks what the buyer actually heard. A pass here is the claim "given this reply, the guardrails, the recovery policy and verbalisation produce this speech" - which is the claim the system rests on, and the one that runs in CI with no keys and no spend. It is NOT a claim about how often the model behaves well; only a live run is.
 
-**GATES HELD** — 68/68 scored cases pass (100%). Categories marked `gate` must pass at 100%: a single failure there is a client-facing incident (docs/05-).
+**GATES HELD** — 73/73 scored cases pass (100%). Categories marked `gate` must pass at 100%: a single failure there is a client-facing incident (docs/05-).
 
 | Category | Cases | Pass | Rate | Bar | Gate | Status | Proves |
 |---|---:|---:|---:|---|---|---|---|
@@ -19,7 +19,7 @@ Generated 2026-08-31 16:59 UTC · mode **offline** · model `fixtures (no model 
 | Grounding - leading question | 4 | 4 | 100% | `████████████` | 100% | pass | Rejects planted false premises - the realistic buyer trap and the demo centrepiece |
 | Grounding - unknown project | 7 | 7 | 100% | `████████████` | 100% | pass | Refuses and escalates; never brackets a guess |
 | Payment arithmetic | 5 | 5 | 100% | `████████████` | 100% | pass | Down-payment answers from computed derived figures; an unheld computation refuses |
-| Low-confidence and confirmation policy | 4 | 4 | 100% | `████████████` | 95% | pass | First budget mention confirmed; three failures escalate |
+| Low-confidence and confirmation policy | 9 | 9 | 100% | `████████████` | 95% | pass | All three ADR-011 triggers - budget currency, marginal project names, three unheard turns - and which question owns each reply |
 | Language fidelity | 8 | 8 | 100% | `████████████` | 95% | pass | Answers in the asked language; Arabic digits handled |
 | Negotiation and availability | 4 | 4 | 100% | `████████████` | 95% | pass | Escalates rather than answering |
 | Barge-in audit | 0 | 0 | - | `            ` | human | human | By ear - interrupted chunk recorded completed=false |
@@ -43,7 +43,7 @@ Generated 2026-08-31 16:59 UTC · mode **offline** · model `fixtures (no model 
 | Grounding - leading question | 4 | 4 | 0 | 0 | 0 |
 | Grounding - unknown project | 7 | 2 | 5 | 0 | 4 |
 | Payment arithmetic | 5 | 0 | 5 | 0 | 1 |
-| Low-confidence and confirmation policy | 4 | 0 | 1 | 3 | 0 |
+| Low-confidence and confirmation policy | 9 | 0 | 3 | 6 | 0 |
 | Language fidelity | 8 | 4 | 4 | 0 | 0 |
 | Negotiation and availability | 4 | 0 | 4 | 0 | 1 |
 

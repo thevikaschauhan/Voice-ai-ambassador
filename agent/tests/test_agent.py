@@ -48,7 +48,11 @@ from adapter.config import Settings  # noqa: E402
 from adapter.confirmations import ConfirmationCopy  # noqa: E402
 from adapter.disclosure import UncertifiedLanguageError  # noqa: E402
 from adapter.events import EventLog  # noqa: E402
-from adapter.interception import BRIDGE_COPY, FALLBACK_COPY  # noqa: E402
+from adapter.interception import (  # noqa: E402
+    BRIDGE_COPY,
+    FALLBACK_COPY,
+    SentenceGuard,
+)
 from adapter.llm_openrouter import build_llm, clamp_retry_after  # noqa: E402
 
 FAKE_KEY = "test-key-not-a-real-credential"
@@ -1817,3 +1821,730 @@ async def test_a_conversational_count_in_a_regeneration_is_not_a_corrected_figur
 
     await log.aclose()
     assert len(escalations(buf)) == 1
+# --- ADR-011 trigger 2: the project-name confirmation -----------------------
+#
+# Same seam as the budget policy, same reason: the model never runs on a turn
+# where a confirmation is owed, so it cannot skip the question or answer it on
+# the buyer's behalf. What is different is the slot - a project name is bound
+# to inventory, not to the transcript, because reading the buyer's own mangled
+# words back ("did you mean Bint Jbeil Sky Rise?") confirms nothing.
+
+
+async def test_a_marginal_project_name_is_confirmed_and_the_model_never_runs():
+    """The transcript ADR-015 actually measured. Every recogniser mangled the
+    client's own name, and `Skyrise` and `Aquarise` are different prices."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])  # any model call pops from an empty list
+
+    reply = spoken(
+        await run_llm_node(agent, user_ctx("Tell me about Binghatti Skyrize"))
+    )
+    assert "did you mean Binghatti Skyrise" in reply
+
+
+async def test_a_confident_project_name_is_not_read_back():
+    """A read-back nobody needs is the fastest way to have the policy switched
+    off, so a clean name goes straight to the model."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    reply = spoken(
+        await run_llm_node(agent, user_ctx("Tell me about Binghatti Skyrise"))
+    )
+    assert "did you mean" not in reply
+    assert "A studio is" in reply
+
+
+async def test_yes_settles_the_name_and_it_is_never_read_back_again():
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    first = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrize")))
+    assert "did you mean Binghatti Skyrise" in first
+
+    agent._tracker = None
+    second = spoken(await run_llm_node(agent, user_ctx("Yes, that's right")))
+    assert "did you mean" not in second
+    assert "A studio is" in second
+
+
+async def test_no_to_a_name_asks_which_project_out_loud():
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    first = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrize")))
+    assert "did you mean Binghatti Skyrise" in first
+
+    agent._tracker = None
+    second = spoken(await run_llm_node(agent, user_ctx("No, that's not it")))
+    assert "which project was that" in second
+    # And the rejected one is out of the running, not re-offered.
+    assert "Binghatti Skyrise" not in second
+
+
+async def test_a_corrected_name_in_the_reply_replaces_the_offer():
+    """The stale-mention defect in its project form: settling the name we
+    guessed against a reply that named a different one."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    first = spoken(await run_llm_node(agent, user_ctx("what about Binghatti Rise")))
+    assert "did you mean Binghatti Skyrise" in first
+
+    agent._tracker = None
+    second = spoken(await run_llm_node(agent, user_ctx("no, the Aquarise")))
+    assert "Binghatti Skyrise" not in second
+    assert agent._project.confirmed == frozenset({"binghatti-aquarise"})
+
+
+async def test_three_answerless_replies_about_a_name_notify_a_human():
+    """`hands_over` must be a notification, not a log field: saying "let me put
+    you through" with nobody put through is the anti-pattern the escalation
+    tool's own docstring names."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("Binghatti Skyrize"))
+    for reply in ("Can you repeat that?", "Sorry, the line is bad"):
+        agent._tracker = None
+        assert "did you mean" in spoken(await run_llm_node(agent, user_ctx(reply)))
+
+    agent._tracker = None
+    last = spoken(await run_llm_node(agent, user_ctx("What was that")))
+    assert "ambassadors" in last
+    assert "escalate_to_human" in agent.tracker.actions
+
+    await log.aclose()
+    assert '"escalation"' in buf.getvalue()
+
+
+async def test_a_project_name_can_only_come_out_of_inventory():
+    """The bound on this slot. `compose` bounds the budget echo to the buyer's
+    transcript; this bounds the name to `data/inventory.json`, which is
+    invariant 1's single source of project facts."""
+    from adapter.confirmations import NameNotInInventory, compose_project
+
+    assert (
+        compose_project(
+            "did you mean {project}?",
+            project="Binghatti Skyrise",
+            inventory_names=("Binghatti Skyrise",),
+        )
+        == "did you mean Binghatti Skyrise?"
+    )
+    for invented in ("Binghatti Skyriser", "", "Emaar Beachfront"):
+        with pytest.raises(NameNotInInventory):
+            compose_project(
+                "did you mean {project}?",
+                project=invented,
+                inventory_names=("Binghatti Skyrise",),
+            )
+
+
+async def test_a_name_outside_inventory_hands_over_rather_than_being_spoken():
+    """Fail closed, out loud. If the slot and the inventory it is bound to ever
+    disagree, the buyer goes to a person - the model does not get the turn
+    with the project unconfirmed."""
+    from ambassador.projects import NameIndex
+
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    # The policy still holds the real index; the adapter's bound no longer
+    # recognises what it returns.
+    agent._name_index = NameIndex(keys=(), names={}, decoys=())
+
+    reply = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrize")))
+    assert "ambassadors" in reply
+    assert "{" not in reply
+    assert agent._project.handed_over
+    assert "escalate_to_human" in agent.tracker.actions
+
+    await log.aclose()
+    assert '"escalation"' in buf.getvalue()
+
+
+async def test_a_broken_project_template_hands_over_rather_than_freeing_the_model():
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+    agent._confirmations = ConfirmationCopy(
+        by_language={
+            "en": dict(
+                agent._confirmations.by_language["en"],
+                confirm_project="did you mean {project.foo}?",
+            )
+        }
+    )
+
+    reply = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrize")))
+    assert "ambassadors" in reply
+    assert "{" not in reply
+    assert agent._project.handed_over
+
+
+async def test_a_name_the_guardrail_refuses_hands_over_and_still_speaks():
+    """This line goes through `SentenceGuard.compose()` rather than round it,
+    so a project name the numeric guardrail objects to (a digit in a name is
+    in no allowed set) blocks the sentence. That must fail closed AND still
+    speak: AGENTS.md is absolute that a turn never ends in silence."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    def refuse(text: str) -> str:
+        raise AssertionError(f"composed copy violates numeric_claims: {text}")
+
+    agent._guard.compose = refuse  # type: ignore[method-assign]
+
+    reply = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrize")))
+    assert "ambassadors" in reply
+    assert agent._project.handed_over
+
+
+async def test_the_budget_owns_the_turn_when_both_policies_could_speak():
+    """One deterministic question per turn, and the twenty-times currency
+    error is the more expensive one. The cost is stated in docs/04-: the name
+    is not confirmed until the buyer says it again."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    reply = spoken(
+        await run_llm_node(
+            agent, user_ctx("My budget is 2 crore for Binghatti Skyrize")
+        )
+    )
+    assert "dirhams or in rupees" in reply
+    assert "did you mean" not in reply
+
+
+async def test_a_language_with_no_project_copy_does_not_speak_english():
+    agent, _, _ = _budget_agent(language="ar", allow_uncertified_language=True)
+    agent._llm = SpyLLM([HealthyStream(["مرحبا. "])])
+
+    reply = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrize")))
+    assert "did you mean" not in reply
+
+
+async def test_no_llm_request_is_logged_on_a_project_confirmation_turn():
+    """Anything costing model calls off the event stream is wrong, and a
+    confirmation turn makes none."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("Binghatti Skyrize"))
+    await log.aclose()
+    assert "llm_request" not in buf.getvalue()
+
+
+async def test_the_buyers_mangled_words_never_reach_the_emitted_stream():
+    """The spoken line is fixed copy plus an inventory name, so the project id
+    is emitted and the sentence is not - the audit reads it from the in-memory
+    record instead."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    await run_llm_node(agent, user_ctx("Binghatti Skyrize"))
+    chunks = [c.text for c in agent.tracker.spoken_chunks]
+    await log.aclose()
+
+    emitted = buf.getvalue()
+    assert "did you mean" not in emitted, emitted
+    assert "project_confirmation" in emitted
+    assert '"project": "binghatti-skyrise"' in emitted
+    assert any("did you mean Binghatti Skyrise" in c for c in chunks), chunks
+
+
+async def test_a_tool_split_turn_reads_the_project_policy_once():
+    """A tool call splits one buyer turn across two llm_node invocations. The
+    policies read each turn once, or one reply burns two of three attempts."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    first = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrize")))
+    assert "did you mean" in first
+    # Same tracker, so the same buyer utterance: this is the second half of
+    # one turn and the model, not the policy, owns it.
+    second = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrize")))
+    assert "did you mean" not in second
+
+
+async def test_a_confident_match_is_recorded_even_though_nothing_is_said():
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    await run_llm_node(agent, user_ctx("Tell me about Binghatti Skyrise"))
+    await log.aclose()
+    assert '"event": "project_settled"' in buf.getvalue()
+
+
+def test_the_prompt_keeps_the_model_confirming_names_where_the_policy_is_off():
+    """The ar/hi regression, in its project form: telling the model the system
+    owns a question the system will not ask leaves nobody asking."""
+    on = AmbassadorAgent(
+        settings=make_settings(),
+        log=EventLog("sess_test", stream=StringIO(), verbose=False),
+    )
+    assert "Checking which project the buyer means is handled by the system" in (
+        on.instructions
+    )
+
+    off = AmbassadorAgent(
+        settings=make_settings(language="ar", allow_uncertified_language=True),
+        log=EventLog("sess_test", stream=StringIO(), verbose=False),
+    )
+    assert "read it back before answering" in off.instructions
+    assert "Checking which project the buyer means" not in off.instructions
+
+
+# --- ADR-011 trigger 3: three consecutive failed recognitions ---------------
+
+
+async def test_three_unusable_turns_in_a_row_hand_the_buyer_over():
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream(["Sorry, could you repeat that? "]) for _ in range(2)])
+
+    for unusable in ("", "   "):
+        agent._tracker = None
+        reply = spoken(await run_llm_node(agent, user_ctx(unusable)))
+        assert "ambassadors" not in reply
+
+    agent._tracker = None
+    third = spoken(await run_llm_node(agent, user_ctx("uh, hmm")))
+    assert "not hearing you clearly" in third
+    assert "escalate_to_human" in agent.tracker.actions
+
+    await log.aclose()
+    emitted = buf.getvalue()
+    assert '"escalation"' in emitted
+    assert '"consecutive": 3' in emitted
+
+
+async def test_a_real_turn_resets_the_recognition_count():
+    """Three failures spread over a good call are three ordinary "could you
+    repeat that" moments, not a broken line."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM(
+        [HealthyStream([f"A studio is AED {GROUNDED}. "]) for _ in range(5)]
+    )
+
+    for utterance in ("", "", "What does a studio cost?", "", ""):
+        agent._tracker = None
+        reply = spoken(await run_llm_node(agent, user_ctx(utterance)))
+        assert "not hearing you clearly" not in reply
+    assert not agent._recognition.handed_over
+
+
+async def test_an_unheard_turn_re_asks_the_open_budget_question():
+    """ADR-011's central property is that the model never takes the turn while
+    a confirmation is owed. A turn nobody could hear answered nothing, so the
+    question is asked again - and no attempt is consumed, because a reply that
+    was never heard is not a reply that was wrong."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])  # any model call would raise IndexError
+
+    first = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "dirhams or in rupees" in first
+
+    for _ in range(2):
+        agent._tracker = None
+        again = spoken(await run_llm_node(agent, user_ctx("")))
+        assert "2 crore" in again
+        assert "dirhams or in rupees" in again
+
+    # Two unheard turns, and the buyer still has all three attempts.
+    agent._tracker = None
+    assert "dirhams or in rupees" in spoken(
+        await run_llm_node(agent, user_ctx("Can you repeat that?"))
+    )
+    agent._tracker = None
+    assert "dirhams or in rupees" in spoken(
+        await run_llm_node(agent, user_ctx("Sorry?"))
+    )
+    agent._tracker = None
+    assert "ambassadors" in spoken(await run_llm_node(agent, user_ctx("What?")))
+
+
+async def test_an_unheard_turn_re_asks_the_open_project_question_too():
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([])
+
+    assert "did you mean Binghatti Skyrise" in spoken(
+        await run_llm_node(agent, user_ctx("Binghatti Skyrize"))
+    )
+    agent._tracker = None
+    again = spoken(await run_llm_node(agent, user_ctx("...")))
+    assert "did you mean Binghatti Skyrise" in again
+    assert not agent._project.handed_over
+
+
+async def test_an_unheard_turn_with_nothing_owed_goes_to_the_model():
+    """The first two failures are not the policy's business: the model can say
+    "sorry, could you repeat that" perfectly well, and inventing deterministic
+    copy for a case nobody has authored would be worse."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream(["Sorry, could you repeat that? "])])
+
+    reply = spoken(await run_llm_node(agent, user_ctx("")))
+    assert "could you repeat" in reply
+
+
+async def test_the_escalation_is_spoken_once_not_on_every_crackle():
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM(
+        [HealthyStream(["Sorry, could you repeat that? "]) for _ in range(6)]
+    )
+
+    spoken_lines = []
+    for _ in range(6):
+        agent._tracker = None
+        spoken_lines.append(spoken(await run_llm_node(agent, user_ctx(""))))
+    assert sum("not hearing you clearly" in line for line in spoken_lines) == 1
+
+
+async def test_a_language_with_no_escalation_copy_does_not_speak_english():
+    agent, _, _ = _budget_agent(language="ar", allow_uncertified_language=True)
+    agent._llm = SpyLLM([HealthyStream(["مرحبا. "]) for _ in range(3)])
+
+    for _ in range(3):
+        agent._tracker = None
+        reply = spoken(await run_llm_node(agent, user_ctx("")))
+        assert "ambassadors" not in reply
+
+
+async def test_the_recognition_escalation_is_audited_without_its_text():
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream(["Sorry? "]) for _ in range(2)])
+
+    for utterance in ("", "", "hmm"):
+        agent._tracker = None
+        await run_llm_node(agent, user_ctx(utterance))
+    chunks = [c.text for c in agent.tracker.spoken_chunks]
+    await log.aclose()
+
+    emitted = buf.getvalue()
+    assert '"event": "recognition_escalation_spoken"' in emitted
+    assert "not hearing you clearly" not in emitted
+    assert any("not hearing you clearly" in c for c in chunks), chunks
+
+
+def test_every_terminal_line_may_carry_no_slot_of_any_kind(tmp_path):
+    """`give_up` was not the only line spoken verbatim on a failure path once
+    the project and recognition triggers landed. All three are checked, or the
+    two new ones are a hole the loader used to close."""
+    from adapter.confirmations import load_confirmations
+
+    authored = {
+        "ask_currency": "{amount} - dirhams or rupees?",
+        "confirm_amount": "{amount} - right?",
+        "ask_amount": "What is the budget?",
+        "cannot_convert": "An ambassador will help.",
+        "give_up": "Let me put you through.",
+        "confirm_project": "Did you mean {project}?",
+        "ask_project": "Which project was that?",
+        "project_give_up": "Let me put you through.",
+        "recognition_escalation": "Let me bring someone in.",
+    }
+    for key in ("give_up", "project_give_up", "recognition_escalation"):
+        bad = tmp_path / f"{key}.yaml"
+        broken = dict(authored, **{key: authored[key] + " {amount.foo}"})
+        bad.write_text(
+            "en:\n"
+            + "".join(f'  {k}: "{v}"\n' for k, v in broken.items()),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match=key):
+            load_confirmations(bad)
+
+
+# --- PR #23 review round: Meredith's five reproduced classes ----------------
+#
+# Each test below is her transcript, verbatim, written before its fix. The
+# discipline is the budget rework's: a finding lands as a failing test that
+# reproduces the exchange, not as a patch plus an assertion about the patch.
+
+
+async def test_a_mangled_name_beside_a_valid_area_still_confirms():
+    """Finding 1 (CRITICAL). The decoy comparison used absolute coverage, so
+    an EXACT area out-covered the FUZZY project phrase in the same utterance
+    and suppressed the trigger - in exactly the situation it exists for, a
+    mangled project name accompanied by a real area."""
+    for utterance, expected in (
+        ("Tell me about Binghatti Skyrize in Business Bay", "Binghatti Skyrise"),
+        (
+            "Tell me about Binghatti Aquarize in Dubai Maritime City",
+            "Binghatti Aquarise",
+        ),
+    ):
+        agent, _, _ = _budget_agent()
+        agent._llm = SpyLLM([])  # a model call would raise IndexError
+        reply = spoken(await run_llm_node(agent, user_ctx(utterance)))
+        assert f"did you mean {expected}" in reply, utterance
+
+
+async def test_each_reply_is_read_by_the_question_it_answers():
+    """Finding 2 (HIGH). Budget precedence stole the project's answer and then
+    the project policy consumed the budget's answer as a failed attempt.
+
+    Meredith's exchange, turn for turn. The "Yes" settles the name; "Dirhams"
+    settles the currency and is not read as a project reply at all.
+    """
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    first = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrize")))
+    assert "did you mean Binghatti Skyrise" in first
+
+    agent._tracker = None
+    second = spoken(
+        await run_llm_node(agent, user_ctx("Yes, and my budget is 2 crore."))
+    )
+    assert "dirhams or in rupees" in second
+    # The Yes was an answer, and answers are not discarded by precedence.
+    assert agent._project.confirmed == frozenset({"binghatti-skyrise"})
+
+    agent._tracker = None
+    third = spoken(await run_llm_node(agent, user_ctx("Dirhams.")))
+    assert "did you mean" not in third, "the budget's answer was read as a project reply"
+    assert "A studio is" in third
+
+
+async def test_a_budget_answer_is_not_a_failed_project_attempt():
+    """Finding 2, the half that cost the buyer two attempts.
+
+    With both questions open, the reply belongs to the one asked most
+    recently. The project question is suspended, not answered - so it consumes
+    nothing and is asked again once the budget settles.
+    """
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    await run_llm_node(agent, user_ctx("Binghatti Skyrize"))
+    agent._tracker = None
+    # No agreement word, so this does not answer the project question - but it
+    # does carry a budget, and losing it would leave the model acting on an
+    # unconfirmed 2 crore.
+    assert "dirhams or in rupees" in spoken(
+        await run_llm_node(agent, user_ctx("It is about 2 crore."))
+    )
+    agent._tracker = None
+    # The currency answer settles the budget and the suspended project
+    # question is asked again, having consumed no attempt.
+    assert "did you mean Binghatti Skyrise" in spoken(
+        await run_llm_node(agent, user_ctx("Dirhams."))
+    )
+    agent._tracker = None
+    assert "A studio is" in spoken(await run_llm_node(agent, user_ctx("Yes")))
+    assert agent._project.confirmed == frozenset({"binghatti-skyrise"})
+    # The point of the exchange: the buyer answered both questions correctly,
+    # so the project policy spent none of its three attempts on the turns that
+    # belonged to the budget.
+    assert agent._project._attempts == 0
+
+
+async def test_a_project_question_does_not_resume_after_a_handover_either():
+    """Finding 3, the other pending policy. Quiescing is by construction -
+    every policy is abandoned - rather than a guard at the budget's read site,
+    because a guard is one site away from being forgotten."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream(["Sorry? "]) for _ in range(4)])
+
+    assert "did you mean Binghatti Skyrise" in spoken(
+        await run_llm_node(agent, user_ctx("Binghatti Skyrize"))
+    )
+    for _ in range(2):
+        agent._tracker = None
+        assert "did you mean Binghatti Skyrise" in spoken(
+            await run_llm_node(agent, user_ctx(""))
+        )
+    agent._tracker = None
+    assert "not hearing you clearly" in spoken(
+        await run_llm_node(agent, user_ctx(""))
+    )
+    for _ in range(2):
+        agent._tracker = None
+        assert "did you mean" not in spoken(await run_llm_node(agent, user_ctx("")))
+    assert agent._policies.quiesced
+
+
+async def test_a_budget_give_up_quiesces_the_project_question_too():
+    """A handover by ANY deterministic policy closes the others. The model's own
+    escalate_to_human tool deliberately does NOT: it fires routinely (an unknown
+    project, a branded price) and its own docstring tells the model to keep
+    speaking normally, so treating that as terminal would silence the
+    confirmations on an ordinary call."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream(["Sorry? "]) for _ in range(4)])
+
+    await run_llm_node(agent, user_ctx("Binghatti Skyrize"))
+    agent._tracker = None
+    await run_llm_node(agent, user_ctx("It is about 2 crore."))
+    for reply in ("What?", "Sorry?"):
+        agent._tracker = None
+        spoken(await run_llm_node(agent, user_ctx(reply)))
+    agent._tracker = None
+    last = spoken(await run_llm_node(agent, user_ctx("Pardon?")))
+    assert "ambassadors" in last
+    assert agent._policies.quiesced
+
+    agent._tracker = None
+    assert "did you mean" not in spoken(await run_llm_node(agent, user_ctx("")))
+
+
+async def test_nothing_resumes_after_recognition_hands_the_call_over():
+    """Finding 3 (HIGH). A pending budget question resumed on the turn AFTER
+    the recognition escalation. Once a human has been brought in, no policy
+    speaks again - terminal state has to be coordinated, not per-policy."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream(["Sorry? "]) for _ in range(4)])
+
+    assert "dirhams or in rupees" in spoken(
+        await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    )
+    for _ in range(2):
+        agent._tracker = None
+        assert "dirhams or in rupees" in spoken(
+            await run_llm_node(agent, user_ctx(""))
+        )
+
+    agent._tracker = None
+    assert "not hearing you clearly" in spoken(
+        await run_llm_node(agent, user_ctx(""))
+    )
+    assert agent._recognition.handed_over
+
+    for _ in range(2):
+        agent._tracker = None
+        after = spoken(await run_llm_node(agent, user_ctx("")))
+        assert "2 crore" not in after, "a stale question resumed after a handover"
+        assert "dirhams or in rupees" not in after
+
+
+async def test_ordinary_language_does_not_speak_a_project_name():
+    """Finding 4 (HIGH). "arise" scores 0.769 against "aquarise" - above the
+    floor, below confident, unsuppressed - so ordinary English asked the buyer
+    about a tower they never mentioned."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream(["Prices are current as of today. "])])
+
+    reply = spoken(await run_llm_node(agent, user_ctx("When did prices arise?")))
+    assert "did you mean" not in reply
+    assert "Prices are current" in reply
+
+
+def test_a_generic_word_in_a_project_name_is_not_a_project_mention():
+    """Finding 4, the silent half: `residences` is an exact individual key, so
+    "What residences are available?" was classified as a CONFIDENT mention of
+    Bugatti Residences - wrong in the audit, and it excluded that project from
+    every later read-back."""
+    from ambassador.inventory import load_inventory
+    from ambassador.projects import build_name_index, match_project_name
+
+    index = build_name_index(load_inventory())
+    assert match_project_name("What residences are available?", index) is None
+
+
+def test_the_fixed_terminal_copy_is_validated_before_the_call_starts():
+    """Finding 5 (MEDIUM). `_fixed_line()` caught a rejecting guard and spoke
+    the raw string, which is a literal bypass of the single public speech path
+    and contradicted the PR's own claim.
+
+    The fix moves the check earlier rather than choosing a direction at
+    runtime: every slot-free terminal line is composed through the guard once,
+    at construction, and an agent whose own copy fails its own guardrails
+    refuses to start - the same precedent as an unauthored disclosure blocking
+    its language. There is then no runtime guard call on this path to fail
+    open, and none to fail closed either.
+    """
+    log = EventLog("sess_test", stream=StringIO(), verbose=False)
+    with pytest.raises(RuntimeError, match="guardrail"):
+        AmbassadorAgent(
+            settings=make_settings(),
+            log=log,
+            guard_factory=_rejecting_guard,
+        )
+
+
+def _rejecting_guard(**kwargs):
+    """A SentenceGuard whose compose() refuses everything, standing in for copy
+    that fails our own guardrails."""
+    guard = SentenceGuard(**kwargs)
+
+    def refuse(text: str) -> str:
+        raise AssertionError(f"composed copy violates numeric_claims: {text}")
+
+    guard.compose = refuse  # type: ignore[method-assign]
+    return guard
+
+
+async def test_no_guard_call_happens_on_the_fixed_line_at_turn_time():
+    """The other half of finding 5: a guard that starts rejecting mid-session
+    cannot produce unvalidated speech here, because the line was composed and
+    validated before the call opened."""
+    agent, _, _ = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream(["Sorry? "]) for _ in range(2)])
+
+    calls: list[str] = []
+    real = agent._guard.compose
+
+    def counting(text: str) -> str:
+        calls.append(text)
+        return real(text)
+
+    agent._guard.compose = counting  # type: ignore[method-assign]
+
+    for utterance in ("", "", "hmm"):
+        agent._tracker = None
+        reply = spoken(await run_llm_node(agent, user_ctx(utterance)))
+    assert "not hearing you clearly" in reply
+    assert not [c for c in calls if "not hearing you clearly" in c], calls
+
+
+async def test_a_crash_in_the_policies_themselves_hands_over():
+    """The outer catch on the seam. Everything inside the confirmation
+    machinery fails CLOSED - including the part that decides WHICH policy acts,
+    which is the one piece no individual policy's own catch covers."""
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    def explode(utterance: str):
+        raise RuntimeError("ownership is undecidable today")
+
+    agent._policies.observe = explode  # type: ignore[method-assign]
+
+    reply = spoken(await run_llm_node(agent, user_ctx("My budget is 2 crore.")))
+    assert "ambassadors" in reply
+    assert "A studio is" not in reply, "the model took a turn with a budget unconfirmed"
+    assert "escalate_to_human" in agent.tracker.actions
+
+    await log.aclose()
+    assert '"escalation"' in buf.getvalue()
+
+
+async def test_a_fresh_project_name_does_not_hand_the_buyer_over(monkeypatch):
+    """The re-review's transcript, through llm_node.
+
+    A confident project name offered while a budget question is open was
+    accepted by the project policy and ALSO charged to the budget as its third
+    failure, so a valid project selection ended the call with a hand-over. Only
+    a reply nobody claims may be charged to the owner.
+    """
+    agent, log, buf = _budget_agent()
+    agent._llm = SpyLLM([])  # a model call would raise IndexError
+
+    assert "dirhams or in rupees" in spoken(
+        await run_llm_node(agent, user_ctx("My budget is 2 crore."))
+    )
+    for reply in ("What?", "Sorry?"):
+        agent._tracker = None
+        assert "dirhams or in rupees" in spoken(
+            await run_llm_node(agent, user_ctx(reply))
+        )
+
+    agent._tracker = None
+    heard = spoken(await run_llm_node(agent, user_ctx("Binghatti Skyrise.")))
+    assert "ambassadors" not in heard, "a valid project name handed the buyer over"
+    assert "dirhams or in rupees" in heard
+    assert agent._project.confirmed == frozenset({"binghatti-skyrise"})
+    assert not agent._policies.quiesced
+    assert "escalate_to_human" not in agent.tracker.actions
+
+    await log.aclose()
+    assert '"escalation"' not in buf.getvalue()

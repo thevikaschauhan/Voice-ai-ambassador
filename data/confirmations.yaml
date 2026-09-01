@@ -10,6 +10,9 @@
 # recommending a property twenty times off.
 #
 # `{amount}` is replaced with what the buyer said, e.g. "2 crore".
+# `{project}` is replaced with a project name out of data/inventory.json -
+# the one slot whose value is NOT the buyer's words, for the reason given
+# beside confirm_project below.
 
 en:
   # Currency unstated. Names both options so the buyer answers in one word.
@@ -35,12 +38,46 @@ en:
     Let me put you through to one of our ambassadors who can go through the
     numbers with you properly.
 
+  # --- project names (ADR-011 trigger 2) ------------------------------------
+  #
+  # Spoken when the fuzzy match against inventory is MARGINAL - the buyer
+  # probably named a project and we are not sure which. `{project}` is filled
+  # from data/inventory.json and from nowhere else: unlike the budget echo,
+  # which must be the buyer's own words, a project name read back has to be
+  # the canonical one, or the read-back teaches the buyer our mishearing.
+  # A confident match is not read back at all.
+  confirm_project: "Just to be sure - did you mean {project}?"
+  # The buyer said that was not it. Deliberately slotless: naming the project
+  # they just rejected, or the mangled words they said, both read badly.
+  ask_project: "Apologies - which project was that?"
+  # Three tries on the name and still not settled. Slotless, and the loader
+  # enforces that: it is also the line spoken when a project confirmation
+  # cannot be composed at all.
+  project_give_up: >-
+    Let me put you through to one of our ambassadors who can find the right
+    project with you.
+
+  # --- failed recognitions (ADR-011 trigger 3) ------------------------------
+  #
+  # Three consecutive turns nobody could hear - empty or noise-only
+  # transcripts, see data/recognition.yaml. A different count from the budget
+  # policy's three attempts, which counts replies that answered wrongly.
+  # Slotless by nature and by the loader: there is nothing to quote back from
+  # a turn that carried nothing.
+  recognition_escalation: >-
+    I am not hearing you clearly, and I would rather not guess at what you
+    are asking. Let me bring in one of our ambassadors.
+
 ar:
   ask_currency: ""
   confirm_amount: ""
   ask_amount: ""
   cannot_convert: ""
   give_up: ""
+  confirm_project: ""
+  ask_project: ""
+  project_give_up: ""
+  recognition_escalation: ""
   # VERIFY: native-authored. Until these exist the policy cannot run in
   # Arabic, and the loader reports the language as uncovered rather than
   # speaking English into an Arabic call.
@@ -51,4 +88,8 @@ hi:
   ask_amount: ""
   cannot_convert: ""
   give_up: ""
+  confirm_project: ""
+  ask_project: ""
+  project_give_up: ""
+  recognition_escalation: ""
   # VERIFY: native-authored. Same rule.

@@ -558,6 +558,43 @@ class BudgetPolicy:
     def currency(self) -> Currency | None:
         return self._currency
 
+    @property
+    def pending(self) -> Decision | None:
+        """The question this policy is waiting on an answer to, if any.
+
+        Read-only and non-mutating, and that is the whole point: the caller
+        re-speaks it on a turn nobody could hear (recognition.py), and a turn
+        nobody could hear must not consume one of the buyer's three attempts.
+        Routing such a turn through `observe` instead would count it as a
+        reply that answered nothing, which is exactly what it was not.
+        """
+        if self._asked is None:
+            return None
+        return Decision(self._asked, self._mention)
+
+    def answers(self, utterance: str) -> bool:
+        """Does this reply say anything about the question that is open?
+
+        Pure and non-mutating. The coordinator asks before letting a policy
+        read a turn, because a reply that says nothing about THIS question may
+        well be an answer to another one - and reading it here would spend an
+        attempt the buyer never used. See ambassador/confirmation.py.
+
+        A reply counts when it restates a budget, names or denies a currency,
+        pushes back, or agrees. Deliberately the same five signals `_answer`
+        acts on, and no others: a predicate that is more generous than the
+        reader it guards would hand the reader turns it has nothing to do with.
+        """
+        if self._settled or self._asked is None:
+            return False
+        said = normalise_digits(utterance)
+        if find_budget(said, self._vocabulary, self._language) is not None:
+            return True
+        reading = read_reply(said, self._vocabulary, self._language)
+        return bool(
+            reading.affirmed or reading.denied or reading.contradicted or reading.agreed
+        )
+
     def observe(self, utterance: str) -> Decision:
         if self._settled:
             return Decision("none")

@@ -52,7 +52,7 @@ ABSOLUTE CONSTRAINTS
 5. Never guarantee or promise returns, appreciation, yields, visa outcomes, mortgage approval, or tax treatment. Never give investment advice. You may state facts from the inventory; the future is not a fact.
 6. Negotiation, unit availability, and contractual or legal terms (SPA, escrow, Oqood, refunds) go to a human. Say so warmly and call the escalate_to_human tool.
 7. A complaint, distress, or a request for a person goes to a human immediately. Say you are bringing a colleague in and call the escalate_to_human tool.
-{budget_confirmation_rule}
+{confirmation_rule}
 9. Always reply in {language_name}, whatever language the buyer used.
 10. The call opening and AI disclosure are handled by the system, not by you. Never claim to be human.
 
@@ -98,30 +98,59 @@ REGENERATION_INSTRUCTION = (
 # Constraint 8 depends on who owns the budget confirmation on THIS call. When
 # the deterministic policy runs (ADR-011), the system takes the turn and the
 # model must not ask again. When it does not - a language with no authored
+# Constraint 8 depends on who owns each confirmation on THIS call. Where the
+# deterministic policy runs (ADR-011), the system takes the turn and the model
+# must not ask again. Where it does not - a language with no authored
 # confirmation copy - the model is the only thing left that can confirm, so
-# telling it the system owns the question would leave NOBODY asking: exactly
-# the regression the review caught for ar/hi.
-_CONFIRMATION_RULE_SYSTEM = (
+# telling it the system owns a question the system will not ask leaves NOBODY
+# asking: exactly the ar/hi regression the review caught.
+#
+# The two halves are independent because their copy is: a reviewer can author
+# the budget lines and not the project ones, and the prompt has to describe
+# whatever is actually true of this call.
+_CONSTRAINT_8_OPENING = (
     "8. If a name or an amount may have been misheard, confirm it rather than "
-    "assuming. The budget confirmation is handled by the system, not by you - "
-    "when a budget is already settled, use it and do not ask again."
+    "assuming."
 )
-_CONFIRMATION_RULE_MODEL = (
-    "8. If a name or an amount may have been misheard, confirm it rather than "
-    "assuming. When a buyer states a budget, confirm the amount AND the "
-    "currency before recommending anything."
+_BUDGET_BY_SYSTEM = (
+    " The budget confirmation is handled by the system, not by you - when a "
+    "budget is already settled, use it and do not ask again."
 )
+_BUDGET_BY_MODEL = (
+    " When a buyer states a budget, confirm the amount AND the currency before "
+    "recommending anything."
+)
+_PROJECT_BY_SYSTEM = (
+    " Checking which project the buyer means is handled by the system too - "
+    "when a project name has been read back and settled, use it and do not ask "
+    "again."
+)
+_PROJECT_BY_MODEL = (
+    " When a project name may have been misheard, read it back before "
+    "answering about that project."
+)
+
+
+def _constraint_8(*, budget_by_system: bool, project_by_system: bool) -> str:
+    return (
+        _CONSTRAINT_8_OPENING
+        + (_BUDGET_BY_SYSTEM if budget_by_system else _BUDGET_BY_MODEL)
+        + (_PROJECT_BY_SYSTEM if project_by_system else _PROJECT_BY_MODEL)
+    )
 
 
 def build_ambassador_prompt(
-    inventory_block: str, language: Language, *, system_confirms_budget: bool
+    inventory_block: str,
+    language: Language,
+    *,
+    system_confirms_budget: bool,
+    system_confirms_project: bool,
 ) -> str:
     return _AMBASSADOR_TEMPLATE.format(
         language_name=LANGUAGE_NAMES[language],
         inventory_block=inventory_block,
-        budget_confirmation_rule=(
-            _CONFIRMATION_RULE_SYSTEM
-            if system_confirms_budget
-            else _CONFIRMATION_RULE_MODEL
+        confirmation_rule=_constraint_8(
+            budget_by_system=system_confirms_budget,
+            project_by_system=system_confirms_project,
         ),
     )

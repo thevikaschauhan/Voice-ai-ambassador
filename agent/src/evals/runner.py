@@ -44,13 +44,17 @@ import hashlib
 from dataclasses import dataclass, replace
 
 from adapter.confirmations import (
+    PROJECT_KEYS,
+    RECOGNITION_KEYS,
     ConfirmationCopy,
     UnspeakableConfirmation,
     load_confirmations,
 )
 from adapter.confirmations import compose as compose_confirmation
+from adapter.confirmations import compose_project as compose_project_confirmation
 from adapter.fallbacks import FallbackCopy, load_fallback_copy
 from ambassador.budget import BudgetPolicy, CurrencyVocabulary, load_currency_vocabulary
+from ambassador.confirmation import ConfirmationCoordinator
 from ambassador.figures import states_a_figure
 from ambassador.guardrails.pipeline import process_sentence
 from ambassador.guardrails.prohibited import ProhibitedPattern, load_patterns
@@ -59,7 +63,13 @@ from ambassador.inventory import (
     load_inventory,
     serialise_for_prompt,
 )
+from ambassador.projects import (
+    ProjectNamePolicy,
+    agreement_words,
+    build_name_index,
+)
 from ambassador.prompts import REGENERATION_INSTRUCTION, build_ambassador_prompt
+from ambassador.recognition import RecognitionMonitor, load_noise_words
 from ambassador.schemas import (
     AllowedFigures,
     GuardrailViolation,
@@ -112,11 +122,34 @@ class Harness:
         against."""
         return self.confirmations.covers(language)
 
+    def name_policy_runs(self, language: Language) -> bool:
+        """The same question for the project-name confirmation (ADR-011). Its
+        copy group is separate, so the prompt must be built against what is
+        actually true of each half."""
+        return self.confirmations.covers(language, PROJECT_KEYS)
+
+    def coordinator(self, language: Language) -> ConfirmationCoordinator:
+        """One buyer's three ADR-011 policies, wired the way the live adapter
+        wires them. Built per case: a coordinator carries call state."""
+        return ConfirmationCoordinator(
+            budget=BudgetPolicy(self.vocabulary, language),
+            project=ProjectNamePolicy(
+                build_name_index(self.projects),
+                agreement_words(self.vocabulary),
+                language,
+            ),
+            recognition=RecognitionMonitor(load_noise_words(), language),
+            budget_runs=self.policy_runs(language),
+            project_runs=self.name_policy_runs(language),
+            recognition_runs=self.confirmations.covers(language, RECOGNITION_KEYS),
+        )
+
     def prompt(self, language: Language) -> str:
         return build_ambassador_prompt(
             self.inventory_block,
             language,
             system_confirms_budget=self.policy_runs(language),
+            system_confirms_project=self.name_policy_runs(language),
         )
 
     def prompt_fingerprint(self, language: Language = "en") -> str:
@@ -131,8 +164,7 @@ class Harness:
 
 def run_case(case: EvalCase, harness: Harness, backend: ModelBackend) -> Observed:
     """Every turn of one case, in order, with the state the buyer's call has."""
-    policy = BudgetPolicy(harness.vocabulary, case.language)
-    policy_runs = harness.policy_runs(case.language)
+    policies = harness.coordinator(case.language)
     system_prompt = harness.prompt(case.language)
     history: list[tuple[str, str]] = []
     turns: list[TurnOutcome] = []
@@ -147,8 +179,7 @@ def run_case(case: EvalCase, harness: Harness, backend: ModelBackend) -> Observe
                 fixture=turn.model,
                 harness=harness,
                 backend=backend,
-                policy=policy,
-                policy_runs=policy_runs,
+                policies=policies,
                 system_prompt=system_prompt,
                 history=tuple(history),
             )
@@ -180,12 +211,11 @@ def _run_turn(
     fixture: ModelFixture | None,
     harness: Harness,
     backend: ModelBackend,
-    policy: BudgetPolicy,
-    policy_runs: bool,
+    policies: ConfirmationCoordinator,
     system_prompt: str,
     history: tuple[tuple[str, str], ...],
 ) -> TurnOutcome:
-    confirmation = _budget_confirmation(policy, policy_runs, buyer, harness, case.language)
+    confirmation = _confirmation(policies, buyer, harness, case.language)
     if confirmation is not None:
         text, action, hands_over = confirmation
         return TurnOutcome(
@@ -196,9 +226,9 @@ def _run_turn(
             # verbatim, and verbalising it would assert a currency on the exact
             # turn whose purpose is to ask which one they meant.
             heard=(Spoken(validated=text, spoken=text, origin="confirmation"),),
-            confirmed=action in ("ask_currency", "confirm_amount", "ask_amount"),
+            confirmed=action in _CONFIRMING_ACTIONS,
             escalation_reasons=(
-                (f"budget policy: {action}",) if hands_over else ()
+                (f"confirmation policy: {action}",) if hands_over else ()
             ),
         )
 
@@ -279,49 +309,74 @@ def _backstop_regeneration(
     reasons.append(f"regenerated reply stated no inventory figure (turn {turn_index})")
 
 
-def _budget_confirmation(
-    policy: BudgetPolicy,
-    policy_runs: bool,
+# Actions that mean "the system asked the buyer something", which is what the
+# `must_confirm` assertion is about. The terminal handovers are not questions.
+_CONFIRMING_ACTIONS = (
+    "ask_currency",
+    "confirm_amount",
+    "ask_amount",
+    "confirm_project",
+    "ask_project",
+)
+
+
+def _confirmation(
+    policies: ConfirmationCoordinator,
     buyer: str,
     harness: Harness,
     language: Language,
 ) -> tuple[str, str, bool] | None:
     """(copy, action, hands_over) to speak instead of running the turn, or None.
 
-    Mirrors `adapter/agent.py:_budget_confirmation`, including its failure
-    direction: ANY exception in the confirmation machinery is a handover, never
-    a model turn and never silence. The catch is deliberately `Exception` for
-    the reason recorded there - a curated list let AttributeError and TypeError
-    escape into a silent turn, which the retry then converted into an
-    unconfirmed model answer.
+    WHICH policy acts is `ambassador/confirmation.py`, shared with the live
+    adapter rather than reimplemented here: this function used to carry its own
+    copy of the ordering rule, and an ordering rule kept in two places is one
+    that will disagree with itself the first time either is fixed.
+
+    What stays local is the composition, and its failure direction, which is
+    the adapter's: ANY exception in the confirmation machinery is a handover,
+    never a model turn and never silence. The catch is deliberately `Exception`
+    - a curated list let AttributeError and TypeError escape into a silent
+    turn, which the retry then converted into an unconfirmed model answer.
     """
-    if not policy_runs:
-        return None
     try:
-        decision = policy.observe(buyer)
-        if not decision.speaks:
-            return None
-        template = harness.confirmations.line(language, decision.action)
-        if decision.mention is not None:
-            text = compose_confirmation(
-                template,
-                echoed=decision.mention.surface,
-                said=decision.mention.utterance,
-            )
-        elif "{" in template:
-            raise UnspeakableConfirmation(
-                f"{decision.action!r} copy carries a slot and the decision has "
-                "nothing to fill it with"
-            )
-        else:
-            text = template
-        if not text.strip():
-            raise UnspeakableConfirmation(
-                f"no confirmation copy composed for {decision.action!r}"
-            )
-        return text, decision.action, decision.hands_over
+        for step in policies.observe(buyer):
+            if not step.speaks:
+                continue
+            if step.policy == "recognition":
+                return (
+                    harness.confirmations.line(language, "recognition_escalation"),
+                    "recognition_escalation",
+                    True,
+                )
+            template = harness.confirmations.line(language, step.action)
+            if step.budget is not None and step.budget.mention is not None:
+                text = compose_confirmation(
+                    template,
+                    echoed=step.budget.mention.surface,
+                    said=step.budget.mention.utterance,
+                )
+            elif step.project is not None and step.project.name is not None:
+                text = compose_project_confirmation(
+                    template,
+                    project=step.project.name,
+                    inventory_names=tuple(p.name for p in harness.projects),
+                )
+            elif "{" in template:
+                raise UnspeakableConfirmation(
+                    f"{step.action!r} copy carries a slot and the decision has "
+                    "nothing to fill it with"
+                )
+            else:
+                text = template
+            if not text.strip():
+                raise UnspeakableConfirmation(
+                    f"no confirmation copy composed for {step.action!r}"
+                )
+            return text, step.action, step.hands_over
+        return None
     except Exception:
-        policy.abandon()
+        policies.quiesce()
         return (
             harness.confirmations.line(language, "give_up"),
             "give_up",

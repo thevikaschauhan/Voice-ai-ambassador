@@ -90,7 +90,10 @@ def test_the_shipped_language_names_pass_their_own_check():
 def test_the_prompt_renders_for_every_language():
     for language in LANGUAGES:
         rendered = prompts.build_ambassador_prompt(
-            "INVENTORY", language, system_confirms_budget=False
+            "INVENTORY",
+            language,
+            system_confirms_budget=False,
+            system_confirms_project=False,
         )
         assert prompts.LANGUAGE_NAMES[language] in rendered
 

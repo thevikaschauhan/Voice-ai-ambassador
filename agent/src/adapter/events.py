@@ -196,6 +196,23 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     # and wins wherever they disagree.
     "budget_settled": "a turn index and a currency code",
     "budget_confirmation_spoken": "a turn index and an enum action, never the text",
+    # The project half of ADR-011. Every field is enumerated or numeric: the
+    # action, the project ID and name out of data/inventory.json, the match
+    # band and its similarity score. Deliberately NOT the buyer's words that
+    # matched - a mangled project name is still a slice of their transcript.
+    "project_policy": "language codes and booleans, all from configuration",
+    "project_confirmation": "an enum action, an inventory project id and booleans",
+    # "Settled" rather than "confirmed", for the same reason budget_settled is:
+    # the brief extractor's model-inferred shortlist names projects too, and
+    # this one is the deterministic policy's verdict.
+    "project_settled": "a turn index, an inventory project id, a band and a score",
+    "project_confirmation_spoken": "a turn index and an enum action, never the text",
+    # The failed-recognition count (ADR-011 trigger 3). A count and two
+    # booleans; the unusable transcript itself is emitted by `user_turn`,
+    # where it is already redacted.
+    "recognition_policy": "language codes and booleans, all from configuration",
+    "recognition_failed": "a turn index, a consecutive count and a boolean",
+    "recognition_escalation_spoken": "a turn index only, never the text",
     "lexicon": "language codes and a boolean, all from a static data file",
     "prohibited_coverage": "language codes, a boolean and a pattern count",
     "stt_enabled": "the STT model and provider names",
@@ -719,6 +736,26 @@ class TurnTracker:
         self._log.emit(
             "budget_confirmation_spoken", turn=self.turn_index, action=action
         )
+
+    def record_project_confirmation(self, text: str, action: str) -> None:
+        """A deterministic project-name confirmation spoken instead of running
+        the turn.
+
+        Its text is fixed copy plus an inventory name, so unlike the budget
+        confirmation nothing buyer-derived is in it - but it is kept off the
+        emitted stream anyway, because the only thing the stream gains from
+        the sentence is the project id, which `project_confirmation` already
+        carries as an enumerated field.
+        """
+        self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
+        self._log.emit(
+            "project_confirmation_spoken", turn=self.turn_index, action=action
+        )
+
+    def record_recognition_escalation(self, text: str) -> None:
+        """The warm hand-over after three consecutive unusable turns."""
+        self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
+        self._log.emit("recognition_escalation_spoken", turn=self.turn_index)
 
     def mark_interrupted(self) -> None:
         """Barge-in: the last chunk handed to TTS may not have finished
