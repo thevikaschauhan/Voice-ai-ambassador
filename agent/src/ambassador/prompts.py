@@ -106,8 +106,7 @@ REGENERATION_INSTRUCTION = (
 # the budget lines and not the project ones, and the prompt has to describe
 # whatever is actually true of this call.
 _CONSTRAINT_8_OPENING = (
-    "8. If a name or an amount may have been misheard, confirm it rather than "
-    "assuming."
+    "8. If a name or an amount may have been misheard, confirm it rather than assuming."
 )
 _BUDGET_BY_SYSTEM = (
     " The budget confirmation is handled by the system, not by you - when a "

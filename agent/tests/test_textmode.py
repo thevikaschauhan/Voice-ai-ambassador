@@ -188,7 +188,9 @@ async def test_the_buyer_hears_the_context_the_next_turn_is_grounded_in(harness)
     # The blocked sentence never reached the buyer, so it must not reach the
     # model's context either, or turn two is grounded in speech nobody said.
     history = "\n".join(
-        content for role, content in backend.requests[-1].messages if role == "assistant"
+        content
+        for role, content in backend.requests[-1].messages
+        if role == "assistant"
     )
     assert "950,000" not in history
     assert "eighty-five thousand" in history

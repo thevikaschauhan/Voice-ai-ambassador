@@ -121,7 +121,10 @@ class CategoryResult:
         return sum(
             1
             for r in self.results
-            if any(t.model is not None and t.model.intent == "adversarial" for t in r.case.turns)
+            if any(
+                t.model is not None and t.model.intent == "adversarial"
+                for t in r.case.turns
+            )
         )
 
     @property
@@ -170,9 +173,7 @@ class Suite:
 
     @property
     def failing(self) -> tuple[CaseResult, ...]:
-        return tuple(
-            r for c in self.categories for r in c.results if not r.passed
-        )
+        return tuple(r for c in self.categories for r in c.results if not r.passed)
 
 
 def order_categories(categories: list[CategoryResult]) -> list[CategoryResult]:
@@ -238,8 +239,8 @@ _MODE_CLAIM = {
     "offline": (
         "**Offline mode measures the pipeline, not the model.** Each case replays a "
         "model reply recorded or authored beside it and asks what the buyer actually "
-        "heard. A pass here is the claim \"given this reply, the guardrails, the "
-        "recovery policy and verbalisation produce this speech\" - which is the claim "
+        'heard. A pass here is the claim "given this reply, the guardrails, the '
+        'recovery policy and verbalisation produce this speech" - which is the claim '
         "the system rests on, and the one that runs in CI with no keys and no spend. "
         "It is NOT a claim about how often the model behaves well; only a live run is."
     ),
@@ -290,8 +291,8 @@ def render_markdown(suite: Suite) -> str:
     lines.append(
         "`recorded` cases replay words the real model actually produced. `authored` "
         "cases replay a model behaviour a human wrote down - most often the failure "
-        "the category exists to catch, because \"the model fabricates a price and the "
-        "buyer hears an escalation instead\" is a statement about the guardrails that "
+        'the category exists to catch, because "the model fabricates a price and the '
+        'buyer hears an escalation instead" is a statement about the guardrails that '
         "does not need the model to misbehave on cue. `deterministic` cases involve no "
         "model at all: the budget confirmation policy takes every turn, which is the "
         "point of it being code rather than a prompt instruction. `adversarial` counts "
@@ -329,7 +330,9 @@ def render_markdown(suite: Suite) -> str:
                         f"  - model, regenerated: {turn.regenerated_text.strip()}"
                     )
                 for segment in turn.heard:
-                    lines.append(f"  - heard ({segment.origin}): {segment.spoken.strip()}")
+                    lines.append(
+                        f"  - heard ({segment.origin}): {segment.spoken.strip()}"
+                    )
                 for violation in turn.blocked:
                     lines.append(
                         f"  - blocked by {violation.validator}: {violation.detail}"

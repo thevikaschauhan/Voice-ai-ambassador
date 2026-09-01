@@ -335,9 +335,7 @@ class ConfirmationCoordinator:
         replaced got in. `test_ownership_is_recency_and_not_precedence` sets
         `_last_asked` directly and says why.
         """
-        open_now = [
-            name for name in _FRESH_ORDER if self._pending(name) is not None
-        ]
+        open_now = [name for name in _FRESH_ORDER if self._pending(name) is not None]
         if not open_now:
             return None
         if self._last_asked in open_now:

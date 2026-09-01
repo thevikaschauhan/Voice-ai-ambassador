@@ -33,11 +33,11 @@ def test_branded_project_derives_nothing(projects):
 
 
 def test_allowed_set_contains_source_derived_and_whitelist(allowed):
-    assert 985000.0 in allowed.amounts          # source price
-    assert 197000.0 in allowed.amounts          # computed milestone
-    assert 2000000.0 in allowed.amounts         # whitelist (visa threshold)
-    assert 20.0 in allowed.percents             # plan percentage
-    assert 2026 in allowed.years                # handover year
+    assert 985000.0 in allowed.amounts  # source price
+    assert 197000.0 in allowed.amounts  # computed milestone
+    assert 2000000.0 in allowed.amounts  # whitelist (visa threshold)
+    assert 20.0 in allowed.percents  # plan percentage
+    assert 2026 in allowed.years  # handover year
     # An invented figure is not allowed
     assert 800000.0 not in allowed.amounts
 
@@ -78,8 +78,8 @@ def test_payment_plan_must_sum_to_100():
 
 def test_prompt_serialisation_inlines_derived_figures(projects):
     block = serialise_for_prompt(projects)
-    assert "AED 197,000" in block                       # computed, in the prompt
-    assert "price on enquiry only" in block             # branded rule inline
+    assert "AED 197,000" in block  # computed, in the prompt
+    assert "price on enquiry only" in block  # branded rule inline
     assert "never state a figure" in block
 
 

@@ -80,7 +80,9 @@ def test_frames_become_a_decodable_wav_container():
 
 
 def test_request_body_is_base64_json_not_multipart():
-    body = build_request_body(model="qwen/qwen3-asr-1.7b", audio_bytes=b"ID3fake", language="ar")
+    body = build_request_body(
+        model="qwen/qwen3-asr-1.7b", audio_bytes=b"ID3fake", language="ar"
+    )
     assert body == {
         "model": "qwen/qwen3-asr-1.7b",
         "input_audio": {
@@ -109,7 +111,9 @@ def test_requires_a_key_rather_than_failing_at_the_first_request():
 
 
 async def test_posts_the_documented_shape_to_the_transcriptions_endpoint():
-    transport = RecordingTransport(payload={"text": "  a studio at Binghatti Skyrise  "})
+    transport = RecordingTransport(
+        payload={"text": "  a studio at Binghatti Skyrise  "}
+    )
     node = OpenRouterSTT(
         api_key=FAKE_KEY,
         model="qwen/qwen3-asr-1.7b",
@@ -154,7 +158,9 @@ async def test_per_call_language_overrides_the_configured_default():
 async def test_a_402_surfaces_as_an_api_error_rather_than_an_empty_transcript():
     """The known live failure: OpenRouter rejects audio under a $0.50 balance.
     A silent empty transcript would look like the buyer said nothing."""
-    transport = RecordingTransport(status=402, payload={"error": "insufficient credits"})
+    transport = RecordingTransport(
+        status=402, payload={"error": "insufficient credits"}
+    )
     node = OpenRouterSTT(
         api_key=FAKE_KEY,
         client=client_for(transport),
@@ -179,19 +185,29 @@ def test_arabic_routes_to_the_day_zero_winner_when_it_is_set():
 
     def settings_with(ar: str) -> Settings:
         return Settings(
-            livekit_url="", livekit_api_key="", livekit_api_secret="",
-            openrouter_api_key="", llm_model="m", llm_base_url="u",
-            llm_thinking="off", brief_model="m",
+            livekit_url="",
+            livekit_api_key="",
+            livekit_api_secret="",
+            openrouter_api_key="",
+            llm_model="m",
+            llm_base_url="u",
+            llm_thinking="off",
+            brief_model="m",
             stt_provider="openrouter",
             stt_model_default="qwen/qwen3-asr-1.7b",
             stt_model_ar=ar,
             stt_enabled=False,
             deepgram_api_key="",
             deepgram_model="nova-3",
-            fish_api_key="", fish_tts_model="s2.1-pro",
-            tts_voice_id_en="", tts_voice_id_ar="", tts_voice_id_hi="",
-            guardrail_mode="enforce", prompt_mode="ambassador",
-            demo_mode=False, language="en",
+            fish_api_key="",
+            fish_tts_model="s2.1-pro",
+            tts_voice_id_en="",
+            tts_voice_id_ar="",
+            tts_voice_id_hi="",
+            guardrail_mode="enforce",
+            prompt_mode="ambassador",
+            demo_mode=False,
+            language="en",
             allow_uncertified_language=False,
         )
 

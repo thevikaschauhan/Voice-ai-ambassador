@@ -103,9 +103,7 @@ TOOL_RESULTS: dict[str, str] = {
         "An ambassador has been notified and will pick this up. "
         "Tell the buyer a colleague will confirm this directly."
     ),
-    BOOKING_TOOL: (
-        "Slot noted. Read it back to the buyer and ask them to confirm."
-    ),
+    BOOKING_TOOL: ("Slot noted. Read it back to the buyer and ask them to confirm."),
 }
 
 
@@ -227,9 +225,7 @@ class LiveBackend:
             {"role": role, "content": content} for role, content in request.messages
         )
         if request.regeneration_detail is not None:
-            messages.append(
-                {"role": "system", "content": request.regeneration_detail}
-            )
+            messages.append({"role": "system", "content": request.regeneration_detail})
         body: dict[str, Any] = {
             "model": self._model,
             "messages": messages,

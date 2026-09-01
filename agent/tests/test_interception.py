@@ -176,7 +176,9 @@ async def test_a_suffixed_currency_amount_is_spoken_once(guard):
 
 
 async def test_only_the_violating_sentence_is_withheld_when_it_comes_first(guard):
-    stream = fake_llm_stream([f"Marina Heights is AED {FABRICATED}. ", "Shall I check?"])
+    stream = fake_llm_stream(
+        [f"Marina Heights is AED {FABRICATED}. ", "Shall I check?"]
+    )
     tts, _ = await drain(guarded_stream(stream, guard=guard("enforce")))
     assert FABRICATED not in tts.text
 
@@ -195,7 +197,9 @@ async def test_warn_mode_passes_the_violating_sentence_through_unmodified(guard)
     assert tts.text.strip() == sentence.strip()
 
 
-async def test_warn_and_enforce_differ_only_in_the_outcome(guard, allowed, patterns, forms):
+async def test_warn_and_enforce_differ_only_in_the_outcome(
+    guard, allowed, patterns, forms
+):
     decisions: list[str] = []
     for mode in ("enforce", "warn"):
         g = guard(mode)
@@ -314,9 +318,7 @@ async def test_a_spent_retry_with_nothing_spoken_is_still_a_fallback(guard):
 
     stream = fake_llm_stream([f"Marina Heights is AED {FABRICATED}. "])
     await drain(
-        guarded_stream(
-            stream, guard=guard("enforce"), sink=sink, regenerate=regenerate
-        )
+        guarded_stream(stream, guard=guard("enforce"), sink=sink, regenerate=regenerate)
     )
 
     assert bridges == []

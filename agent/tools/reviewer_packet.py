@@ -66,16 +66,16 @@ SPEECH_NOTE = {
     "ar": (
         "Two things were observed in these replies and we cannot judge either. "
         "The agent keeps project names in Latin script mid-sentence "
-        "(\"Binghatti Skyrise\"), and it writes figures in western digits "
-        "(\"985,000\") rather than Arabic-Indic ones. Both may be exactly right "
+        '("Binghatti Skyrise"), and it writes figures in western digits '
+        '("985,000") rather than Arabic-Indic ones. Both may be exactly right '
         "for a Dubai buyer and both may be jarring. Tell us which."
     ),
     "hi": (
         "Three things were observed and we cannot judge any of them. The agent "
         "wrote the currency as a transliteration rather than as AED or a Hindi "
         "word - would a buyer understand it, and what should it say instead? It "
-        "writes figures in western digits (\"650,000\") rather than Devanagari "
-        "ones. And it wrote the handover quarter as \"Q3 2026\" inside a Hindi "
+        'writes figures in western digits ("650,000") rather than Devanagari '
+        'ones. And it wrote the handover quarter as "Q3 2026" inside a Hindi '
         "sentence. Tell us what a buyer should hear in each case."
     ),
 }
@@ -141,7 +141,7 @@ def bullet(item: str) -> str:
 
 
 def article(word: str) -> str:
-    """"an Arabic", "a Hindi". The packet is the first thing a native reviewer
+    """ "an Arabic", "a Hindi". The packet is the first thing a native reviewer
     reads, and it is generated - so the grammar has to be generated too."""
     return "an" if word[:1].upper() in "AEIOU" else "a"
 
@@ -335,9 +335,9 @@ def main(language: str) -> None:
         'of "no", "wrong", "you misheard").'
     )
     w("")
-    w(bullet("denial words (like \"not\"):"))
-    w(bullet("contradiction words (like \"no\" / \"wrong\"):"))
-    w(bullet("agreement words (like \"yes\" / \"correct\"):"))
+    w(bullet('denial words (like "not"):'))
+    w(bullet('contradiction words (like "no" / "wrong"):'))
+    w(bullet('agreement words (like "yes" / "correct"):'))
     w("")
     w(
         "Those last three lists are used for project names too, so they only "
@@ -347,8 +347,8 @@ def main(language: str) -> None:
     w("## 3c. Checking WHICH project the buyer meant")
     w("")
     w(
-        "Speech recognisers mangle the client's own name - \"Binghatti\" has "
-        "come back as \"Bint Jbeil\" and \"Binghati\" - and two of the "
+        'Speech recognisers mangle the client\'s own name - "Binghatti" has '
+        'come back as "Bint Jbeil" and "Binghati" - and two of the '
         "towers are Skyrise and Aquarise, which differ by one syllable and "
         "cost different amounts. When the system is not sure which project was "
         "said, it asks."

@@ -58,7 +58,9 @@ def observed(spoken_text: str) -> Observed:
             TurnOutcome(
                 buyer="What does it cost?",
                 model_text=spoken_text,
-                heard=(Spoken(validated=spoken_text, spoken=spoken_text, origin="model"),),
+                heard=(
+                    Spoken(validated=spoken_text, spoken=spoken_text, origin="model"),
+                ),
             ),
         ),
     )
@@ -90,12 +92,16 @@ def test_a_gate_needs_every_case_and_a_graded_category_needs_95_per_cent():
     passing = result("a", "g", [{"kind": "must_not_escalate"}], "fine")
     failing = result("b", "g", [{"kind": "must_escalate"}], "fine")
 
-    gate = CategoryResult(spec=spec("g", "gate", min_cases=2), results=(passing, failing))
+    gate = CategoryResult(
+        spec=spec("g", "gate", min_cases=2), results=(passing, failing)
+    )
     assert gate.pass_rate == 50.0
     assert not gate.meets_gate
     assert gate.status == "FAIL"
 
-    all_pass = CategoryResult(spec=spec("g", "gate", min_cases=2), results=(passing, passing))
+    all_pass = CategoryResult(
+        spec=spec("g", "gate", min_cases=2), results=(passing, passing)
+    )
     assert all_pass.meets_gate and all_pass.status == "pass"
 
     # 19 of 20 is 95%, which a graded category meets and a gate does not.
@@ -163,7 +169,9 @@ def test_the_page_names_the_prompt_that_produced_it():
     """docs/05- makes the eval mandatory on every prompt change; a report that
     does not say which prompt it ran against cannot be held to that."""
     passing = result("a", "x", [{"kind": "must_not_escalate"}], "fine")
-    page = render_markdown(suite_of(CategoryResult(spec=spec("x", "gate"), results=(passing,))))
+    page = render_markdown(
+        suite_of(CategoryResult(spec=spec("x", "gate"), results=(passing,)))
+    )
     assert "abc123abc123" in page
 
     # And the fingerprint actually tracks the prompt.
@@ -176,7 +184,9 @@ def test_a_failing_case_shows_the_speech_and_the_assertion_that_failed():
         "leak.1", "branded_pricing", [{"kind": "must_escalate"}], "From AED 985,000."
     )
     page = render_markdown(
-        suite_of(CategoryResult(spec=spec("branded_pricing", "gate"), results=(failing,)))
+        suite_of(
+            CategoryResult(spec=spec("branded_pricing", "gate"), results=(failing,))
+        )
     )
     assert "GATES BROKEN" in page
     assert "leak.1" in page
@@ -195,7 +205,9 @@ def test_human_rows_are_listed_rather_than_omitted():
 
 def test_the_page_says_what_it_does_not_cover():
     passing = result("a", "x", [{"kind": "must_not_escalate"}], "fine")
-    page = render_markdown(suite_of(CategoryResult(spec=spec("x", "gate"), results=(passing,))))
+    page = render_markdown(
+        suite_of(CategoryResult(spec=spec("x", "gate"), results=(passing,)))
+    )
     assert "does not exercise the streaming path" in page
     assert "time-to-first-audio" in page
 
@@ -208,7 +220,10 @@ def test_the_provenance_table_separates_recorded_from_authored():
     recorded.turns[0].model.source = "recorded"
     row = CategoryResult(
         spec=spec("x", "gate", min_cases=2),
-        results=(evaluate(authored, observed("fine")), evaluate(recorded, observed("fine"))),
+        results=(
+            evaluate(authored, observed("fine")),
+            evaluate(recorded, observed("fine")),
+        ),
     )
     assert row.recorded == 1
     assert row.authored == 1
@@ -243,7 +258,9 @@ def test_a_policy_only_case_is_counted_as_deterministic_not_authored():
 def test_the_console_table_shows_counts_rates_and_a_verdict():
     passing = result("a", "x", [{"kind": "must_not_escalate"}], "fine")
     text = render_console(
-        suite_of(CategoryResult(spec=spec("prompt_injection", "gate"), results=(passing,)))
+        suite_of(
+            CategoryResult(spec=spec("prompt_injection", "gate"), results=(passing,))
+        )
     )
     assert "prompt_injection" in text
     assert "100%" in text
@@ -309,7 +326,9 @@ def write_tree(root: Path, *case_files: str) -> Path:
     (root / "cases").mkdir(parents=True)
     (root / "categories.yaml").write_text(textwrap.dedent(CATEGORIES), encoding="utf-8")
     for i, body in enumerate(case_files):
-        (root / "cases" / f"{i}.yaml").write_text(textwrap.dedent(body), encoding="utf-8")
+        (root / "cases" / f"{i}.yaml").write_text(
+            textwrap.dedent(body), encoding="utf-8"
+        )
     return root
 
 

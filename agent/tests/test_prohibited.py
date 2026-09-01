@@ -317,7 +317,12 @@ def test_a_duplicate_category_and_language_pair_is_rejected(tmp_path):
         load_patterns(
             write_complete(
                 tmp_path,
-                [("c", "ar", ["x"]), ("c", "ar", ["y"]), ("c", "en", []), ("c", "hi", [])],
+                [
+                    ("c", "ar", ["x"]),
+                    ("c", "ar", ["y"]),
+                    ("c", "en", []),
+                    ("c", "hi", []),
+                ],
             )
         )
 

@@ -51,7 +51,13 @@ def request(fixture=None, *, detail=None) -> ModelRequest:
 
 def fixture(**kwargs) -> ModelFixture:
     return ModelFixture.model_validate(
-        {"source": "authored", "intent": "compliant", "note": "n", "text": "t", **kwargs}
+        {
+            "source": "authored",
+            "intent": "compliant",
+            "note": "n",
+            "text": "t",
+            **kwargs,
+        }
     )
 
 
@@ -179,7 +185,10 @@ def test_a_tool_call_with_no_content_gets_the_second_inference():
                 json=reply(
                     content="",
                     tool_calls=[
-                        {"id": "c1", "function": {"name": ESCALATE_TOOL, "arguments": "{}"}}
+                        {
+                            "id": "c1",
+                            "function": {"name": ESCALATE_TOOL, "arguments": "{}"},
+                        }
                     ],
                 ),
             )
@@ -239,7 +248,10 @@ def test_the_round_trip_happens_once_and_does_not_loop():
             json=reply(
                 content="",
                 tool_calls=[
-                    {"id": f"c{calls}", "function": {"name": ESCALATE_TOOL, "arguments": "{}"}}
+                    {
+                        "id": f"c{calls}",
+                        "function": {"name": ESCALATE_TOOL, "arguments": "{}"},
+                    }
                 ],
             ),
         )
@@ -287,7 +299,10 @@ def test_a_failure_on_the_second_inference_is_reported_as_such():
                 json=reply(
                     content="",
                     tool_calls=[
-                        {"id": "c1", "function": {"name": ESCALATE_TOOL, "arguments": "{}"}}
+                        {
+                            "id": "c1",
+                            "function": {"name": ESCALATE_TOOL, "arguments": "{}"},
+                        }
                     ],
                 ),
             )

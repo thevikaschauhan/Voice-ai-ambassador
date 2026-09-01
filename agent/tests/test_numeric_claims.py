@@ -49,9 +49,7 @@ def test_unlisted_percentage_is_caught(allowed):
 
 
 def test_conversational_counts_are_exempt(allowed):
-    assert (
-        check_numeric_claims("It offers 3 bedrooms across 2 towers.", allowed) == []
-    )
+    assert check_numeric_claims("It offers 3 bedrooms across 2 towers.", allowed) == []
 
 
 def test_whitelisted_figures_pass(allowed):
@@ -210,9 +208,7 @@ def _numerals_with(tmp_path, language, **lists):
     into data/numerals.yaml - that file's `ar` and `hi` lists stay `VERIFY:`
     until a native speaker fills them.
     """
-    raw = yaml.safe_load(
-        (DATA_DIR / "numerals.yaml").read_text(encoding="utf-8")
-    )
+    raw = yaml.safe_load((DATA_DIR / "numerals.yaml").read_text(encoding="utf-8"))
     raw["languages"][language].update(lists)
     path = tmp_path / "numerals.yaml"
     path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
@@ -238,9 +234,7 @@ def test_the_arabic_multiplier_mechanism_blocks_the_claim_once_data_exists(
         tmp_path, "ar", multipliers={"مليون": 1000000}, currency_words=["درهم"]
     )
     assert "ar" in languages_covered(numerals)
-    violations = check_numeric_claims(
-        "يبدأ السعر من ٨ مليون درهم.", allowed, numerals
-    )
+    violations = check_numeric_claims("يبدأ السعر من ٨ مليون درهم.", allowed, numerals)
     assert [v.value for v in violations] == [8000000.0]
 
 

@@ -185,7 +185,9 @@ def test_a_violation_detail_quoting_an_amount_never_reaches_the_emitted_line():
     violation = GuardrailViolation(
         validator="numeric_claims",
         detail="AED 2,000,000 does not appear in the inventory",
-        figures=[ExtractedFigure(surface="AED 2,000,000", value=2000000.0, kind="amount")],
+        figures=[
+            ExtractedFigure(surface="AED 2,000,000", value=2000000.0, kind="amount")
+        ],
     )
     tracker.record_guardrail(
         raw="Your two million budget covers a two bedroom.",
@@ -208,7 +210,9 @@ def test_a_violation_detail_quoting_an_amount_never_reaches_the_emitted_line():
     for leaked in ("2,000,000", "2000000", "two million"):
         assert leaked not in buf.getvalue()
     # The in-memory record keeps the whole violation.
-    assert tracker.violations[0].detail == "AED 2,000,000 does not appear in the inventory"
+    assert (
+        tracker.violations[0].detail == "AED 2,000,000 does not appear in the inventory"
+    )
     assert tracker.violations[0].figures[0].value == 2000000.0
 
 
@@ -218,7 +222,9 @@ def test_tool_calls_emit_the_name_and_redact_the_argument_values():
     "the slot in the buyer's own words"."""
     log, buf = make_log(verbose=False)
     tracker = make_tracker(log)
-    tracker.record_tool("escalate_to_human", reason="buyer is angry about the Mumbai handover")
+    tracker.record_tool(
+        "escalate_to_human", reason="buyer is angry about the Mumbai handover"
+    )
     tracker.record_tool("offer_booking", slot="Saturday after my flight from Mumbai")
     log.close()
 
@@ -332,8 +338,10 @@ def emitted_event_names() -> dict[str, set[str]]:
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 func = node.func
-                name = func.attr if isinstance(func, ast.Attribute) else (
-                    func.id if isinstance(func, ast.Name) else None
+                name = (
+                    func.attr
+                    if isinstance(func, ast.Attribute)
+                    else (func.id if isinstance(func, ast.Name) else None)
                 )
                 if name in ("emit", "_on_event") and node.args:
                     first = node.args[0]
@@ -344,8 +352,10 @@ def emitted_event_names() -> dict[str, set[str]]:
             elif isinstance(node, ast.Dict):
                 for key, value in zip(node.keys, node.values):
                     if (
-                        isinstance(key, ast.Constant) and key.value == "event"
-                        and isinstance(value, ast.Constant) and isinstance(value.value, str)
+                        isinstance(key, ast.Constant)
+                        and key.value == "event"
+                        and isinstance(value, ast.Constant)
+                        and isinstance(value.value, str)
                     ):
                         found.setdefault(value.value, set()).add(path.name)
     assert not dynamic, (
@@ -382,7 +392,9 @@ def test_every_event_the_adapter_emits_is_classified():
     redacted, clear = set(_REDACTED_FIELDS), set(CLEAR_EVENTS)
 
     unclassified = {
-        name: sorted(files) for name, files in found.items() if name not in redacted | clear
+        name: sorted(files)
+        for name, files in found.items()
+        if name not in redacted | clear
     }
     assert not unclassified, (
         "these events are emitted but classified nowhere. Add each to "
@@ -502,7 +514,9 @@ async def test_the_file_sink_receives_the_same_redacted_stream(tmp_path: Path):
     log.emit("brief", turn=1, brief=BRIEF)
     await log.aclose()
 
-    written = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    written = [
+        json.loads(line) for line in path.read_text().splitlines() if line.strip()
+    ]
     assert written == lines(buf)
     assert UTTERANCE not in path.read_text()
     assert "Mumbai" not in path.read_text()
@@ -549,12 +563,16 @@ async def test_an_overflowing_queue_drops_the_oldest_and_reports_the_count():
     await log.aclose()
 
     emitted = lines(buf)
-    backpressure = [line_ for line_ in emitted if line_["event"] == "event_log_backpressure"]
+    backpressure = [
+        line_ for line_ in emitted if line_["event"] == "event_log_backpressure"
+    ]
     assert len(backpressure) == 1
     dropped = backpressure[0]["dropped"]
     assert dropped == total - backpressure[0]["queue_max"]
 
-    kept = [line_["sentence_index"] for line_ in emitted if line_["event"] == "guardrail"]
+    kept = [
+        line_["sentence_index"] for line_ in emitted if line_["event"] == "guardrail"
+    ]
     # The oldest went, the newest survived, and the order held.
     assert kept == list(range(dropped, total))
 
@@ -599,8 +617,12 @@ def test_a_bridge_and_a_fallback_emit_different_events():
 def test_mark_interrupted_flags_the_last_chunk_only():
     log, buf = make_log(verbose=False)
     tracker = make_tracker(log)
-    tracker.record_guardrail(raw="One.", outcome="pass", guardrail_ms=0.1, spoken="One.")
-    tracker.record_guardrail(raw="Two.", outcome="pass", guardrail_ms=0.1, spoken="Two.")
+    tracker.record_guardrail(
+        raw="One.", outcome="pass", guardrail_ms=0.1, spoken="One."
+    )
+    tracker.record_guardrail(
+        raw="Two.", outcome="pass", guardrail_ms=0.1, spoken="Two."
+    )
     tracker.mark_interrupted()
     record = tracker.finish()
     log.close()

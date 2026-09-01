@@ -271,7 +271,7 @@ _REMEDIES: Final[dict[str, str]] = {
     "DEEPGRAM_API_KEY": (
         "Deepgram nova-3 is the recogniser (ADR-017: 258-327ms after endpoint "
         "against the whole-utterance path's p50 1081ms, and it is the only path "
-        "that hears \"Binghatti\" and returns figures as digits). Either add a "
+        'that hears "Binghatti" and returns figures as digits). Either add a '
         "key from console.deepgram.com, or set STT_PROVIDER=openrouter to use "
         "the slower whole-utterance path on your existing OPENROUTER_API_KEY, "
         "or set STT_ENABLED= to run text mode with no recogniser at all."
@@ -294,7 +294,9 @@ def missing_credentials_error(missing: list[str]) -> str:
     """
     lines = ["missing credentials for the voice path: " + ", ".join(missing)]
     lines += [f"  {name}: {_REMEDIES[name]}" for name in missing if name in _REMEDIES]
-    lines.append("Set them in agent/.env (see agent/.env.example) or in the environment.")
+    lines.append(
+        "Set them in agent/.env (see agent/.env.example) or in the environment."
+    )
     return "\n".join(lines)
 
 

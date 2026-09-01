@@ -30,9 +30,7 @@ sys.path.insert(0, str(AGENT_DIR / "src"))
 from ambassador.inventory import load_inventory, serialise_for_prompt  # noqa: E402
 from ambassador.prompts import build_ambassador_prompt  # noqa: E402
 
-OUT_DIR = Path(
-    os.environ.get("SPIKE_OUT_DIR", "/tmp")
-)
+OUT_DIR = Path(os.environ.get("SPIKE_OUT_DIR", "/tmp"))
 
 
 def load_env() -> dict[str, str]:
@@ -42,7 +40,9 @@ def load_env() -> dict[str, str]:
         if line and not line.startswith("#") and "=" in line:
             k, _, v = line.partition("=")
             env[k.strip()] = v.split("#")[0].strip()
-    for k in list(env):  # process env overrides .env, e.g. FISH_TTS_MODEL for a free-tier run
+    for k in list(
+        env
+    ):  # process env overrides .env, e.g. FISH_TTS_MODEL for a free-tier run
         if os.environ.get(k):
             env[k] = os.environ[k]
     return env
@@ -65,7 +65,10 @@ def test_llm(env: dict[str, str]) -> bool:
         "max_tokens": 200,
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user", "content": "What does a studio at Binghatti Skyrise cost?"},
+            {
+                "role": "user",
+                "content": "What does a studio at Binghatti Skyrise cost?",
+            },
         ],
     }
     headers = {"Authorization": f"Bearer {env['OPENROUTER_API_KEY']}"}
@@ -83,9 +86,13 @@ def test_llm(env: dict[str, str]) -> bool:
                 for _ in range(4):
                     time.sleep(15)
                     t0 = time.perf_counter()
-                    retry = httpx.post(url, headers=headers, json={**body, "stream": False}, timeout=60)
+                    retry = httpx.post(
+                        url, headers=headers, json={**body, "stream": False}, timeout=60
+                    )
                     if retry.status_code == 200:
-                        print("  retry succeeded non-streaming; rerun script for streaming timings")
+                        print(
+                            "  retry succeeded non-streaming; rerun script for streaming timings"
+                        )
                         break
                     print(f"  still {retry.status_code}")
                 else:
@@ -113,15 +120,21 @@ def test_llm(env: dict[str, str]) -> bool:
         reasoning_toks = details.get("reasoning_tokens", 0) or 0
         cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
         print(
-            f"  [{attempt}] ttft={ttft*1000:.0f}ms  first_sentence="
-            f"{(first_sentence or total)*1000:.0f}ms  total={total:.2f}s  "
+            f"  [{attempt}] ttft={ttft * 1000:.0f}ms  first_sentence="
+            f"{(first_sentence or total) * 1000:.0f}ms  total={total:.2f}s  "
             f"prompt_tokens={usage.get('prompt_tokens')} (cached={cached})  "
             f"reasoning_tokens={reasoning_toks}"
         )
         print(f"  reply: {text[:160]!r}")
-        ok_all &= gate("thinking off", reasoning_toks == 0, f"{reasoning_toks} reasoning tokens")
+        ok_all &= gate(
+            "thinking off", reasoning_toks == 0, f"{reasoning_toks} reasoning tokens"
+        )
         if attempt == "warm":
-            ok_all &= gate("TTFT <= 600ms (warm)", ttft is not None and ttft <= 0.6, f"{ttft*1000:.0f}ms")
+            ok_all &= gate(
+                "TTFT <= 600ms (warm)",
+                ttft is not None and ttft <= 0.6,
+                f"{ttft * 1000:.0f}ms",
+            )
     return ok_all
 
 
@@ -142,7 +155,9 @@ def test_tts(env: dict[str, str]) -> tuple[bool, Path | None]:
     t0 = time.perf_counter()
     ttfb = None
     audio = b""
-    with httpx.stream("POST", "https://api.fish.audio/v1/tts", headers=headers, json=body, timeout=60) as r:
+    with httpx.stream(
+        "POST", "https://api.fish.audio/v1/tts", headers=headers, json=body, timeout=60
+    ) as r:
         if r.status_code != 200:
             r.read()
             print(f"  HTTP {r.status_code}: {r.text[:300]}")
@@ -154,9 +169,19 @@ def test_tts(env: dict[str, str]) -> tuple[bool, Path | None]:
     total = time.perf_counter() - t0
     out = OUT_DIR / "day1_tts_en.mp3"
     out.write_bytes(audio)
-    print(f"  first_audio_byte={ttfb*1000:.0f}ms  total={total:.2f}s  bytes={len(audio)}  saved={out}")
-    ok = gate("TTS first byte <= 300ms", ttfb is not None and ttfb <= 0.3, f"{ttfb*1000:.0f}ms")
-    gate("audio produced", len(audio) > 10_000, f"{len(audio)} bytes (listen to it for 'Binghatti')")
+    print(
+        f"  first_audio_byte={ttfb * 1000:.0f}ms  total={total:.2f}s  bytes={len(audio)}  saved={out}"
+    )
+    ok = gate(
+        "TTS first byte <= 300ms",
+        ttfb is not None and ttfb <= 0.3,
+        f"{ttfb * 1000:.0f}ms",
+    )
+    gate(
+        "audio produced",
+        len(audio) > 10_000,
+        f"{len(audio)} bytes (listen to it for 'Binghatti')",
+    )
     return ok, out
 
 
@@ -172,7 +197,9 @@ def test_stt(env: dict[str, str], audio_path: Path) -> bool:
     t0 = time.perf_counter()
     r = httpx.post(
         "https://openrouter.ai/api/v1/audio/transcriptions",
-        headers=headers, json=body, timeout=60,
+        headers=headers,
+        json=body,
+        timeout=60,
     )
     latency = time.perf_counter() - t0
     if r.status_code != 200:
@@ -180,11 +207,18 @@ def test_stt(env: dict[str, str], audio_path: Path) -> bool:
         return False
     data = r.json()
     text = data.get("text", "")
-    print(f"  latency={latency*1000:.0f}ms  usage={data.get('usage')}")
+    print(f"  latency={latency * 1000:.0f}ms  usage={data.get('usage')}")
     print(f"  transcript: {text!r}")
-    ok = gate("round-trip transcript sane", "binghatti" in text.lower() and "975" in text.replace(",", ""),
-              "brand name + figure survived TTS->STT")
-    gate("STT latency (info only - includes upload)", latency <= 1.0, f"{latency*1000:.0f}ms")
+    ok = gate(
+        "round-trip transcript sane",
+        "binghatti" in text.lower() and "975" in text.replace(",", ""),
+        "brand name + figure survived TTS->STT",
+    )
+    gate(
+        "STT latency (info only - includes upload)",
+        latency <= 1.0,
+        f"{latency * 1000:.0f}ms",
+    )
     return ok
 
 

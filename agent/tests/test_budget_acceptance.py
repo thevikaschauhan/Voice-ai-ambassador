@@ -35,14 +35,20 @@ NAMING_WINS = [
     # Precedence 1. The buyer names the figure as their budget across a
     # copula, so it is a budget even inside a source frame.
     ("The website says AED 750,000 is my budget", 750_000.0),
-    ("The website says AED 750,000 is my budget, and AED 800,000 is the listing price.", 750_000.0),
+    (
+        "The website says AED 750,000 is my budget, and AED 800,000 is the listing price.",
+        750_000.0,
+    ),
     ("my budget is 800k", 800_000.0),
     ("my budget is 2 crore", 20_000_000.0),
     ("my budget is AED 2,000,000", 2_000_000.0),
     ("The price is AED 985,000 and my budget is AED 2,000,000.", 2_000_000.0),
     # G6, anaphoric: a pronoun stands in for the figure just mentioned.
     ("the listing says AED 750,000 and that is my budget", 750_000.0),
-    ("The listing says AED 750,000, which is my budget, and AED 800,000 is the asking price.", 750_000.0),
+    (
+        "The listing says AED 750,000, which is my budget, and AED 800,000 is the asking price.",
+        750_000.0,
+    ),
 ]
 
 SOURCE_WITHHOLDS = [
@@ -127,7 +133,10 @@ KEYWORD_WINS = [
     # modifier-laden sentence is the one the old distance-bound gate discarded
     # after the precedence had already decided BUDGET for it.
     ("I can only spend 2 crore", 20_000_000.0),
-    ("My budget after several careful financial planning reviews is 750000.", 750_000.0),
+    (
+        "My budget after several careful financial planning reviews is 750000.",
+        750_000.0,
+    ),
     ("up to AED 2,000,000", 2_000_000.0),
 ]
 
@@ -197,7 +206,9 @@ def test_the_accumulated_string_set(vocabulary, mark, said, expected):
 
 
 @pytest.mark.parametrize(
-    "said,expected", [(s, e) for _, s, e in ACCEPTANCE], ids=[s[:48] for _, s, _ in ACCEPTANCE]
+    "said,expected",
+    [(s, e) for _, s, e in ACCEPTANCE],
+    ids=[s[:48] for _, s, _ in ACCEPTANCE],
 )
 def test_the_policy_speaks_exactly_when_a_figure_is_confirmed(
     vocabulary, said, expected
@@ -220,7 +231,7 @@ def test_the_policy_speaks_exactly_when_a_figure_is_confirmed(
         ('The agent said, "AED 750,000 or AED 800,000."', None),
         ('The agent said, "prices run from AED 750,000 to AED 900,000."', None),
         # quotative comma x fusion-cancel: reported range, then the buyer.
-        ('The agent said, AED 750,000 and AED 800,000 works for me.', 800_000.0),
+        ("The agent said, AED 750,000 and AED 800,000 works for me.", 800_000.0),
     ],
 )
 def test_quotative_comma_composes_with_fusion(vocabulary, said, expected):
@@ -233,7 +244,10 @@ def test_quotative_comma_composes_with_fusion(vocabulary, said, expected):
     [
         # anaphora x fusion-cancel: "which is my budget" names the first figure
         # while the second is sourced.
-        ("The listing says AED 750,000, which is my budget, and AED 800,000.", 750_000.0),
+        (
+            "The listing says AED 750,000, which is my budget, and AED 800,000.",
+            750_000.0,
+        ),
         # anaphora after a fused range names the LAST member, and the range
         # cancels because the buyer claims it.
         ("The listing says AED 750,000 or AED 800,000, which is my budget.", 800_000.0),
@@ -299,8 +313,7 @@ def test_a_price_noun_reaching_across_an_adjective_is_still_a_source(vocabulary)
     affordable for me" must stay the buyer's.
     """
     assert (
-        find_budget("prices are affordable from AED 750,000", vocabulary, "en")
-        is None
+        find_budget("prices are affordable from AED 750,000", vocabulary, "en") is None
     )
     mention = find_budget("AED 750,000 is affordable for me", vocabulary, "en")
     assert mention is not None and mention.value == 750_000.0
@@ -403,7 +416,10 @@ def test_the_quotative_exclusion_stops_at_the_quote(vocabulary, said, expected):
     [
         # P5. The keyword mark is segment-scoped and nothing distance-bound
         # gates it: the precedence deciding BUDGET has to survive selection.
-        ("My budget after several careful financial planning reviews is 750000.", 750_000.0),
+        (
+            "My budget after several careful financial planning reviews is 750000.",
+            750_000.0,
+        ),
         # Guard: a figure with no currency, no money unit and no keyword in its
         # segment is still not a budget candidate at all.
         ("I'm around floor 15", None),
@@ -449,9 +465,14 @@ def test_a_parenthetical_does_not_lose_the_keyword(vocabulary):
 
 @pytest.mark.parametrize(
     "adverbs",
-    ["", "clearly ", "very clearly ", "very clearly and repeatedly ",
-     "honestly, truly, and quite deliberately ",
-     "after much thought very carefully and repeatedly "],
+    [
+        "",
+        "clearly ",
+        "very clearly ",
+        "very clearly and repeatedly ",
+        "honestly, truly, and quite deliberately ",
+        "after much thought very carefully and repeatedly ",
+    ],
 )
 @pytest.mark.parametrize("verb", ["said", "told you"])
 def test_any_adverb_stack_leaves_the_buyer_as_the_subject(vocabulary, adverbs, verb):
@@ -464,9 +485,14 @@ def test_any_adverb_stack_leaves_the_buyer_as_the_subject(vocabulary, adverbs, v
 
 @pytest.mark.parametrize(
     "modifier",
-    ["", " from my office", " from my own agency", " who called me yesterday",
-     " that I spoke to about my budget",
-     " from the office near my building that I visited with my wife"],
+    [
+        "",
+        " from my office",
+        " from my own agency",
+        " who called me yesterday",
+        " that I spoke to about my budget",
+        " from the office near my building that I visited with my wife",
+    ],
 )
 def test_any_modifier_on_the_subject_keeps_it_the_seller(vocabulary, modifier):
     """P1, seller side. A first-person token inside the subject's own modifier
@@ -521,9 +547,7 @@ def test_a_source_gates_only_its_own_sentence(vocabulary, said, expected):
         ("The website says AED 750,000 is my budget", 750_000.0),
     ],
 )
-def test_both_naming_paths_consult_the_one_quotative_gate(
-    vocabulary, said, expected
-):
+def test_both_naming_paths_consult_the_one_quotative_gate(vocabulary, said, expected):
     mention = find_budget(said, vocabulary, "en")
     assert (None if mention is None else mention.value) == expected, said
 
@@ -540,13 +564,11 @@ def test_the_quotative_gate_is_a_single_choke_point(vocabulary):
     from ambassador import budget
 
     source = inspect.getsource(budget.find_budget)
-    body = source[source.index("def has_naming("):]
+    body = source[source.index("def has_naming(") :]
     body = body[: body.index("\n    def ", 1)] if "\n    def " in body[1:] else body
     # Every `return True` inside has_naming is a naming decision, and each must
     # be guarded by the gate.
-    decisions = [
-        line for line in body.splitlines() if line.strip() == "return True"
-    ]
+    decisions = [line for line in body.splitlines() if line.strip() == "return True"]
     assert decisions, "has_naming no longer returns a positive decision"
     assert body.count("naming_allowed") >= len(decisions), (
         "a naming path does not consult naming_allowed: the quotative gate has "
@@ -591,9 +613,7 @@ def test_a_coordinated_clause_moves_the_subject_whatever_heads_it(
     assert find_budget(said, vocabulary, "en") is None, said
 
 
-@pytest.mark.parametrize(
-    "subject", ["I", "we"]
-)
+@pytest.mark.parametrize("subject", ["I", "we"])
 @pytest.mark.parametrize("conjunction", ["but", "and"])
 def test_a_coordinated_clause_can_also_hand_the_turn_to_the_buyer(
     vocabulary, subject, conjunction
@@ -737,7 +757,9 @@ def test_a_capitalised_ly_token_is_a_name_not_an_adverb(vocabulary):
     seller's figure, which is the unsafe direction, so capitalisation is
     consulted - and only here, where being wrong about it withholds.
     """
-    assert find_budget("I like it, but Kelly said AED 750,000.", vocabulary, "en") is None
+    assert (
+        find_budget("I like it, but Kelly said AED 750,000.", vocabulary, "en") is None
+    )
     buyer = find_budget("I like it, but quickly said 2 crore.", vocabulary, "en")
     assert buyer is not None and buyer.value == 20_000_000.0
 
@@ -782,4 +804,6 @@ def test_residual_unlisted_non_ly_filler_withholds(vocabulary, filler):
 )
 def test_residual_a_lowercase_ly_name_reads_as_an_adverb(vocabulary):
     """The one input the capitalisation refinement cannot separate."""
-    assert find_budget("I like it, but kelly said AED 750,000.", vocabulary, "en") is None
+    assert (
+        find_budget("I like it, but kelly said AED 750,000.", vocabulary, "en") is None
+    )

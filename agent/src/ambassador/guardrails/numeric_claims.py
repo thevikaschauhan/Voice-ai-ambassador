@@ -60,5 +60,7 @@ def check_numeric_claims(
         violations.append(fig)
     # Reported last so the ordinary per-figure violations lead the detail line,
     # which is what an operator reading the log is looking for.
-    violations.extend(match.figure for match in find_composed_arithmetic(text, numerals))
+    violations.extend(
+        match.figure for match in find_composed_arithmetic(text, numerals)
+    )
     return violations

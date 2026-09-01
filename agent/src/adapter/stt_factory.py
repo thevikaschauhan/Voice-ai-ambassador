@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 
 from livekit.agents import stt
+
 # Module scope, not inside `build_stt`, and not a style choice: importing a
 # `livekit.plugins.*` module REGISTERS a plugin, and
 # `livekit/agents/plugin.py:register_plugin` raises if that happens off the main

@@ -192,8 +192,7 @@ def load_numerals(path: Path | None = None) -> Numerals:
                 )
             if isinstance(factor, bool) or not isinstance(factor, int | float):
                 raise ValueError(
-                    f"{where}.multipliers[{word!r}] must be a number, got "
-                    f"{factor!r}."
+                    f"{where}.multipliers[{word!r}] must be a number, got {factor!r}."
                 )
             multipliers[word.strip().lower()] = float(factor)
         words = _require_str_list(block.get("percent_words"), f"{where}.percent_words")
@@ -270,9 +269,7 @@ def load_numerals(path: Path | None = None) -> Numerals:
         # and "12 dhow" is not 12 dirhams.
         currency_before=re.compile(rf"(?<!\w)(?:{currency_alternation})\s*$", re.I),
         currency_after=re.compile(rf"^\s*(?:{currency_alternation})(?!\w)", re.I),
-        arithmetic_re=re.compile(
-            "[" + "".join(re.escape(c) for c in arithmetic) + "]"
-        ),
+        arithmetic_re=re.compile("[" + "".join(re.escape(c) for c in arithmetic) + "]"),
         strip_separators=str.maketrans("", "", "," + "".join(separators)),
         languages=frozenset(covered),
     )

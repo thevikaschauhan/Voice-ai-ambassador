@@ -441,7 +441,7 @@ def test_a_placeholder_row_leaves_the_digits_alone(tmp_path: Path):
         "en:\n"
         "  currency_tokens: []\n"
         "  forms:\n"
-        "    - { kind: amount, value: 80015, verify: \"client fact\" }\n",
+        '    - { kind: amount, value: 80015, verify: "client fact" }\n',
         encoding="utf-8",
     )
     forms = load_spoken_forms(path)

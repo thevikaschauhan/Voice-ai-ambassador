@@ -102,6 +102,7 @@ from .tts_pool import connection_state, reprewarm
 
 logger = logging.getLogger("ambassador.agent")
 
+
 @dataclass
 class _PendingTurn:
     """A turn that has left the conversation but not yet its own audio.
@@ -301,9 +302,7 @@ class AmbassadorAgent(Agent):
             "recognition_policy",
             active=self._recognition_policy_runs,
             call_language=settings.language,
-            copy_languages=sorted(
-                confirmations.languages_covered(RECOGNITION_KEYS)
-            ),
+            copy_languages=sorted(confirmations.languages_covered(RECOGNITION_KEYS)),
             noise_languages=sorted(self._noise_words.languages_covered()),
         )
         if not self._recognition_policy_runs:
@@ -667,9 +666,7 @@ class AmbassadorAgent(Agent):
             step.project.action,
         )
 
-    def _handover(
-        self, tracker: TurnTracker, policy: str, reason: str
-    ) -> _OwedTurn:
+    def _handover(self, tracker: TurnTracker, policy: str, reason: str) -> _OwedTurn:
         """The fail-closed end of every confirmation path.
 
         Closes every policy, not just the one that broke: a buyer being handed
@@ -846,9 +843,7 @@ class AmbassadorAgent(Agent):
                 tracker.record_project_confirmation(owed.text, owed.action)
             else:
                 tracker.record_recognition_escalation(owed.text)
-            yield (
-                owed.text if owed.text.endswith((" ", "\n")) else (owed.text + " ")
-            )
+            yield (owed.text if owed.text.endswith((" ", "\n")) else (owed.text + " "))
             return
 
         # Emitted here, after the confirmation check, because it claims a

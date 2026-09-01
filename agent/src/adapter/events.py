@@ -790,9 +790,7 @@ class TurnTracker:
         the flag lives on the tracker rather than on the agent.
         """
         if self.handed_over:
-            self._log.emit(
-                "escalation_suppressed", turn=self.turn_index, reason=reason
-            )
+            self._log.emit("escalation_suppressed", turn=self.turn_index, reason=reason)
             return False
         self.handed_over = True
         self._log.emit("escalation", reason=reason, routed_to="human_ambassador")
@@ -883,9 +881,7 @@ class TurnTracker:
             llm_ttft_ms=_ms(self.llm_ttft),
             llm_first_sentence_ms=_ms(self.llm_first_sentence),
             guardrail_ms=(
-                None
-                if self.guardrail_total is None
-                else round(self.guardrail_total, 2)
+                None if self.guardrail_total is None else round(self.guardrail_total, 2)
             ),
             tts_first_audio_ms=_ms(self.tts_first_audio),
             total_ms=_ms(total),
