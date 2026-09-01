@@ -55,7 +55,7 @@ from livekit.agents.metrics import EOUMetrics
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils import is_given
 from livekit.agents.voice import SpeechHandle
-from livekit.plugins import fishaudio, silero
+from livekit.plugins import silero
 
 from ambassador.budget import BudgetPolicy, Decision, load_currency_vocabulary
 from ambassador.confirmation import ConfirmationCoordinator, Step
@@ -96,6 +96,8 @@ from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
 from .lexicon import load_lexicon, respell_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
 from .stt_factory import build_stt, describe
+from .tts_factory import build_tts
+from .tts_factory import describe as describe_tts
 from .tts_pool import connection_state, reprewarm
 
 logger = logging.getLogger("ambassador.agent")
@@ -1331,12 +1333,8 @@ async def entrypoint(ctx: JobContext) -> None:
         # OpenRouter rejected audio under a $0.50 balance.
         log.emit("stt_disabled", reason="STT_ENABLED is not set")
 
-    tts = fishaudio.TTS(
-        api_key=settings.fish_api_key,
-        model=settings.fish_tts_model,
-        voice_id=settings.voice_id(settings.language) or fishaudio.tts.DEFAULT_VOICE_ID,
-        latency_mode="low",
-    )
+    tts = build_tts(settings)
+    log.emit("tts_enabled", **describe_tts(tts))
 
     llm = build_llm(settings, agent.note_usage, agent.note_upstream_status)
 

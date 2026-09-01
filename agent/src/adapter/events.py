@@ -217,6 +217,7 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "prohibited_coverage": "language codes, a boolean and a pattern count",
     "stt_enabled": "the STT model and provider names",
     "stt_disabled": "a fixed literal reason the adapter wrote",
+    "tts_enabled": "the TTS provider and model names, the audio format, a sample rate and two enums",
     "llm_request": "turn index, the tool names offered, the tool-choice mode",
     "llm_upstream_error": "turn index, an HTTP status, a fixed literal note",
     "llm_ttft": "turn index, milliseconds, the model name",
