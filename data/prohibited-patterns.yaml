@@ -27,6 +27,16 @@
 # empty `patterns: []` is a DECLARATION: the slot is real, validated, and
 # waiting for its author. The ar and hi slots at the bottom of this file are
 # exactly that.
+#
+# THE MATRIX IS ENFORCED. Every category that appears here declares EXACTLY ONE
+# group per language - en, ar and hi - empty ones as `patterns: []`. Adding a
+# sixth category means adding three groups, not one. The loader refuses to start
+# otherwise, for a reason worth knowing before you argue with it: CHANGING one
+# group's `language` to another valid code is invisible on its own. Move the
+# English return_guarantees group to `ar` and the file loads, Arabic calls still
+# catch "risk-free", and English calls silently stop. What that edit DOES leave
+# behind is a duplicate slot for the target language and a missing one for the
+# source, so the matrix is where it is caught.
 
 - category: return_guarantees
   language: en

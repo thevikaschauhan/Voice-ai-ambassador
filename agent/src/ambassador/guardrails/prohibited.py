@@ -38,12 +38,24 @@ a future Arabic pattern carrying a Latin fragment, or romanised Hindi - the
 filter prevents a false positive on the other language, and a false positive
 is a sentence the buyer never hears.
 
-**The failure mode the filter introduces, and its guard.** A typo'd language
-code used to be harmless, because everything applied to everything. Under
-filtering, `language: eng` silently disables the whole group: it is not
-English, so it never always-applies, and it matches no call language either.
-That is fail-open on the compliance validator, so the loader now rejects any
-code outside `schemas.Language` at start-up rather than at demo time.
+**The failure mode the filter introduces, and its two guards.** A wrong
+language code used to be harmless, because everything applied to everything.
+Under filtering it silently disables the whole group, which is fail-open on the
+compliance validator, so the loader refuses to start on either shape of it:
+
+  An UNKNOWN code (`language: eng`) is rejected outright. It is not English, so
+  it never always-applies, and it matches no call language either.
+
+  A VALID WRONG code is the nastier one, because nothing about the group looks
+  broken: relabel the English `return_guarantees` group as `ar` and the file
+  loads, `ar` calls still catch "risk-free", and English calls stop catching it.
+  So the loader also validates the (category, language) MATRIX: no duplicate
+  pairs, and exactly one group per supported language for every category that
+  appears at all. The relabel then fails twice over - it duplicates the target
+  language's slot and empties the source language's - and it fails at start-up
+  rather than in the room. This cannot prove the semantic language of arbitrary
+  regex text; it catches the ordinary single-field mislabel that the explicit
+  empty-slot design makes easy to commit.
 
 ## The gap this does not close
 
@@ -90,6 +102,45 @@ class ProhibitedPattern:
     regex: re.Pattern
 
 
+def _validate_matrix(source_name: str, groups: list[dict]) -> None:
+    """Every category that appears must declare exactly one slot per language.
+
+    The guard for a mislabelled `language`, which routing turned from harmless
+    into a silent switch-off - see the module docstring. Runs after per-group
+    validation so a malformed group still gets its own specific message, and
+    before anything is returned so a bad matrix cannot reach a call.
+    """
+    slots: dict[tuple[str, str], int] = {}
+    for index, group in enumerate(groups):
+        key = (group["category"], group["language"])
+        if key in slots:
+            raise ValueError(
+                f"{source_name}: groups {slots[key]} and {index} both declare "
+                f"({key[0]!r}, {key[1]!r}). Exactly one slot per language per "
+                "category, because a duplicate is what a mislabelled "
+                "'language' looks like from here: the group that was moved IN "
+                "duplicates this one, and the language it moved OUT of "
+                "silently stops being checked."
+            )
+        slots[key] = index
+
+    for category in sorted({name for name, _ in slots}):
+        missing = sorted(
+            language for language in _LANGUAGES if (category, language) not in slots
+        )
+        if missing:
+            raise ValueError(
+                f"{source_name}: category {category!r} has no slot for "
+                f"{'/'.join(missing)}. Every category declares one group per "
+                f"language ({'/'.join(sorted(_LANGUAGES))}), empty ones as "
+                "'patterns: []'. Two reasons: a category present for one "
+                "language and absent for another is how a mislabelled "
+                "'language' hides, and the empty slots are where a native "
+                "reviewer writes - a category with no slot is a category "
+                "nobody will be asked about."
+            )
+
+
 def load_patterns(path: Path | None = None) -> list[ProhibitedPattern]:
     """Compile the file, or say what is wrong with it in one sentence.
 
@@ -110,6 +161,7 @@ def load_patterns(path: Path | None = None) -> list[ProhibitedPattern]:
         )
 
     compiled: list[ProhibitedPattern] = []
+    validated: list[dict] = []
     for index, group in enumerate(groups):
         where = f"{source.name}: group {index}"
         if not isinstance(group, dict):
@@ -168,6 +220,8 @@ def load_patterns(path: Path | None = None) -> list[ProhibitedPattern]:
                     regex=regex,
                 )
             )
+        validated.append(group)
+    _validate_matrix(source.name, validated)
     return compiled
 
 

@@ -161,13 +161,8 @@ def test_coverage_reports_the_languages_actually_authored(patterns):
 def test_coverage_is_honest_about_a_language_with_no_patterns(tmp_path):
     """The gap this exists to surface: a language the system offers and the
     guardrail does not cover."""
-    source = tmp_path / "prohibited-patterns.yaml"
-    source.write_text(
-        "- category: return_guarantees\n"
-        "  language: en\n"
-        "  patterns:\n"
-        '    - "\\\\brisk[-\\\\s]?free\\\\b"\n',
-        encoding="utf-8",
+    source = write_complete(
+        tmp_path, [("return_guarantees", "en", [r"\brisk[-\s]?free\b"])]
     )
     covered = languages_covered(load_patterns(source))
     assert "en" in covered
@@ -184,9 +179,13 @@ def test_a_declared_but_empty_slot_does_not_read_as_coverage(patterns):
 
 
 def test_the_shipped_file_declares_every_category_for_ar_and_hi():
-    """The reviewer's slots are real and complete, checked against the English
-    categories rather than a hand-typed list, so adding a sixth category to the
-    English section cannot leave ar and hi silently short of one."""
+    """The reviewer's slots are real, complete, and EMPTY.
+
+    The loader enforces the first two now (it validates the matrix), so what
+    this adds is the third: the ar and hi slots must carry no patterns, because
+    nobody here may author them. Delete this test the day a native reviewer
+    delivers, not before.
+    """
     raw = yaml.safe_load(
         (DATA_DIR / "prohibited-patterns.yaml").read_text(encoding="utf-8")
     )
@@ -217,8 +216,33 @@ def test_the_shipped_file_declares_every_category_for_ar_and_hi():
 
 
 def write_patterns(tmp_path, body: str):
+    """Raw, exactly as given. For fixtures that are deliberately malformed."""
     path = tmp_path / "prohibited-patterns.yaml"
     path.write_text(body, encoding="utf-8")
+    return path
+
+
+def write_complete(tmp_path, groups: list[tuple[str, str, list[str]]]):
+    """Write a file whose (category, language) matrix is COMPLETE.
+
+    The loader requires one slot per language for every category that appears,
+    so a fixture about anything else has to satisfy that first. Pass only the
+    groups the test cares about; the rest are filled with `patterns: []`, which
+    is what the shipped file does.
+    """
+    declared = {(category, language) for category, language, _ in groups}
+    body = [
+        {"category": category, "language": language, "patterns": patterns}
+        for category, language, patterns in groups
+    ]
+    for category in sorted({name for name, _ in declared}):
+        for language in sorted(get_args(Language)):
+            if (category, language) not in declared:
+                body.append(
+                    {"category": category, "language": language, "patterns": []}
+                )
+    path = tmp_path / "prohibited-patterns.yaml"
+    path.write_text(yaml.safe_dump(body, allow_unicode=True), encoding="utf-8")
     return path
 
 
@@ -238,9 +262,7 @@ def test_an_explicitly_empty_pattern_list_is_a_declaration_not_an_error(tmp_path
     author. The distinction is what lets the ar and hi gap live in the data file
     instead of in a comment, which this repo has learned reads as configuration
     and is not."""
-    loaded = load_patterns(
-        write_patterns(tmp_path, "- category: c\n  language: ar\n  patterns: []\n")
-    )
+    loaded = load_patterns(write_complete(tmp_path, [("c", "ar", [])]))
     assert loaded == []
     assert languages_covered(loaded) == frozenset()
 
@@ -252,6 +274,76 @@ def test_a_null_pattern_list_is_still_an_error(tmp_path):
         load_patterns(
             write_patterns(tmp_path, "- category: c\n  language: ar\n  patterns:\n")
         )
+
+
+def test_a_group_relabelled_to_another_valid_language_is_rejected(tmp_path):
+    """Meredith's HIGH on PR #43, at the layer she asked for.
+
+    The unknown-code guard below cannot see this one: `ar` is a language the
+    product offers, so nothing about the group looks wrong. Reproduced against
+    the SHIPPED file rather than a toy, because that is the edit somebody
+    actually makes - move the English return_guarantees group to `ar` and the
+    file loaded cleanly, `ar` calls still caught "risk-free", and English calls
+    silently stopped catching it. Apply-everything had caught it in every
+    language, so routing is what turned this into a hole.
+    """
+    raw = yaml.safe_load(
+        (DATA_DIR / "prohibited-patterns.yaml").read_text(encoding="utf-8")
+    )
+    for group in raw:
+        if group["category"] == "return_guarantees" and group["language"] == "en":
+            group["language"] = "ar"
+    path = tmp_path / "prohibited-patterns.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="both declare"):
+        load_patterns(path)
+
+
+def test_the_english_pattern_that_relabel_would_have_silenced(patterns):
+    """The other half of the same finding: what the group is FOR.
+
+    Guarding the matrix is only worth it if the group it protects is doing
+    work, so this pins the exact sentence the relabel let through on an
+    English call.
+    """
+    assert check_prohibited("It is a risk-free investment.", patterns, "en")
+
+
+def test_a_duplicate_category_and_language_pair_is_rejected(tmp_path):
+    """Two slots for the same pair is the shape a mislabel leaves behind, and
+    it is also just ambiguous: two places to edit, one of which is dead."""
+    with pytest.raises(ValueError, match="both declare"):
+        load_patterns(
+            write_complete(
+                tmp_path,
+                [("c", "ar", ["x"]), ("c", "ar", ["y"]), ("c", "en", []), ("c", "hi", [])],
+            )
+        )
+
+
+def test_a_category_missing_a_language_slot_is_rejected(tmp_path):
+    """The other direction, and the shape of Meredith's one-group fixture: a
+    category present for one language and absent for another is where a
+    mislabel hides, and a category with no slot is one no reviewer is asked
+    about."""
+    for present in get_args(Language):
+        groups = f'- category: c\n  language: {present}\n  patterns:\n    - "x"\n'
+        with pytest.raises(ValueError, match="has no slot for"):
+            load_patterns(write_patterns(tmp_path, groups))
+
+
+def test_the_matrix_guard_runs_after_the_per_group_checks(tmp_path):
+    """Ordering, asserted. A malformed group must still get its own specific
+    message rather than a matrix complaint about the file it sits in - the
+    person reading it is transcribing patterns, not auditing structure."""
+    # A valid language, a broken regex, and an incomplete matrix all at once.
+    # The regex message is the useful one, so it must win.
+    path = write_patterns(
+        tmp_path, '- category: c\n  language: ar\n  patterns:\n    - "[unclosed"\n'
+    )
+    with pytest.raises(ValueError, match="not a valid regular expression"):
+        load_patterns(path)
 
 
 def test_a_language_the_product_does_not_offer_is_rejected(tmp_path):
