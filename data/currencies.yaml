@@ -69,15 +69,25 @@ budget_keywords:
 # comma rules; three earlier mechanisms built from those all shipped adjacent
 # regressions.
 #
-# THE PRECEDENCE, first match wins, per figure:
-#   1. copular_naming in its segment  -> budget
+# THE PRECEDENCE, first match wins, per figure. `_PRECEDENCE` in
+# ambassador/budget.py is the authority; this restates it for whoever is
+# reading the word lists, and the two must not drift apart:
+#   1. naming in its segment          -> budget
 #   2. source in its segment          -> WITHHELD
 #   3. affordability in its sentence  -> budget
-#   4. question                       -> WITHHELD
-#   5. ownership in its segment       -> budget
+#   4. question in its sentence       -> WITHHELD
+#   5. dimension in its segment       -> WITHHELD  (ambiguous unit only)
 #   6. budget keyword in its segment  -> budget
 #   7. otherwise                      -> budget (over-ask)
 # and a withheld figure is never selected while a live one exists.
+#
+# OWNERSHIP is deliberately NOT a step: it ranks below everything that
+# withholds and its outcome equals the default, so it could never change an
+# answer - checked by deleting it against every accumulated string. The MARK
+# is still computed, because range fusion is cancelled by it.
+#
+# There are no distances anywhere. A mark applies to the segment or the
+# sentence it is in, and nothing is bound to a figure by proximity.
 #
 # Read the direction before editing any list here. `source` and `question` are
 # the only two that can LOSE a budget, and a missed budget is an unconfirmed

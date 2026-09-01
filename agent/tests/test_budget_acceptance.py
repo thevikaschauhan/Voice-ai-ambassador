@@ -2,9 +2,11 @@
 
 One table, every string any of the three review rounds produced, plus god's
 worked examples and the cross-product of the mark classes. The design is god's
-round-three spec plus its six amendments (`data/currencies.yaml` carries the
-precedence); this file is what "conforms to the spec" means, so a reviewer can
-check the policy against the table rather than against a narrative.
+round-three spec plus its six amendments. `_PRECEDENCE` in
+`ambassador/budget.py` is the authority; `data/currencies.yaml` restates it for
+whoever is reading the word lists. This file is what "conforms to the spec"
+means, so a reviewer can check the policy against the table rather than against
+a narrative.
 
 Each row is `(utterance, expected_value)` where `None` means WITHHELD - the
 model answers the buyer instead of the policy taking the turn - and a number
@@ -89,6 +91,10 @@ AFFORDABILITY_WINS = [
     ("Is this AED 800,000 enough for a studio?", 800_000.0),
     ("Is that 2 crore enough for me?", 20_000_000.0),
     ("Can I afford AED 985,000?", 985_000.0),
+    # Decided by affordability, not by the default: "I can afford" is a
+    # first-person affordability shape. It was mislabelled under DEFAULT, which
+    # left the table unable to notice a precedence regression on it.
+    ("I can afford 750,000", 750_000.0),
     ("would 2 crore be enough", 20_000_000.0),
     ("AED 750,000 is affordable for me", 750_000.0),
 ]
@@ -111,11 +117,18 @@ DEFAULT_OVER_ASKS = [
     ("around 800k", 800_000.0),
     ("2 crore", 20_000_000.0),
     ("we are looking at around 985,000 dirhams", 985_000.0),
-    ("I can afford 750,000", 750_000.0),
-    ("I can only spend 2 crore", 20_000_000.0),
     ("I said 2 crore", 20_000_000.0),  # saying verbs keep the first-person exemption
     ("I have 2 crore, what is the price?", 20_000_000.0),
     ("I can do 2 million, is that ok?", 2_000_000.0),
+]
+
+KEYWORD_WINS = [
+    # Precedence 6, and segment-scoped with no distance anywhere. The
+    # modifier-laden sentence is the one the old distance-bound gate discarded
+    # after the precedence had already decided BUDGET for it.
+    ("I can only spend 2 crore", 20_000_000.0),
+    ("My budget after several careful financial planning reviews is 750000.", 750_000.0),
+    ("up to AED 2,000,000", 2_000_000.0),
 ]
 
 RANGE_FUSION = [
@@ -165,6 +178,7 @@ ACCEPTANCE = (
     + [("question", *row) for row in QUESTION_WITHHOLDS]
     + [("affordability", *row) for row in AFFORDABILITY_WINS]
     + [("dimension", *row) for row in DIMENSION_WITHHOLDS]
+    + [("keyword", *row) for row in KEYWORD_WINS]
     + [("default", *row) for row in DEFAULT_OVER_ASKS]
     + [("fusion", *row) for row in RANGE_FUSION]
     + [("fusion-cancel", *row) for row in FUSION_CANCELLED]
@@ -306,3 +320,120 @@ def test_an_impersonal_affordability_question_is_still_a_budget(vocabulary):
         "The website says AED 750,000 is affordable for most buyers.",
     ):
         assert find_budget(said, vocabulary, "en") is None, said
+
+
+# --- the five conformance slips, each with the guard that bounds its fix -----
+
+
+@pytest.mark.parametrize(
+    "said,expected",
+    [
+        # P1. The exemption keys on the SUBJECT of the saying verb, so an
+        # adverb between subject and verb cannot turn the buyer's restatement
+        # into a source.
+        ("I clearly said 2 crore.", 20_000_000.0),
+        ("We already told you 2 crore.", 20_000_000.0),
+        ("I honestly told you 2 crore", 20_000_000.0),
+        # Guard: a source noun before the verb IS the subject, whatever
+        # pronouns follow it.
+        ("The agent told me I could afford 2m.", None),
+        ("my agent said AED 750,000", None),
+    ],
+)
+def test_the_exemption_keys_on_the_verbs_subject(vocabulary, said, expected):
+    mention = find_budget(said, vocabulary, "en")
+    assert (None if mention is None else mention.value) == expected, said
+
+
+@pytest.mark.parametrize(
+    "said,expected",
+    [
+        # P2. Amendment 2's reach is symmetric - the grant was both orders.
+        ("AED 750,000 is an affordable price.", None),
+        ("AED 750,000 is a reasonable sale price.", None),
+        ("prices are affordable from AED 750,000", None),
+        # Guard: keyed to the price noun, so a sentence naming no price stays
+        # the buyer's.
+        ("AED 750,000 is affordable for me", 750_000.0),
+    ],
+)
+def test_the_price_noun_reach_is_symmetric(vocabulary, said, expected):
+    mention = find_budget(said, vocabulary, "en")
+    assert (None if mention is None else mention.value) == expected, said
+
+
+@pytest.mark.parametrize(
+    "said,expected",
+    [
+        # P3. "A sentence with no source mark" means no source on ANY of its
+        # figures, not just the one being judged.
+        ("Would 2 crore be enough, given AED 750,000 is the sale price?", None),
+        # A source in a DIFFERENT sentence does not reach: the amendment reads
+        # per sentence, and "?" ends this one. My first draft of this row
+        # expected None and was simply wrong about the sentence boundary.
+        ("Would 2 crore be enough? The listing says AED 750,000.", 20_000_000.0),
+        # Guard: with nobody else in the sentence, the bare shape still counts.
+        ("would 2 crore be enough", 20_000_000.0),
+        ("Would 2 crore be enough?", 20_000_000.0),
+    ],
+)
+def test_bare_affordability_looks_at_the_whole_sentence(vocabulary, said, expected):
+    mention = find_budget(said, vocabulary, "en")
+    assert (None if mention is None else mention.value) == expected, said
+
+
+@pytest.mark.parametrize(
+    "said,expected",
+    [
+        # P4. The quotative exclusion covers the DIRECT naming inside the
+        # quote, not an anaphor the buyer adds outside it.
+        ('They said, "AED 750,000", and that is my budget.', 750_000.0),
+        ('The agent said, "AED 800,000", which is my budget.', 800_000.0),
+        # Guard: the possessive INSIDE the quote is still the speaker's.
+        ('They said, "our maximum is AED 2m."', None),
+    ],
+)
+def test_the_quotative_exclusion_stops_at_the_quote(vocabulary, said, expected):
+    mention = find_budget(said, vocabulary, "en")
+    assert (None if mention is None else mention.value) == expected, said
+
+
+@pytest.mark.parametrize(
+    "said,expected",
+    [
+        # P5. The keyword mark is segment-scoped and nothing distance-bound
+        # gates it: the precedence deciding BUDGET has to survive selection.
+        ("My budget after several careful financial planning reviews is 750000.", 750_000.0),
+        # Guard: a figure with no currency, no money unit and no keyword in its
+        # segment is still not a budget candidate at all.
+        ("I'm around floor 15", None),
+        ("three bedrooms please", None),
+        ("The price is AED 985,000 and my budget is AED 2,000,000.", 2_000_000.0),
+    ],
+)
+def test_the_keyword_mark_has_no_distance_gate(vocabulary, said, expected):
+    mention = find_budget(said, vocabulary, "en")
+    assert (None if mention is None else mention.value) == expected, said
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "OPEN, god's call, and a consequence of the spec rather than a slip. "
+        "Segmentation cuts on EVERY comma by design, so a keyword separated "
+        "from its figure by a parenthetical lands in a different segment and "
+        "the figure has no mark left to qualify it: 'My budget, after talking "
+        "it over with my wife at length, is 750000' is lost. Meredith's P5 "
+        "string is the same shape WITHOUT commas and now passes. Not closed by "
+        "invention - the amendment I would propose is that a comma-delimited "
+        "parenthetical does not divide a claim when the text resumes with a "
+        "copula. Found by my own probing, not by review."
+    ),
+)
+def test_a_parenthetical_does_not_lose_the_keyword(vocabulary):
+    mention = find_budget(
+        "My budget, after talking it over with my wife at length, is 750000.",
+        vocabulary,
+        "en",
+    )
+    assert mention is not None and mention.value == 750_000.0

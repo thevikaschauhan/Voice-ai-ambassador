@@ -140,6 +140,12 @@ def _budget_units() -> re.Pattern[str]:
 # no other: suppressing every amount near a room was a regression, because "I
 # have AED 800,000 for a room" is a budget and a room does not make a currency
 # ambiguous.
+# How far back the subject of a saying verb may sit. "I clearly said" and "We
+# already told you" are the buyer; an immediate-token test lost both, and the
+# scan stops at a source noun anyway, so the window only has to cover ordinary
+# adverbs.
+_SUBJECT_TOKENS = 4
+
 _AMBIGUOUS_UNITS = frozenset({"m"})
 
 
@@ -758,15 +764,29 @@ def find_budget(
         # speech whose possessive belongs to the speaker, not to the buyer.
         # Reading the exemption as "any first person anywhere" let a source
         # noun like "you" defeat it in "I told you 2 crore".
+        def subject_is_first_person(before: str) -> bool:
+            """Is the subject of this saying verb the buyer?
+
+            Looked for over the last few word tokens rather than the one
+            immediately before the verb: "I CLEARLY said 2 crore" and "We
+            ALREADY told you 2 crore" are the buyer restating their own budget,
+            and an immediate-token test lost both. The scan stops at a source
+            noun, because that noun IS the subject - "the agent told me I could
+            afford 2m" is the agent talking whatever pronouns follow.
+            """
+            tokens = re.findall(r"[^\W_]+", before)[-_SUBJECT_TOKENS:]
+            for token in reversed(tokens):
+                if token in word_list("first_person"):
+                    return True
+                if token in word_list("source_nouns"):
+                    return False
+            return False
+
         for verb in word_list("saying_verbs"):
             if not verb:
                 continue
             for found in re.finditer(_token_pattern(verb), segment):
-                subject = segment[: found.start()].rstrip()
-                if any(
-                    word and re.search(rf"(?<!\w){re.escape(word)}$", subject)
-                    for word in word_list("first_person")
-                ):
+                if subject_is_first_person(segment[: found.start()]):
                     continue
                 return True
         return copular(i, word_list("price_nouns"), reach=2)
@@ -817,7 +837,10 @@ def find_budget(
                 if not copula:
                     continue
                 before = rf"(?<!\w){re.escape(term)}\s+{re.escape(copula)}{gap}"
-                after = rf"^\s*{re.escape(copula)}\s+(the\s+)?{re.escape(term)}(?!\w)"
+                after = (
+                    rf"^\s*{re.escape(copula)}\s+{crossing}"
+                    rf"(?:the|a|an)?\s*{re.escape(term)}(?!\w)"
+                )
                 if re.search(before, lowered[:figure_start]) or re.match(
                     after, lowered[figure_end:]
                 ):
@@ -846,9 +869,14 @@ def find_budget(
         one immediately before it, so both are checked.
         """
         seg_start, seg_end = enclosing(segments, spans[i][0])
-        if is_quotative(lowered[seg_start:seg_end]):
-            return False
-        if copular(i, word_list("naming_terms")):
+        # Amendment 1 excludes naming INSIDE reported speech, which is the
+        # direct copular form - the possessive belongs to the speaker being
+        # quoted. It does not reach an anaphor the buyer adds afterwards:
+        # 'They said, "AED 750,000", and that is my budget' names the figure
+        # from outside the quotation, so the anaphoric check below still runs.
+        if not is_quotative(lowered[seg_start:seg_end]) and copular(
+            i, word_list("naming_terms")
+        ):
             return True
         naming = word_list("naming_terms")
         anaphors = word_list("anaphora")
@@ -869,6 +897,22 @@ def find_budget(
         window = lowered[after_here:next_figure]
         return any(re.search(shape, window) for shape in shapes)
 
+    def sentence_has_source(sent_start: int, sent_end: int) -> bool:
+        """Does ANY figure in this sentence carry a source mark?
+
+        Amendment 3 grants a bare affordability word only in a sentence with no
+        source mark, and `has_source` is figure-relative for its copular half -
+        so asking it about one figure missed a price attached to another.
+        "Would 2 crore be enough, given AED 750,000 is the sale price?" carries
+        a source, on the second figure.
+        """
+        sentence = lowered[sent_start:sent_end]
+        return any(
+            has_source(sentence, j)
+            for j, (figure_start, _) in enumerate(spans)
+            if sent_start <= figure_start < sent_end
+        ) or has_source(sentence, 0)
+
     def marks_for(i: int) -> _Marks:
         seg_start, seg_end = enclosing(segments, spans[i][0])
         segment = lowered[seg_start:seg_end]
@@ -881,7 +925,7 @@ def find_budget(
                 says(sentence, word_list("affordability_shapes"))
                 or (
                     says(sentence, word_list("bare_affordability"))
-                    and not has_source(sentence, i)
+                    and not sentence_has_source(sent_start, sent_end)
                 )
             ),
             question=is_question(sentence),
@@ -893,7 +937,7 @@ def find_budget(
                 says(segment, word_list("first_person"))
                 and says(segment, word_list("money_terms"))
             ),
-            keyword=says(segment, word_list("budget_keywords")),
+            keyword=keyword_in_segment(i),
         )
 
 
@@ -908,22 +952,18 @@ def find_budget(
         if held is None or distance < held[0]:
             currency_of[i] = (distance, hit.currency)
 
-    marked: set[int] = set()
-    for keyword in vocabulary.budget_keywords.get(language, ()):
-        if not keyword:
-            continue
-        for found in re.finditer(_token_pattern(keyword), lowered):
-            i, distance = owner(found.start(), found.end(), prefer_following=True)
-            # Keywords lead in speech ("my budget is X"), so the reach behind
-            # a figure is wider than the reach ahead of it.
-            reach = _KEYWORD_BEFORE if found.end() <= spans[i][0] else _KEYWORD_AFTER
-            if distance > reach or crosses_clause(found.start(), found.end(), i):
-                continue
-            # And only inside its own segment: a keyword selects the figure of
-            # the claim it belongs to.
-            start, end = enclosing(segments, spans[i][0])
-            if start <= found.start() < end:
-                marked.add(i)
+    def keyword_in_segment(i: int) -> bool:
+        """Is a budget keyword in this figure's own segment?
+
+        Segment-scoped, with no distance anywhere - the design says so in as
+        many words. The old distance-bound `marked` set survived here as the
+        gate in front of selection, so a keyword could decide BUDGET in the
+        precedence while the same figure was discarded before it could be
+        chosen: "My budget after several careful financial planning reviews is
+        750000" was lost to the keyword reach.
+        """
+        start, end = enclosing(segments, spans[i][0])
+        return says(lowered[start:end], word_list("budget_keywords"))
 
     fallback: BudgetMention | None = None
     for i, match in enumerate(candidates):
@@ -935,7 +975,7 @@ def find_budget(
             # this is `_Marks.withheld`, and it is deliberately the only place
             # the question is answered.
             continue
-        if currency is None and unit is None and i not in marked:
+        if currency is None and unit is None and not keyword_in_segment(i):
             continue
         mention = BudgetMention(
             surface=match.figure.surface,
@@ -946,7 +986,7 @@ def find_budget(
             ),
             utterance=text,
         )
-        if i in marked:
+        if keyword_in_segment(i):
             return mention
         if fallback is None:
             fallback = mention
