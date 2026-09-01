@@ -17,7 +17,14 @@ import type { Project } from '@/lib/types'
  * The page never calls a provider: it posts to `/api/text-turn`, which is
  * where the core lives.
  */
-export function TextMode({ projects }: { projects: readonly Project[] }) {
+export function TextMode({
+  projects,
+  live,
+}: {
+  projects: readonly Project[]
+  /** True when the route is backed by the real Python core, not a fixture. */
+  live: boolean
+}) {
   const [state, dispatch] = useReducer(reduce, undefined, () =>
     initialState({ connection: 'live' }),
   )
@@ -66,14 +73,22 @@ export function TextMode({ projects }: { projects: readonly Project[] }) {
     <main className="mx-auto flex min-h-screen max-w-[1280px] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
       <header className="flex flex-wrap items-baseline justify-between gap-x-8 gap-y-2">
         <div>
-          <h1 className="text-[15px] tracking-[0.16em] text-ink-100 uppercase">
-            Text mode
-          </h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-[15px] tracking-[0.16em] text-ink-100 uppercase">
+              Text mode
+            </h1>
+            <span
+              className={`border px-2.5 py-1 text-[11px] tracking-[0.12em] uppercase ${
+                live ? 'border-brass-500 text-brass-400' : 'border-ink-700 text-ink-400'
+              }`}
+            >
+              {live ? 'Live core' : 'Replay'}
+            </span>
+          </div>
           <p className="mt-1.5 max-w-[74ch] text-[12px] leading-relaxed text-ink-500">
-            The same core, demonstrated as chat. This is the plan for a venue where the
-            audio fails. Every sentence still passes the guardrail before it is shown,
-            and the stages that only exist on the voice path report themselves missing
-            rather than reporting a zero.
+            {live
+              ? 'The same core, demonstrated as chat: the same prompt, guardrail, recovery policy and escalation routing a call runs. This is the plan for a venue where the audio fails. The stages that only exist on the voice path report themselves missing rather than reporting a zero.'
+              : 'Scripted replies, not the core. No agent is configured, so this shows the shape of text mode without running the pipeline behind it.'}
           </p>
         </div>
         <Link className="text-[12px] text-ink-400 hover:text-brass-400" href="/">

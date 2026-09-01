@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { replayTextCore } from '@/lib/textmode/core'
+import { agentDir, processTextCore } from '@/lib/textmode/process'
 
 export const runtime = 'nodejs'
 
@@ -7,10 +8,17 @@ export const runtime = 'nodejs'
  * The text-mode turn endpoint.
  *
  * It exists so the browser never talks to a provider (AGENTS.md hard rule):
- * whatever ends up behind `TextCore` - today a fixture, in milestone two the
- * framework-free Python core - runs on this side of the wire, with the keys.
+ * whatever is behind `TextCore` runs on this side of the wire, with the keys.
+ *
+ * Which one is behind it is decided by whether `AMBASSADOR_AGENT_DIR` names an
+ * agent, the same opt-in shape the events bridge uses. The page says which it
+ * got, because a fixture that looks like the real pipeline is the one mistake
+ * this surface must never make.
  */
-const core = replayTextCore()
+function core() {
+  const dir = agentDir()
+  return dir === null ? replayTextCore() : processTextCore(dir)
+}
 
 interface Body {
   sessionId?: unknown
@@ -37,6 +45,15 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: 'turnIndex must be a positive integer' }, { status: 400 })
   }
 
-  const events = await core.turn({ sessionId, turnIndex, text })
-  return NextResponse.json({ events })
+  try {
+    const events = await core().turn({ sessionId, turnIndex, text })
+    return NextResponse.json({ events })
+  } catch (error) {
+    // The page turns this into the composed handover, so a buyer never sees
+    // silence. The reason is carried for whoever is reading the console.
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'the core failed' },
+      { status: 502 },
+    )
+  }
 }
