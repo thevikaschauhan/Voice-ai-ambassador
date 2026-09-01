@@ -57,6 +57,7 @@ from adapter.llm_openrouter import build_llm, clamp_retry_after  # noqa: E402
 
 FAKE_KEY = "test-key-not-a-real-credential"
 GROUNDED = "985,000"
+ALLOWED_YEAR = "2026"
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -2557,3 +2558,163 @@ async def test_a_fresh_project_name_does_not_hand_the_buyer_over(monkeypatch):
 
     await log.aclose()
     assert '"escalation"' not in buf.getvalue()
+
+
+# --- one buyer turn, one TurnRecord, with preemptive generation ON ---------
+#
+# `preemptive_generation` defaults to enabled (livekit/agents/voice/turn.py,
+# `_PREEMPTIVE_GENERATION_DEFAULTS`): the framework starts LLM work on the
+# PARTIAL transcript, then calls `on_user_turn_completed` with the final one. So
+# on a real voice turn `llm_node` runs FIRST and `on_user_turn_completed`
+# second - the reverse of the text path - and a hook that unconditionally opened
+# a tracker produced two TurnRecords per utterance: one holding the LLM and
+# guardrail work, one holding the endpointing and audio marks.
+#
+# Measured live in the first synthetic-audio run (#51): `turn_complete` reported
+# `sentences: 0` on the audio half, `total_ms: 20103.6` on a turn that took
+# seconds, and `tts_first_audio.since_first_sentence_ms` was null on every
+# single turn - which is the metric issue #18's barge-in delta is defined in.
+#
+# These tests live at the hook seam rather than behind the VAD, because that is
+# where the reordering happens and it is the only place a test can see it
+# without a room. The whole suite was blind to this class twice in one day.
+
+
+def eou(endpoint: float = 0.44, transcription: float = 0.29) -> EOUMetrics:
+    return EOUMetrics(
+        timestamp=time.time(),
+        end_of_utterance_delay=endpoint,
+        transcription_delay=transcription,
+        on_user_turn_completed_delay=0.001,
+    )
+
+
+async def preemptive_turn(
+    agent: AmbassadorAgent,
+    *,
+    partial: str,
+    final: str,
+) -> SpeechHandle:
+    """One buyer turn in the order the framework actually produces it."""
+    ctx = user_ctx(partial)
+    await run_llm_node(agent, ctx)  # the preemptive generation, on the partial
+    message = lk_llm.ChatMessage(role="user", content=[final])
+    await agent.on_user_turn_completed(ctx, message)
+    agent.note_metrics(eou())
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(ctx)
+    handle._mark_done()
+    await settle()
+    return handle
+
+
+def test_preemptive_generation_is_still_on_by_default():
+    """The pin. If a livekit release ever defaults this off, the split becomes
+    unreachable and the adoption below is dead weight - this is what says so
+    first, rather than the tests below quietly passing for a new reason."""
+    from livekit.agents.voice.turn import _PREEMPTIVE_GENERATION_DEFAULTS
+
+    assert _PREEMPTIVE_GENERATION_DEFAULTS["enabled"] is True
+
+
+async def test_a_partial_and_its_final_transcript_seal_as_one_turn():
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    await preemptive_turn(
+        agent,
+        partial="What does a studio at Skyrise",
+        final="What does a studio at Skyrise cost?",
+    )
+
+    assert len(log.turns) == 1
+    record = log.turns[0]
+    # docs/02-: buyer_utterance is the FINAL STT text, not the partial the model
+    # was allowed to start on.
+    assert record.buyer_utterance == "What does a studio at Skyrise cost?"
+    # The two halves that used to land on different records.
+    assert record.generated_sentences
+    assert record.timings_ms.llm_first_sentence is not None
+    assert record.timings_ms.endpoint == 440.0
+
+    await log.aclose()
+    assert [ln["event"] for ln in json_lines(buf)].count("turn_complete") == 1
+
+
+async def test_the_barge_in_delta_is_measurable_with_preemptive_generation_on(
+    monkeypatch,
+):
+    """The metric issue #18's delta is defined in. It was null on every live
+    turn because `mark_first_sentence` and `mark_tts_first_audio` landed on
+    different trackers."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    ctx = user_ctx("What does a studio at Skyrise")
+    await run_llm_node(agent, ctx)
+    await agent.on_user_turn_completed(
+        ctx, lk_llm.ChatMessage(role="user", content=["What does a studio cost?"])
+    )
+
+    async def one_frame(agent_, text, model_settings):
+        async for _ in text:
+            pass
+        yield object()
+
+    monkeypatch.setattr(Agent.default, "tts_node", staticmethod(one_frame))
+
+    async def source():
+        yield "A studio is nine hundred and eighty five thousand dirhams. "
+
+    assert [frame async for frame in agent.tts_node(source(), None)] != []
+    await log.aclose()
+
+    first_audio = [ln for ln in json_lines(buf) if ln["event"] == "tts_first_audio"]
+    assert len(first_audio) == 1
+    assert first_audio[0]["since_first_sentence_ms"] is not None
+
+
+async def test_the_sealed_turn_measures_the_buyers_wait_not_the_gap_to_the_next():
+    """`total_ms: 20103.6` on a seconds-long turn was the second tracker being
+    opened early and sealed only when a later turn displaced it."""
+    agent, log, _, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    await preemptive_turn(agent, partial="What does a studio", final="What does it cost?")
+
+    total = log.turns[0].timings_ms.total
+    assert total is not None
+    assert total < 5000, total
+
+
+async def test_the_text_path_still_opens_its_own_turn():
+    """No preemptive generation without VAD, so `on_user_turn_completed` never
+    fires and `llm_node` must still open the turn itself - console --text, the
+    eval harness and session.run all depend on it."""
+    agent, log, _, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    ctx = user_ctx()
+    await run_llm_node(agent, ctx)
+    handle = SpeechHandle.create()
+    agent.note_speech_handle(handle)
+    agent.finish_turn(ctx)
+    handle._mark_done()
+    await settle()
+
+    assert len(log.turns) == 1
+    assert log.turns[0].generated_sentences
+
+
+async def test_two_buyer_turns_do_not_collapse_into_one():
+    """Adoption must recognise the SAME utterance, not swallow the next one."""
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"A studio is AED {GROUNDED}. "]),
+            HealthyStream([f"Handover is Q4 {ALLOWED_YEAR}. "]),
+        ]
+    )
+
+    await preemptive_turn(agent, partial="What does a studio", final="What does it cost?")
+    await preemptive_turn(agent, partial="And when does it", final="And when is handover?")
+
+    assert [r.turn_index for r in log.turns] == [1, 2]
+    await log.aclose()
+    assert [ln["event"] for ln in json_lines(buf)].count("user_turn") == 2

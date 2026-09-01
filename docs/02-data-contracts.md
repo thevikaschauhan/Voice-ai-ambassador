@@ -112,6 +112,8 @@ Budget currency is stored as stated by the buyer. Any conversion to AED is deter
 
 Every turn emits one `TurnRecord`. Full fidelity (utterance text, agent sentences, brief PII) is retained in the POC's in-memory records only; the emitted JSON event stream carries enumerated/numeric telemetry with all free-text fields redacted (validator 4 in `docs/03-`). `PHASE-2:` hashing before durable storage. Event types on the emitted stream include: `user_turn`, `guardrail`, `bridge`, `fallback`, `regeneration`, `tool_call`, `escalation`, `booking_offered`, `brief`, `brief_invalid`, `brief_stale_dropped`, `llm_request`, `llm_usage`, `llm_failure`, `event_log_backpressure`, `turn_complete` - the latency meter and any consumer must tolerate new types.
 
+On the voice path the model starts work BEFORE the final transcript exists: LiveKit's `preemptive_generation` is on by default, so `llm_node` runs on a partial and the final transcript is adopted onto that same turn (`turn_complete.preemptive: true`). One buyer turn is still exactly one `TurnRecord` - opening a second one there split the LLM and guardrail work away from the endpointing and audio marks, which the first live audio run measured. `buyer_utterance` is the final text; the timings start from when the model began, which is earlier than the final transcript and is the honest answer to "how long did the buyer wait".
+
 Turns seal when their speech handle resolves, not at the agent's "listening" transition (the framework pauses and goes to "listening" before an interruption is confirmed). `turn_complete` carries `audit_incomplete: bool` - true only when teardown stranded an unresolved handle; consumers should flag or exclude those rows.
 
 ```
