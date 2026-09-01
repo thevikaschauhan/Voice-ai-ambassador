@@ -94,8 +94,40 @@ source_nouns:
   hi: []
   # VERIFY: native-authored.
 
-source_verbs:
-  en: [says, say, said, tells, tell, told, quotes, quoted, mentions, mentioned, shows, showed, lists, listed, costs, cost, "starts from", "starts at", "start from", "start at", "starting from", "starting at", "priced at", asking, advertised, goes for]
+# SAYING verbs keep a first-person exemption: "I said 2 crore" is the buyer
+# restating their own budget, and withholding that is the expensive direction.
+# A quotative comma after one of these does not split the segment (G1), because
+# the words being reported are the same claim as the verb reporting them.
+saying_verbs:
+  en: [says, say, said, tells, tell, told, quotes, quoted, mentions, mentioned, shows, showed, lists, listed, asks, asked, writes, wrote, advertised, calls, called, describes, described, states, stated, claims, claimed, advertises]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# PERCEPTION verbs take ANY subject, first person included: you do not SEE your
+# own budget. "I saw AED 750,000 online" is a figure from somewhere else.
+perception_verbs:
+  en: [saw, see, seen, read, found, spotted, noticed, heard]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# Verbs that state a price directly, with any subject.
+pricing_verbs:
+  en: [costs, cost, "starts from", "starts at", "start from", "start at", "starting from", "starting at", "priced at", "goes for", "go for", asking, retails]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# COPULAR PRICE-NAMING: a price noun and a copula either side of the figure -
+# "the price is X" and "X is the asking price" are both the seller's number.
+# The mirror of naming_terms below, and the reason SOURCE needed more than a
+# noun-plus-verb shape.
+price_nouns:
+  en: [price, prices, cost, "asking price", "list price", "listed price", "sale price", rate, premium]
   ar: []
   # VERIFY: native-authored.
   hi: []
@@ -114,6 +146,17 @@ naming_terms:
 
 copulas:
   en: [is, "is about", "is around", was, "will be", "would be", "'s", are, "comes to"]
+
+# ANAPHORIC NAMING (G6): a pronoun standing in for the figure just mentioned,
+# then a copula, then the buyer's own naming term - "750,000, which is my
+# budget". Applies to the figure in the same segment or the one immediately
+# before it, because that is what the pronoun refers to.
+anaphora:
+  en: [that, which, this, it]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
   ar: []
   # VERIFY: native-authored.
   hi: []
@@ -142,7 +185,7 @@ money_terms:
 # listing, and that is why this is a shape list and why a source frame still
 # beats it.
 affordability_shapes:
-  en: ["enough for me", "enough for us", "enough for a", "can i afford", "can we afford", "could i afford", "could we afford", "i can afford", "we can afford", "afford it", "within my", "within our", "too much for me", "too much for us"]
+  en: ["enough for me", "enough for us", "enough for a", "can i afford", "can we afford", "could i afford", "could we afford", "i can afford", "we can afford", "afford it", "within my", "within our", "too much for me", "too much for us", "works for me", "works for us", "work for me", "work for us", "suits me", "suits us", "fine for me", "fine for us"]
   ar: []
   # VERIFY: native-authored.
   hi: []
@@ -166,6 +209,27 @@ question_openers:
 # words intervene.
 range_connectors:
   en: [and, or, to, "up to", "through", "between"]
+
+# Verbs a range may carry between its two figures without ceasing to be one
+# range: "start at AED 750,000 and GO UP TO AED 900,000" (G2).
+range_verbs:
+  en: [go, goes, going, rise, rises, rising, climb, climbs, reach, reaches, run, runs, extend, extends]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
+# DIMENSIONS (G4): a measurement rather than a sum. Scoped to genuinely
+# ambiguous unit surfaces only - a bare multiplier like "2m", which is both two
+# million and two metres - and never to a plain-currency figure, because "I have
+# AED 800,000 for a room" is a budget and a room does not make a currency
+# ambiguous.
+dimensions:
+  en: [wide, width, long, length, high, height, tall, deep, depth, ceiling, ceilings, balcony, terrace, room, rooms, metre, metres, meter, meters, square, sqft, "sq ft", "floor area", frontage]
   ar: []
   # VERIFY: native-authored.
   hi: []
