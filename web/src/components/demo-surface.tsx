@@ -13,7 +13,8 @@ import type { LanguageReadiness } from '@/lib/readiness'
 import { liveSource } from '@/lib/session/live-source'
 import { scriptFor } from '@/lib/session/scripts'
 import type { ReplayScript } from '@/lib/session/scripts/types'
-import { replaySource } from '@/lib/session/source'
+import { roomSource } from '@/lib/session/room-source'
+import { combine, replaySource } from '@/lib/session/source'
 import type { Provenance } from '@/lib/session/source'
 import type { GuardrailMode, Project, PromptMode } from '@/lib/types'
 
@@ -24,6 +25,8 @@ interface DemoSurfaceProps {
   live: boolean
   /** Why not, when it is not. Shown rather than swallowed. */
   liveReason?: string
+  /** True when this server has LiveKit credentials to mint a viewer token. */
+  room: boolean
 }
 
 /**
@@ -34,7 +37,13 @@ interface DemoSurfaceProps {
  * a call cannot be re-moded in flight, and keying on it is what enforces that
  * rather than a comment asking people to remember.
  */
-export function DemoSurface({ projects, languages, live, liveReason }: DemoSurfaceProps) {
+export function DemoSurface({
+  projects,
+  languages,
+  live,
+  liveReason,
+  room,
+}: DemoSurfaceProps) {
   const [promptMode, setPromptMode] = useState<PromptMode>('ambassador')
   const [guardrailMode, setGuardrailMode] = useState<GuardrailMode>('enforce')
   const script = scriptFor(promptMode, guardrailMode)
@@ -48,6 +57,7 @@ export function DemoSurface({ projects, languages, live, liveReason }: DemoSurfa
       projects={projects}
       languages={languages}
       liveReason={liveReason}
+      room={room}
       onPromptMode={setPromptMode}
       onGuardrailMode={setGuardrailMode}
     />
@@ -60,6 +70,7 @@ function CallSession({
   projects,
   languages,
   liveReason,
+  room,
   onPromptMode,
   onGuardrailMode,
 }: {
@@ -68,14 +79,19 @@ function CallSession({
   projects: readonly Project[]
   languages: readonly LanguageReadiness[]
   liveReason?: string
+  room: boolean
   onPromptMode: (mode: PromptMode) => void
   onGuardrailMode: (mode: GuardrailMode) => void
 }) {
   const live = provenance === 'live'
-  const source = useMemo(
-    () => (live ? liveSource() : replaySource(script)),
-    [live, script],
-  )
+  // Two feeds when a room is available: the bridge for what was said and
+  // decided, the room for amplitude and who is talking. The bridge stops
+  // inferring the latter when the room is there to measure it.
+  const source = useMemo(() => {
+    if (!live) return replaySource(script)
+    const events = liveSource({ deriveTransport: !room })
+    return room ? combine(events, roomSource()) : events
+  }, [live, room, script])
   // A live session reports its own modes in `session_start`; a replay is
   // configured by the toggles, so it is seeded with what the script records.
   const { state, status, start, stop } = useSession(

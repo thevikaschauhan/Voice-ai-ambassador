@@ -25,6 +25,35 @@ export interface SessionSource {
   start(emit: Emit, onEnd?: () => void): () => void
 }
 
+/**
+ * Run several sources into one session.
+ *
+ * The live surface is two feeds, not one: the events bridge carries turns,
+ * guardrail decisions and timings, and the LiveKit room carries amplitude and
+ * who is talking. They are separate because they are separately available - a
+ * machine with no room still gets a full transcript - and folding them here
+ * means the panels keep seeing a single stream.
+ *
+ * `onEnd` fires when every source has ended, not the first: the room going
+ * quiet does not mean the call is over.
+ */
+export function combine(...sources: SessionSource[]): SessionSource {
+  return {
+    start(emit, onEnd) {
+      let ended = 0
+      const stops = sources.map((source) =>
+        source.start(emit, () => {
+          ended += 1
+          if (ended === sources.length) onEnd?.()
+        }),
+      )
+      return () => {
+        for (const stop of stops) stop()
+      }
+    },
+  }
+}
+
 export function replaySource(script: ReplayScript, speed = 1): SessionSource {
   return {
     start(emit, onEnd) {

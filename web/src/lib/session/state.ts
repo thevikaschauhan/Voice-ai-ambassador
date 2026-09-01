@@ -121,6 +121,8 @@ export interface SessionState {
   /** Buyer audio arrived while the agent was still speaking. */
   bargeIn: boolean
   levels: number[]
+  /** Where the waveform's numbers come from, or that there are none. */
+  audioSource: 'none' | 'room'
   error: string | null
   droppedEvents: number
 }
@@ -148,6 +150,7 @@ export function initialState(overrides: Partial<SessionState> = {}): SessionStat
     agentSpeaking: false,
     bargeIn: false,
     levels: [],
+    audioSource: 'none',
     error: null,
     droppedEvents: 0,
     ...overrides,
@@ -431,6 +434,14 @@ export function reduce(state: SessionState, input: SessionInput): SessionState {
         ...state,
         agentSpeaking: input.on,
         bargeIn: input.on ? state.bargeIn : false,
+      }
+    case 'audio_source':
+      // Losing the room clears the trace: stale bars under a "no audio"
+      // label would be the flat-line lie in a different shape.
+      return {
+        ...state,
+        audioSource: input.kind,
+        levels: input.kind === 'none' ? [] : state.levels,
       }
     case 'level': {
       const levels = [...state.levels, input.value]

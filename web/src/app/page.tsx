@@ -1,5 +1,6 @@
 import { DemoSurface } from '@/components/demo-surface'
 import { BridgeUnavailable, handshakePath, readHandshake } from '@/lib/bridge/handshake'
+import { liveKitConfig } from '@/lib/livekit/config'
 import { loadInventory } from '@/lib/inventory'
 import { loadLanguageReadiness } from '@/lib/readiness'
 
@@ -30,6 +31,10 @@ export default async function Page() {
       languages={languages}
       live={live.live}
       liveReason={live.reason}
+      // Whether credentials exist, not whether a room is open: minting a token
+      // to answer a page render would be a call to LiveKit per page view, and
+      // the source falls back cleanly when the room turns out not to be there.
+      room={liveKitConfig() !== null}
     />
   )
 }

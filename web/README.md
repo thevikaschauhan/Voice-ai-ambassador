@@ -35,6 +35,7 @@ remove the prefixes.
 | `/states` | Every designed escalation and failure state, side by side |
 | `/api/text-turn` | Where the text-mode core runs. The browser never calls a provider |
 | `/api/session/stream` | Re-serves the agent's live event stream, same-origin. Holds the token |
+| `/api/session/room` | Mints a listen-only LiveKit ticket. Holds the API secret |
 
 Four panels, each earning its place with a different person in the room:
 
@@ -112,15 +113,43 @@ Three rules the code holds and the review should check:
   follows the viewer, and under an Indian locale AED 2,000,000 renders as
   20,00,000 - the exact lakh/crore confusion docs/04- treats as a 10x hazard.
 
+## Two feeds, and what each one is for
+
+The live surface reads two things, because they are separately available:
+
+| Feed | Carries | Absent when |
+|---|---|---|
+| the events bridge | turns, guardrail decisions, brief, timings | no agent is running |
+| the LiveKit room | amplitude, who is talking, room connection | no room is open, or LiveKit is unconfigured |
+
+A machine with no room still gets a full transcript. `lib/session/source.ts`
+`combine()` folds both into one reducer, and the bridge stops *inferring* who is
+speaking when the room is there to *measure* it - two sources writing one
+indicator means `turn_complete` can silence a speaker who is still talking.
+
+**The viewer token is minted server-side with the narrowest grant that works:**
+one named room, `canPublish: false`, `canPublishData: false`, `hidden: true`,
+ten-minute TTL. The surface watches a call; it has no microphone and must not be
+able to put audio in front of a buyer. The API secret that signs it never leaves
+the server, and `tests/room-grant.test.ts` decodes a real signed token to check
+each of those claims rather than trusting the call site.
+
+Nothing is played out of the laptop's speakers: levels come from an
+`AnalyserNode` that is deliberately not connected to `destination`. The audio is
+already in the room, and a demo machine echoing the agent back on stage is a
+failure mode nobody needs.
+
 ## What the live path does not claim
 
-- **No audio track.** The event stream carries turns, not samples, so the
-  waveform says "no audio track attached" instead of drawing a flat trace that
-  would read as a silent microphone. Levels need the LiveKit room, which is a
-  separate piece of work.
-- **Speaking indicators are turn-level.** A turn is already transcribed when it
-  is emitted, so "buyer speaking" is known once they have stopped. Barge-in is
-  exact, because the agent audits the chunk it cut. The panel says so.
+- **No audio track, when there is none.** With no room joined the waveform says
+  "no audio track attached" rather than drawing a flat trace that would read as
+  a silent microphone. That is a real condition on the reducer
+  (`audioSource: 'none'`), not a mode flag, so it is also what you get when
+  LiveKit is configured but the room cannot be joined.
+- **Speaking indicators are turn-level until the room is attached.** A turn is
+  already transcribed when it is emitted, so "buyer speaking" is known once they
+  have stopped. Barge-in is exact, because the agent audits the chunk it cut.
+  The panel says which of the two it is showing.
 - **The mode toggles are read-only against a running agent.** Both modes are
   read once at session start by the agent process, so nothing here can change a
   call already in flight. They report what the agent said it is running. A

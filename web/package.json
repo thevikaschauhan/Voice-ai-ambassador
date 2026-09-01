@@ -12,6 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "livekit-client": "2.22.1",
+    "livekit-server-sdk": "2.18.0",
     "next": "15.5.24",
     "react": "19.1.1",
     "react-dom": "19.1.1",

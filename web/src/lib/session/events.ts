@@ -180,6 +180,13 @@ export type TransportSignal =
   | { signal: 'agent_speaking'; on: boolean }
   /** Normalised 0-1 levels for the waveform, newest last. */
   | { signal: 'level'; value: number }
+  /**
+   * Whether real audio is attached. `none` is not a failure: it is the
+   * ordinary state when the surface is watching the event stream without a
+   * room, and it is what keeps the waveform saying "no audio track attached"
+   * instead of drawing a flat trace that would read as silence.
+   */
+  | { signal: 'audio_source'; kind: 'none' | 'room' }
 
 /**
  * What arrives from a source. The unknown arm belongs HERE and only here: it
