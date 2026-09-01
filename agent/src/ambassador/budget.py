@@ -219,6 +219,8 @@ class CurrencyVocabulary:
     money_terms: dict[str, tuple[str, ...]]
     # A first-person affordability shape, not a bare word.
     affordability_shapes: dict[str, tuple[str, ...]]
+    # Counts only in a sentence with no source mark (approved amendment 3).
+    bare_affordability: dict[str, tuple[str, ...]]
     # An auxiliary opening the utterance, which marks every segment of its
     # sentence - the telling words can follow the figure.
     question_openers: dict[str, tuple[str, ...]]
@@ -374,6 +376,7 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
         first_person=_word_lists(raw, "first_person"),
         money_terms=_word_lists(raw, "money_terms"),
         affordability_shapes=_word_lists(raw, "affordability_shapes"),
+        bare_affordability=_word_lists(raw, "bare_affordability"),
         question_openers=_word_lists(raw, "question_openers"),
         range_connectors=_word_lists(raw, "range_connectors"),
         range_verbs=_word_lists(raw, "range_verbs"),
@@ -766,9 +769,9 @@ def find_budget(
                 ):
                     continue
                 return True
-        return copular(i, word_list("price_nouns"))
+        return copular(i, word_list("price_nouns"), reach=2)
 
-    def copular(i: int, terms: tuple[str, ...]) -> bool:
+    def copular(i: int, terms: tuple[str, ...], *, reach: int = 0) -> bool:
         """A term and a copula on one side of this figure or the other.
 
         "my budget is X" and "X is my budget" are the same claim, and so are
@@ -796,7 +799,17 @@ def find_budget(
             )
             if token
         )
-        gap = rf"\s*(?:(?:{money})\s*)?$" if money else r"\s*$"
+        # `reach` is approved amendment 2: the PRICE-noun shape may cross one
+        # adjective and one preposition - "prices are affordable FROM AED
+        # 750,000" - and nothing else may, so naming cannot borrow it. Keyed to
+        # the price noun being present, it cannot touch "AED 750,000 is
+        # affordable for me", which names no price at all.
+        crossing = rf"(?:\w+\s+){{0,{reach}}}" if reach else ""
+        gap = (
+            rf"\s*{crossing}(?:(?:{money})\s*)?$"
+            if money
+            else rf"\s*{crossing}$"
+        )
         for term in terms:
             if not term:
                 continue
@@ -811,6 +824,19 @@ def find_budget(
                     return True
         return False
 
+    def is_quotative(segment: str) -> bool:
+        """Does this segment carry a saying verb with its reporting comma?
+
+        Approved amendment 1: naming does not apply inside one. The possessive
+        in `They said, "our maximum is AED 2m."` belongs to the speaker being
+        quoted, not to the buyer - while `The website says AED 750,000 is my
+        budget` has no such comma, so naming still beats source there.
+        """
+        return any(
+            word and re.search(rf"(?<!\w){re.escape(word)}\s*,", segment)
+            for word in word_list("saying_verbs")
+        )
+
     def has_naming(i: int) -> bool:
         """The buyer naming this figure as their budget.
 
@@ -819,6 +845,9 @@ def find_budget(
         my budget". The pronoun refers to the figure in its own segment or the
         one immediately before it, so both are checked.
         """
+        seg_start, seg_end = enclosing(segments, spans[i][0])
+        if is_quotative(lowered[seg_start:seg_end]):
+            return False
         if copular(i, word_list("naming_terms")):
             return True
         naming = word_list("naming_terms")
@@ -848,7 +877,13 @@ def find_budget(
         return _Marks(
             naming=has_naming(i),
             source=has_source(segment, i),
-            affordability=says(sentence, word_list("affordability_shapes")),
+            affordability=(
+                says(sentence, word_list("affordability_shapes"))
+                or (
+                    says(sentence, word_list("bare_affordability"))
+                    and not has_source(sentence, i)
+                )
+            ),
             question=is_question(sentence),
             dimension=(
                 says(segment, word_list("dimensions"))

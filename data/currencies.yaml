@@ -191,6 +191,19 @@ affordability_shapes:
   hi: []
   # VERIFY: native-authored.
 
+# BARE affordability, approved amendment 3: these count as affordability only
+# in a sentence carrying NO source mark. "Would 2 crore be enough" is the buyer
+# asking whether their own figure stretches and there is nobody else in the
+# sentence to attribute it to, so confirming is the over-ask direction ADR-011
+# calls safe. "The listing says AED 750,000 is affordable" has a source mark and
+# still withholds.
+bare_affordability:
+  en: [enough, "be enough", "too much", affordable, "in budget", "in range"]
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
 # QUESTION: an auxiliary or copula opening the utterance. It marks every
 # segment of its sentence, because "Is AED 750,000 the asking price?" puts the
 # telling words after the figure. Four hard-coded "is + pronoun" phrases missed

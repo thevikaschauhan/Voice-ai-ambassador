@@ -61,6 +61,8 @@ SOURCE_WITHHOLDS = [
     # G1, quotative comma: the comma after a saying verb reports rather than
     # divides, so the source frame still covers the quoted figure.
     ('The agent said, "I can afford 2m."', None),
+    ('They said, "our maximum is AED 2m."', None),
+    ("prices are affordable from AED 750,000", None),
     # G5, copular price-naming, both orders.
     ("the price is AED 985,000", None),
     ("AED 800,000 is the asking price", None),
@@ -87,6 +89,8 @@ AFFORDABILITY_WINS = [
     ("Is this AED 800,000 enough for a studio?", 800_000.0),
     ("Is that 2 crore enough for me?", 20_000_000.0),
     ("Can I afford AED 985,000?", 985_000.0),
+    ("would 2 crore be enough", 20_000_000.0),
+    ("AED 750,000 is affordable for me", 750_000.0),
 ]
 
 DIMENSION_WITHHOLDS = [
@@ -245,55 +249,60 @@ def test_perception_source_composes_with_the_first_person_exemption(
     assert (None if mention is None else mention.value) == expected, said
 
 
-# --- the one row the amended spec does not settle --------------------------
+# --- the three amendments approved after round three ------------------------
+#
+# Each of these was a strict xfail naming the clause that produced it and the
+# amendment it needed; god approved all three with the scoping constraints
+# recorded beside them, so each now asserts plainly and carries the guard that
+# keeps the amendment from reaching further than it was granted.
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN, and god's call rather than mine. The spec ranks NAMING above "
-        "SOURCE deliberately, which is what makes 'The website says AED "
-        "750,000 is my budget' confirm 750,000. The same precedence makes a "
-        "possessive inside REPORTED speech name a budget, and here the 'our' "
-        "belongs to the speaker being quoted, not to the buyer. The review "
-        "requires withheld; the spec as written says budget. Left failing "
-        "rather than closed by invention - the proposed one-clause amendment "
-        "is that NAMING does not apply inside a quotative-comma segment. "
-        "strict, so it fails loudly the moment the behaviour changes either "
-        "way."
-    ),
-)
 def test_a_possessive_inside_reported_speech_is_not_the_buyer_naming(vocabulary):
+    """Amendment 1: naming does not apply inside a quotative-comma segment.
+
+    The guard is that it cannot reach a naming without such a comma, which is
+    what keeps naming-beats-source true where it was meant to be.
+    """
     assert find_budget('They said, "our maximum is AED 2m."', vocabulary, "en") is None
+    for said, expected in (
+        ("The website says AED 750,000 is my budget", 750_000.0),
+        ("the listing says AED 750,000 and that is my budget", 750_000.0),
+        (
+            "The listing says AED 750,000, which is my budget, and AED 800,000"
+            " is the asking price.",
+            750_000.0,
+        ),
+    ):
+        mention = find_budget(said, vocabulary, "en")
+        assert mention is not None and mention.value == expected, said
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN, god's call. G5's copular price shape wants the copula next to "
-        "the figure, and here an adjective and a preposition sit between them: "
-        "'prices ARE AFFORDABLE FROM AED 750,000'. It is a listing claim and "
-        "should be withheld. Not closed by invention - the proposed amendment "
-        "is to let the price-noun copular shape reach across an adjective and "
-        "a preposition. Found by my own corpus, not by review."
-    ),
-)
 def test_a_price_noun_reaching_across_an_adjective_is_still_a_source(vocabulary):
-    assert find_budget("prices are affordable from AED 750,000", vocabulary, "en") is None
+    """Amendment 2: the copular price shape may cross one adjective and one
+    preposition, and ONLY when the price noun is present.
+
+    The guard is the sentence with no price noun in it - "AED 750,000 is
+    affordable for me" must stay the buyer's.
+    """
+    assert (
+        find_budget("prices are affordable from AED 750,000", vocabulary, "en")
+        is None
+    )
+    mention = find_budget("AED 750,000 is affordable for me", vocabulary, "en")
+    assert mention is not None and mention.value == 750_000.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN, god's call. AFFORDABILITY is specified as a FIRST-PERSON shape, "
-        "so 'would 2 crore be enough' carries no first-person token and QUESTION "
-        "withholds it at step 4 - a lost budget, which is the expensive "
-        "direction. The buyer is stating a budget interrogatively exactly as in "
-        "'Is that 800k enough for me?'. Proposed amendment: allow a bare "
-        "affordability shape ('be enough', 'enough?') when the sentence carries "
-        "no other speaker. Found by my own corpus, not by review."
-    ),
-)
 def test_an_impersonal_affordability_question_is_still_a_budget(vocabulary):
+    """Amendment 3: a bare affordability word counts where the sentence carries
+    NO source mark - the over-ask direction, with nobody else to attribute the
+    figure to.
+
+    The guard is the sourced sentence, which still withholds.
+    """
     mention = find_budget("would 2 crore be enough", vocabulary, "en")
     assert mention is not None and mention.value == 20_000_000.0
+    for said in (
+        "The listing says AED 750,000 is affordable.",
+        "The website says AED 750,000 is affordable for most buyers.",
+    ):
+        assert find_budget(said, vocabulary, "en") is None, said
