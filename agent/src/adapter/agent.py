@@ -80,7 +80,7 @@ from ambassador.recognition import RecognitionMonitor, load_noise_words
 from ambassador.verbalise import load_spoken_forms
 
 from .brief import BriefExtractor
-from .config import Settings, load_settings
+from .config import Settings, load_settings, missing_credentials_error
 from .confirmations import (
     PROJECT_KEYS,
     RECOGNITION_KEYS,
@@ -1307,9 +1307,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     missing = settings.missing_for_voice()
     if missing:
-        raise RuntimeError(
-            "missing credentials for the voice path: " + ", ".join(missing)
-        )
+        raise RuntimeError(missing_credentials_error(missing))
 
     # Started before the first event, so a surface that connects mid-call
     # replays the whole session rather than joining from wherever it arrived.

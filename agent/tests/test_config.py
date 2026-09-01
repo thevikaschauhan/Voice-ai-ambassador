@@ -16,10 +16,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import fields
+from pathlib import Path
 
 import pytest
 
-from adapter.config import Settings, _is_credential, load_settings, parse_env_file
+from adapter.config import (
+    Settings,
+    _is_credential,
+    load_settings,
+    missing_credentials_error,
+    parse_env_file,
+)
 
 REAL_LOOKING_KEY = "sk-or-v1-0123456789abcdef0123456789abcdef"
 
@@ -256,3 +263,108 @@ def test_the_recogniser_credential_is_demanded_only_when_that_recogniser_runs(
         ).missing_for_voice()
         == []
     )
+
+
+# --- ADR-017: the shipped example must select the recogniser the ADR chose ---
+#
+# ADR-017 (docs/01-) says Deepgram nova-3 IS the recogniser and the
+# whole-utterance OpenRouter path "stays selectable and tested, but is not the
+# default". Code said otherwise: `STT_PROVIDER` defaulted to "openrouter" and
+# agent/.env.example shipped it, so an operator who copied the example ran the
+# retired recogniser - p50 1081ms after endpoint against 258-327ms, "Binghatti"
+# heard as "Bint Jbeil", and figures arriving as words that ADR-011's
+# deterministic confirmation cannot parse.
+
+EXAMPLE_ENV = Path(__file__).resolve().parents[1] / ".env.example"
+
+
+def test_the_shipped_example_selects_the_adr_017_recogniser():
+    """The operator path, end to end: copy .env.example, fill the keys, run."""
+    assert EXAMPLE_ENV.exists()
+    assert load_settings(EXAMPLE_ENV).stt_provider == "deepgram"
+
+
+def test_the_default_with_no_env_file_at_all_is_the_adr_017_recogniser():
+    """A checkout with no .env - CI, a fresh clone, a container with only real
+    env vars set - must not fall back to the retired path either."""
+    assert load_settings(Path("/nonexistent/.env")).stt_provider == "deepgram"
+
+
+def test_the_example_still_documents_the_key_the_default_now_needs():
+    """Flipping the default without the key beside it turns a working example
+    into one that cannot start."""
+    text = EXAMPLE_ENV.read_text(encoding="utf-8")
+    assert "DEEPGRAM_API_KEY=" in text
+    assert "DEEPGRAM_MODEL=nova-3" in text
+
+
+def test_the_retired_path_is_still_selectable(env_file):
+    """ADR-017 keeps it selectable and tested. A default change that removed the
+    option would be a different decision from the one the ADR made."""
+    base = load_settings(env_file).redacted()
+    settings = Settings(  # type: ignore[arg-type]
+        **{**base, "stt_provider": "openrouter", "stt_enabled": True}
+    )
+    assert settings.stt_provider == "openrouter"
+    assert "DEEPGRAM_API_KEY" not in settings.missing_for_voice()
+
+
+# --- the startup failure a keyless checkout gets --------------------------
+#
+# Flipping the default moves the cost of a missing key from "the demo is
+# quietly four times slower" to "the agent will not start", which is the right
+# trade only if the refusal explains itself. A bare list of variable names is
+# diagnosable only by whoever already knows why each is needed.
+
+
+def test_the_example_path_refuses_rather_than_falling_back_silently(env_file):
+    """The behaviour change, at the level an operator meets it: copy the
+    example, switch STT on, forget the Deepgram key. Before, this ran the
+    retired recogniser and said nothing."""
+    base = load_settings(EXAMPLE_ENV).redacted()
+    settings = Settings(  # type: ignore[arg-type]
+        **{
+            **base,
+            "stt_enabled": True,
+            "openrouter_api_key": "k",
+            "fish_api_key": "k",
+            "deepgram_api_key": "",
+        }
+    )
+    assert settings.stt_provider == "deepgram"
+    assert settings.missing_for_voice() == ["DEEPGRAM_API_KEY"]
+
+
+def test_the_failure_names_the_variable_and_every_way_out():
+    message = missing_credentials_error(["DEEPGRAM_API_KEY"])
+    assert "DEEPGRAM_API_KEY" in message
+    # What it is for, so the refusal is not just an obstacle.
+    assert "ADR-017" in message
+    # The three ways out, including the two that need no new account.
+    assert "console.deepgram.com" in message
+    assert "STT_PROVIDER=openrouter" in message
+    assert "STT_ENABLED=" in message
+    assert "agent/.env.example" in message
+
+
+def test_a_credential_with_no_remedy_is_still_named_plainly():
+    """Most missing keys need no essay. Only the one whose requirement CHANGED
+    carries a remedy, or the message becomes a wall nobody reads."""
+    message = missing_credentials_error(["OPENROUTER_API_KEY", "FISH_API_KEY"])
+    assert "OPENROUTER_API_KEY, FISH_API_KEY" in message
+    assert "ADR-017" not in message
+    assert len(message.splitlines()) == 2
+
+
+def test_the_failure_message_echoes_no_value(env_file):
+    """`missing_for_voice` reports by name only and this must not undo that: the
+    message is printed by whatever supervisor restarted the worker."""
+    settings = load_settings(env_file)
+    message = missing_credentials_error(settings.missing_for_voice())
+    for value in (
+        settings.openrouter_api_key,
+        settings.fish_api_key,
+        settings.deepgram_api_key,
+    ):
+        if value:
+            assert value not in message

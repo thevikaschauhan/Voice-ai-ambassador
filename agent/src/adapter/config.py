@@ -243,6 +243,41 @@ class Settings:
         return [name for name, value in required.items() if not value]
 
 
+# Remedies named per credential, because "missing DEEPGRAM_API_KEY" on a
+# checkout that worked yesterday is a question, not an answer. Keyed by variable
+# so a second conditional credential gets the same treatment rather than a
+# second special case.
+_REMEDIES: Final[dict[str, str]] = {
+    "DEEPGRAM_API_KEY": (
+        "Deepgram nova-3 is the recogniser (ADR-017: 258-327ms after endpoint "
+        "against the whole-utterance path's p50 1081ms, and it is the only path "
+        "that hears \"Binghatti\" and returns figures as digits). Either add a "
+        "key from console.deepgram.com, or set STT_PROVIDER=openrouter to use "
+        "the slower whole-utterance path on your existing OPENROUTER_API_KEY, "
+        "or set STT_ENABLED= to run text mode with no recogniser at all."
+    ),
+}
+
+
+def missing_credentials_error(missing: list[str]) -> str:
+    """The startup message for a voice path that cannot run.
+
+    A bare list of variable names is diagnosable only by whoever already knows
+    why each one is needed. This names the missing variable, says what it is
+    for, and gives every way out - including the two that need no new account -
+    so a keyless checkout is a five-second fix rather than a bug report.
+
+    Composed here rather than at the raise site because `entrypoint` needs
+    transport, a worker process and real credentials, so nothing written there
+    is testable, and an error message nobody can test is one nobody notices
+    going stale.
+    """
+    lines = ["missing credentials for the voice path: " + ", ".join(missing)]
+    lines += [f"  {name}: {_REMEDIES[name]}" for name in missing if name in _REMEDIES]
+    lines.append("Set them in agent/.env (see agent/.env.example) or in the environment.")
+    return "\n".join(lines)
+
+
 def load_settings(env_path: Path | None = None) -> Settings:
     file_values = parse_env_file(env_path or ENV_PATH)
 
@@ -275,7 +310,14 @@ def load_settings(env_path: Path | None = None) -> Settings:
         ),
         llm_thinking=_resolve(file_values, "LLM_THINKING", "off"),
         brief_model=_resolve(file_values, "BRIEF_MODEL", "qwen/qwen3.7-flash"),
-        stt_provider=_resolve(file_values, "STT_PROVIDER", "openrouter"),
+        # ADR-017: Deepgram nova-3 IS the recogniser. It defaulted to
+        # "openrouter" - the path ADR-017 retired - so a checkout with no
+        # STT_PROVIDER set ran it: p50 1081ms after endpoint against 258-327ms,
+        # "Binghatti" heard as "Bint Jbeil", and figures as words that ADR-011's
+        # deterministic confirmation cannot parse. The retired path stays
+        # selectable, which is what the ADR decided; it is just not what you
+        # get by saying nothing.
+        stt_provider=_resolve(file_values, "STT_PROVIDER", "deepgram"),
         stt_model_default=_resolve(
             file_values, "STT_MODEL_DEFAULT", "qwen/qwen3-asr-1.7b"
         ),
