@@ -1,6 +1,15 @@
-# Latency-masking acknowledgments (docs/04-): played only when projected
-# time to first audio exceeds ~800ms. Sparingly - a filler on every turn
-# reads as a tic and undermines the composed voice.
+# Latency-masking acknowledgments (docs/04-): intended to play only when
+# projected time to first audio exceeds ~800ms. Sparingly - a filler on every
+# turn reads as a tic and undermines the composed voice.
+#
+# Loaded and typed by adapter/prerolls.py, which is also what carries the
+# VERIFY: markers below into the native-reviewer packet. CHOOSING AND PLAYING
+# one on a slow turn is not wired yet, so nothing in this file is spoken today.
+#
+# An unauthored language gets no acknowledgment, never the English one: an
+# English filler dropped into an Arabic call is a seam the buyer hears rather
+# than one it hides. So an empty list is a valid state here, unlike in
+# fallbacks.yaml where it would be a silent turn.
 
 en:
   - "Let me look at the collection for you."

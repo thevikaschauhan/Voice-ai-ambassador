@@ -43,12 +43,28 @@ Built by `inventory.py` from the whole inventory plus `data/whitelist.yaml`:
 
 ```
 AllowedFigures
-  amounts    set[float]   prices, sizes, milestone amounts, whitelist amounts
-  percents   set[float]   payment plan percentages, whitelist percents
-  years      set[int]     handover years, whitelist years
+  amounts           set[float]   prices, sizes, milestone amounts, whitelist amounts
+  percents          set[float]   payment plan percentages, whitelist percents
+  years             set[int]     handover years, whitelist years
+  currency_amounts  set[float]   the subset of `amounts` that is MONEY
+  identifiers       set[float]   the subset of `amounts` read as a SEQUENCE
 ```
 
-`data/whitelist.yaml` entries each carry a `why`. Keep it short; every entry is a hole a wrong number could pass through.
+`amounts` is what the guardrail checks: to it a number is a number, and that is
+correct. The two subsets exist because verbalisation is not indifferent, and
+they are the two ends of one question - what the digit fallback does to this
+figure. A square footage is in neither: digits read it correctly, and a
+currency-naming form on it would make a buyer hear "four hundred and twenty
+dirhams square feet". A price is a `currency_amount`: its spoken form names the
+currency and swallows an adjacent written "AED". The hotline is an
+`identifier`: digits read it as "eighty thousand and fifteen", so it is owed a
+spoken form and the reviewer packet asks for one, separately and with different
+instructions from the money.
+
+`data/whitelist.yaml` entries each carry a `why` and a `kind`
+(`currency | quantity | identifier`); the kind is what populates those two
+subsets. Keep the `why` short; every entry is a hole a wrong number could pass
+through.
 
 ## Guardrail results
 

@@ -74,6 +74,7 @@ def build_allowed_figures(
     computed, plus the justified whitelist."""
     amounts: set[float] = set()
     currency: set[float] = set()
+    identifiers: set[float] = set()
     percents: set[float] = set()
     years: set[int] = set()
 
@@ -99,12 +100,20 @@ def build_allowed_figures(
     currency.update(
         float(e["value"]) for e in wl.get("amounts") or [] if e["kind"] == "currency"
     )
+    # Identifiers come only from the whitelist. Nothing in inventory is read as
+    # a sequence - a price, a size and a handover year are all quantities - so
+    # there is no inventory branch to add here, and if one ever appears it will
+    # arrive as a whitelist entry like the hotline did.
+    identifiers.update(
+        float(e["value"]) for e in wl.get("amounts") or [] if e["kind"] == "identifier"
+    )
     percents.update(float(e["value"]) for e in wl.get("percents") or [])
     years.update(int(e["value"]) for e in wl.get("years") or [])
 
     return AllowedFigures(
         amounts=frozenset(amounts),
         currency_amounts=frozenset(currency),
+        identifiers=frozenset(identifiers),
         percents=frozenset(percents),
         years=frozenset(years),
     )

@@ -26,6 +26,20 @@ English: > Let me be precise about that figure rather than guess.
 English: > I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors.
 - [ ] Arabic fallback:
 
+## 2b. Short acknowledgments for a slow turn
+
+Played only when the answer is going to take a moment - never on every turn, which reads as a tic. Two short lines, the sort of thing a consultant says while they look something up.
+
+(Lines exist today for: en.)
+
+English: > Let me look at the collection for you.
+English: > One moment while I check that.
+
+If there is no natural Arabic equivalent, say so and we play nothing - an English filler dropped into an Arabic call is a seam the buyer hears rather than one it hides, so we would rather have none than borrow ours.
+
+- [ ] Arabic acknowledgment:
+- [ ] Arabic acknowledgment:
+
 ## 3. Money, percentages and dates spoken aloud
 
 The agent never reads digits. Each figure below needs the words a buyer should hear, with the currency named inside the phrase.
@@ -142,6 +156,16 @@ English: > I am not hearing you clearly, and I would rather not guess at what yo
 And the filler sounds themselves: the noises a recogniser writes down when an Arabic speaker has not actually said a word - the equivalents of "uh", "um", "hmm", "er". A turn counts as unheard only when EVERY word in it is one of these, so please do not include anything a buyer might mean ("no", "what", "sorry").
 
 - [ ] filler sounds:
+
+## 3e. The numbers that are not quantities
+
+Read as a SEQUENCE, the way a phone number is read - not as a quantity, and naming no currency. This is deliberately a separate question from section 3: every figure there is money and its phrase says so, and the same treatment here would turn a hotline number into a sum of dirhams.
+
+Today they go to the voice as bare digits, so each number below is read aloud as one quantity rather than as a sequence.
+
+`VERIFY:` the digits themselves are still being confirmed with the client, so please write the READING rather than checking the number - if it changes, the pattern you give us carries over.
+
+- [ ] 80015 (Binghatti's toll-free hotline number, spoken when routing to a human) ->
 
 ## 4. How these names should sound
 
