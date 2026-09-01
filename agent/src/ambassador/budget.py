@@ -36,12 +36,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
 
-from .figures import extract_figures, normalise_digits
+from .figures import Numerals, default_numerals, extract_figures, normalise_digits
 
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
@@ -77,13 +78,84 @@ _PUNCTUATION = re.compile(r"[,.;:!?]")
 # "2 crore, in rupees" is one clause.
 _CLAUSE_BREAK = re.compile(r"[;.!?]")
 
-# Multiplier words that make a bare number a budget on their own: nobody says
-# "two crore" about a bedroom count. Kept in step with the multiplier table
-# in data/numerals.yaml, minus the ones too small to imply money. Longest
-# alternatives first, or "lakhs" matches as "lakh" and fails the boundary.
-_BUDGET_UNITS = re.compile(
-    r"\b(thousand|million|lakhs|lakh|lacs|lac|crores|crore|k|m)\b", re.IGNORECASE
-)
+# A multiplier this size makes a bare number a budget on its own: nobody says
+# "two crore" about a bedroom count, and nobody says "three hundred" about a
+# price. Thousand and up.
+_MONEY_UNIT_FACTOR = 1000
+
+
+def budget_unit_pattern(numerals: Numerals) -> re.Pattern[str]:
+    """The money-sized multipliers, matched against a FIGURE'S OWN SURFACE.
+
+    Derived from the same table the extractor uses, not hand-kept beside it.
+    The list here used to be a literal "kept in step with data/numerals.yaml",
+    and two of its ten tokens could never match anything: `extract_figures`
+    folds an adjacent multiplier INTO the surface, so a k/m budget arrives as
+    "800k", and `\bk\b` cannot match there because there is no word boundary
+    between "0" and "k". A k/m budget was therefore only ever detected when a
+    budget keyword happened to sit nearby - "around 800k" returned nothing.
+    That is the regex-that-looks-live-and-never-fires trap, and deriving the
+    pattern is what stops a multiplier added to the data file being silently
+    unreachable here.
+
+    Hence the boundary: a unit may sit directly against the digits ("800k") or
+    stand as its own word ("3 million").
+
+    Longest alternatives first so the match is deterministic rather than
+    dependent on the data file's key order. It is NOT load-bearing for
+    correctness - "3 lakhs" matches either way, because a shorter alternative
+    that fails its own trailing boundary backtracks into the longer one - and
+    the earlier version of this comment claimed otherwise. A mutation that
+    removed the sort left the suite green, which is how the claim was caught.
+    """
+    words = sorted(
+        (
+            word
+            for word, factor in numerals.multipliers.items()
+            if factor >= _MONEY_UNIT_FACTOR
+        ),
+        key=len,
+        reverse=True,
+    )
+    if not words:
+        raise ValueError(
+            "no money-sized multipliers in the numeral table, so no figure can "
+            "ever read as a budget on its unit alone. Check data/numerals.yaml."
+        )
+    alternatives = "|".join(re.escape(word) for word in words)
+    return re.compile(rf"(?:(?<=\d)|\b)({alternatives})\b", re.IGNORECASE)
+
+
+@lru_cache(maxsize=1)
+def _budget_units() -> re.Pattern[str]:
+    """The shipped pattern, compiled once. `budget_unit_pattern` is the part
+    that decides anything and takes its vocabulary explicitly, the same split
+    `figures.py` uses."""
+    return budget_unit_pattern(default_numerals())
+
+
+# How close an ATTRIBUTION word must sit to the figure it frames. Much tighter
+# than a budget keyword's reach, and deliberately so: these words withhold a
+# mention, and a withheld budget is an unconfirmed twenty-times risk. Measured
+# against the utterances in the issue rather than guessed - every attributed
+# phrasing binds within 10 characters ("the listing says AED 750,000" is 10,
+# "it starts from about 3 million" is 7), while the nearest phrasings that must
+# NOT bind sit at 23 and beyond ("the price is too high, I can do 2 million").
+_ATTRIBUTION_BEFORE = 14
+# How far a budget keyword may sit from an ATTRIBUTED figure and still rescue
+# it. Wider than `_KEYWORD_AFTER`, and in both directions, because those
+# windows were calibrated for a different job - deciding which of several
+# figures is the budget - while this one can only ever RESTORE a mention, never
+# invent one on the wrong figure. "The listing says 750,000 and that is my
+# budget" is the buyer adopting a quoted figure as their own, and withholding
+# it is the expensive direction.
+_ATTRIBUTION_OVERRIDE = 30
+
+# And it binds FORWARD ONLY. Attribution leads its figure in every phrasing
+# measured, and letting it reach backwards costs real budgets: "I can do 2
+# million, is that ok?" and "I have 2 crore, what is the price?" both put a
+# marker just after the buyer's own number. Withholding those is the expensive
+# direction, so a marker that follows its figure is ignored.
 
 
 @dataclass(frozen=True)
@@ -116,6 +188,11 @@ class CurrencyVocabulary:
     # inferred from the absence of an objection - "can you repeat that?" is
     # not a yes.
     affirmations: dict[str, tuple[str, ...]]
+    # "the listing says", "priced at": the figure beside these came from
+    # somewhere else, or is a price rather than a budget. The only list here
+    # that WITHHOLDS a mention, so it binds tightly and loses to a budget
+    # keyword.
+    attributions: dict[str, tuple[str, ...]]
     rate: ConversionRate
 
     def languages_covered(self) -> frozenset[str]:
@@ -204,6 +281,7 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
         negators=_word_lists(raw, "negators"),
         contradictions=_word_lists(raw, "contradictions"),
         affirmations=_word_lists(raw, "affirmations"),
+        attributions=_word_lists(raw, "attributions"),
         rate=rate,
     )
 
@@ -435,11 +513,49 @@ def find_budget(
             if distance <= reach and not crosses_clause(found.start(), found.end(), i):
                 marked.add(i)
 
+    # Figures the buyer attributed to a listing, to our own website, or to us
+    # on an earlier call - and figures framed as a price rather than as what
+    # they will spend. Same ownership machinery as the keywords above, on a
+    # tighter window, and `marked` outranks it below.
+    attributed: set[int] = set()
+    for word in vocabulary.attributions.get(language, ()):
+        if not word:
+            continue
+        for found in re.finditer(_token_pattern(word), lowered):
+            i, distance = owner(found.start(), found.end(), prefer_following=True)
+            if found.end() > spans[i][0]:
+                continue
+            if distance <= _ATTRIBUTION_BEFORE and not crosses_clause(
+                found.start(), found.end(), i
+            ):
+                attributed.add(i)
+
+    # A budget keyword near an attributed figure rescues it, on the wider reach
+    # above: the buyer is adopting the quoted number as their own.
+    adopted: set[int] = set()
+    for keyword in vocabulary.budget_keywords.get(language, ()):
+        if not keyword:
+            continue
+        for found in re.finditer(_token_pattern(keyword), lowered):
+            i, distance = owner(found.start(), found.end(), prefer_following=True)
+            if distance <= _ATTRIBUTION_OVERRIDE and not crosses_clause(
+                found.start(), found.end(), i
+            ):
+                adopted.add(i)
+
     fallback: BudgetMention | None = None
     for i, match in enumerate(candidates):
         held = currency_of.get(i)
         currency = None if held is None else held[1]
-        unit = _BUDGET_UNITS.search(match.figure.surface)
+        unit = _budget_units().search(match.figure.surface)
+        if i in attributed and i not in marked and i not in adopted:
+            # Quoted, not offered. A budget keyword bound to the same figure
+            # outranks the attribution twice over - as the marker that picks
+            # the budget out of several figures, and on the wider reach that
+            # rescues a quoted figure the buyer has adopted. "The listing says
+            # AED 750,000 but my budget is 2 million" is a real budget of 2
+            # million, and withholding one is the expensive direction.
+            continue
         if currency is None and unit is None and i not in marked:
             continue
         mention = BudgetMention(

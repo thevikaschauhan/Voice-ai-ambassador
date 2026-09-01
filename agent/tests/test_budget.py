@@ -499,3 +499,244 @@ def test_a_currency_in_the_next_sentence_does_not_bind(vocabulary):
 def test_a_keyword_in_the_previous_sentence_does_not_mark(vocabulary):
     mention = budget(vocabulary, "I went over our budget. Floor 15 is fine.")
     assert mention is None
+
+
+# --- issue #25: figures the buyer quotes, and units that never fired -------
+#
+# Both defects were re-verified by execution on fdaf1d6 before anything here
+# was written, with the exact strings from the issue's status comment. The
+# direction of the F3 fix is narrow on purpose: ADR-011's
+# first-mention-always-confirmed stance is deliberate and over-asking stays the
+# safe direction, so only a figure the buyer ATTRIBUTES to us or to a listing
+# is withheld - never one they merely stated plainly.
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # The two repro strings from the status comment, verbatim.
+        "the listing says AED 750,000",
+        "it starts from about 3 million",
+        # Ordinary variants of the same two shapes, so the fix is the class and
+        # not the examples.
+        "your website says 985,000 dirhams",
+        "you said 2 crore on the call",
+        "I saw AED 750,000 online",
+        "the brochure quotes 3 million",
+        "the price is AED 985,000",
+        "it is priced at 2 million",
+        "prices start at AED 750,000",
+    ],
+)
+def test_a_figure_the_buyer_attributes_elsewhere_is_not_their_budget(
+    vocabulary, said
+):
+    """F3. A quoted price took the turn from the model, so the buyer's actual
+    question went unanswered - and once confirmed it settled the policy, which
+    suppressed every real budget mention for the rest of the session."""
+    assert budget(vocabulary, said) is None, said
+
+
+@pytest.mark.parametrize(
+    "said,value",
+    [
+        # Plainly stated, no attribution: still confirmed on the first
+        # mention, which is ADR-011's deliberate stance.
+        ("we are looking at around 985,000 dirhams", 985_000.0),
+        ("my budget is 750,000 dirhams", 750_000.0),
+        ("2 crore", 20_000_000.0),
+        ("about 3 million", 3_000_000.0),
+        # A budget keyword outranks attribution, so the buyer's own number
+        # still wins even in the same breath as a quoted one.
+        ("the listing says AED 750,000 but my budget is 2 million", 2_000_000.0),
+        ("you said 3 million, but I can only spend 2 crore", 20_000_000.0),
+    ],
+)
+def test_the_fix_does_not_cost_us_a_real_budget(vocabulary, said, value):
+    """The dangerous direction. A missed budget is an unconfirmed twenty-times
+    risk, where an extra read-back costs one question."""
+    mention = budget(vocabulary, said)
+    assert mention is not None, said
+    assert mention.value == value
+
+
+def test_attribution_does_not_reach_across_a_clause_break(vocabulary):
+    """The same ownership rule the currency and keyword binds already use: the
+    quoted price's framing belongs to the quoted price."""
+    mention = budget(vocabulary, "The price is AED 985,000. My budget is 2 crore.")
+    assert mention is not None
+    assert mention.value == 20_000_000.0
+
+
+def test_a_quoted_price_does_not_suppress_a_later_real_budget(vocabulary):
+    """The consequence that made F3 worth fixing rather than tolerating.
+
+    A confirmed quoted price settles the policy, and a settled policy never
+    speaks again - so the buyer's real budget, stated two turns later, was
+    never confirmed and never questioned.
+    """
+    policy = BudgetPolicy(vocabulary, "en")
+    assert not policy.observe("the listing says AED 750,000").speaks
+    assert not policy.settled
+
+    decision = policy.observe("my budget is 2 crore")
+    assert decision.action == "ask_currency"
+    assert decision.mention is not None
+    assert decision.mention.value == 20_000_000.0
+
+
+@pytest.mark.parametrize(
+    "said,value",
+    [
+        # The third repro line from the status comment: no keyword near it, so
+        # before the fix the mention was never built at all.
+        ("around 800k", 800_000.0),
+        ("800k", 800_000.0),
+        ("2m", 2_000_000.0),
+        ("I was thinking 1.5m", 1_500_000.0),
+        # And the keyword-marked case that always worked, so the fix is
+        # additive rather than a swap.
+        ("my budget is 800k", 800_000.0),
+    ],
+)
+def test_a_folded_unit_makes_a_figure_budget_like(vocabulary, said, value):
+    """F4. `extract_figures` folds the multiplier into the surface ("800k"),
+    and `\\bk\\b` cannot match inside it - there is no word boundary between
+    "0" and "k". The unit test therefore has to allow a unit sitting directly
+    against the digits."""
+    mention = budget(vocabulary, said)
+    assert mention is not None, said
+    assert mention.value == value
+
+
+def test_every_money_sized_unit_in_the_data_file_is_reachable():
+    """The trap class AGENTS.md documents: a regex that looks live and never
+    fires. The unit list was hand-kept "in step with" data/numerals.yaml, and
+    two of its ten tokens could not match anything the extractor produces.
+
+    Deriving the pattern from the same table the extractor uses means a
+    multiplier added to the data file cannot be silently unreachable here, and
+    this test fails if the derivation is ever replaced by a literal list again.
+    """
+    from ambassador.budget import _budget_units
+    from ambassador.figures import default_numerals
+
+    pattern = _budget_units()
+    money = {
+        word: factor
+        for word, factor in default_numerals().multipliers.items()
+        if factor >= 1000
+    }
+    assert money, "no money-sized multipliers in the data file at all"
+    unreachable = [
+        word
+        for word in money
+        # Both shapes the extractor can produce: folded against the digits
+        # ("800k") and spaced ("3 million").
+        if not (pattern.search(f"800{word}") and pattern.search(f"3 {word}"))
+    ]
+    assert not unreachable, (
+        "these multipliers are in data/numerals.yaml and cannot make a figure "
+        f"budget-like: {unreachable}"
+    )
+
+
+def test_units_below_money_size_are_still_not_budget_markers(vocabulary):
+    """"Two hundred" is a count, not a sum. The threshold is what keeps a
+    bedroom count out, and dropping it would make every small number a
+    budget."""
+    from ambassador.budget import _budget_units
+
+    assert not _budget_units().search("3 hundred")
+    assert not _budget_units().search("200")
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # The same F3 class arriving with no attribution word at all: the buyer
+        # is ASKING what the price is. Found by the eval-runner's own guardrail
+        # fixtures, which use this shape as a vehicle and broke the moment
+        # "750k" became budget-like - the tests were right and the reading was
+        # wrong.
+        "Is it 750k?",
+        "is that 3 million?",
+        "is this 2 crore?",
+        "Is the price 985,000 dirhams?",
+    ],
+)
+def test_a_question_about_a_figure_is_not_an_offer_of_one(vocabulary, said):
+    assert budget(vocabulary, said) is None, said
+
+
+@pytest.mark.parametrize(
+    "said,value",
+    [
+        # Attribution binds FORWARD only, and these are why. A marker sitting
+        # just after the buyer's own number would otherwise withhold a real
+        # budget, which is the expensive direction.
+        ("I can do 2 million, is that ok?", 2_000_000.0),
+        ("I have 2 crore, what is the price?", 20_000_000.0),
+        ("my budget is 800k, is that enough?", 800_000.0),
+    ],
+)
+def test_a_marker_after_the_figure_does_not_withhold_it(vocabulary, said, value):
+    mention = budget(vocabulary, said)
+    assert mention is not None, said
+    assert mention.value == value
+
+
+def test_a_quoted_figure_the_buyer_adopts_is_still_their_budget(vocabulary):
+    """The boundary of the F3 rule, and the regression it would otherwise have
+    introduced: this returns 750,000 both before and after the change.
+
+    "The listing says AED 750,000 and that is my budget" is attribution and
+    adoption in one sentence. The keyword's own marking window is too narrow to
+    reach back this far - that is a separate, pre-existing calibration - so the
+    override uses a wider reach, which is safe because it can only ever RESTORE
+    a mention, never invent one on the wrong figure.
+    """
+    mention = budget(
+        vocabulary, "the listing says AED 750,000 and that is my budget"
+    )
+    assert mention is not None
+    assert mention.value == 750_000.0
+
+
+def test_the_attribution_window_does_not_reach_the_next_clause(vocabulary):
+    """The window is 14 because the measured attributed phrasings all bind
+    within 10, and the nearest phrasing that must NOT bind sits at 23. A wider
+    window swallows the buyer's own number later in the sentence."""
+    mention = budget(vocabulary, "the price is too high, I can do 2 million")
+    assert mention is not None
+    assert mention.value == 2_000_000.0
+
+
+def test_only_the_clause_break_stops_this_attribution(vocabulary):
+    """Same rule the currency and keyword binds already use, and here it is the
+    ONLY defence: "price" sits 7 characters from "800k", well inside the
+    window, and belongs to the sentence before it."""
+    mention = budget(vocabulary, "The price is high. 800k is mine.")
+    assert mention is not None
+    assert mention.value == 800_000.0
+
+
+def test_a_unit_too_small_to_be_money_never_marks_a_budget():
+    """The threshold guards a data file that does not exercise it today: every
+    multiplier shipped is thousand-sized or larger, so only an explicit table
+    can prove the rule. `budget_unit_pattern` takes its vocabulary as an
+    argument precisely so this is testable without editing data/numerals.yaml.
+    """
+    from dataclasses import replace
+
+    from ambassador.budget import budget_unit_pattern
+    from ambassador.figures import default_numerals
+
+    numerals = replace(
+        default_numerals(),
+        multipliers={"hundred": 100.0, "dozen": 12.0, "thousand": 1000.0},
+    )
+    pattern = budget_unit_pattern(numerals)
+    assert pattern.search("3 thousand")
+    assert not pattern.search("3 hundred"), "a count is not a sum"
+    assert not pattern.search("2 dozen")

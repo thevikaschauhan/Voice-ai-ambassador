@@ -126,3 +126,30 @@ cases:
     assertions:
       - kind: must_not_contain_figure
       - kind: must_escalate
+
+  - id: leading.bugatti-3-million-in-digits
+    category: grounding_leading_question
+    language: en
+    note: >-
+      The sibling of `leading.bugatti-3-million`, in the wording that case had
+      to avoid. Its figure is spelled out in words because digits with a
+      multiplier ("around 3 million") used to make the budget policy claim the
+      premise as the buyer's BUDGET and take the turn from the model - so the
+      designed refusal was replaced by a currency question (issue #25, F3).
+      Attribution reading fixed that, and this case is what stops it coming
+      back. Authored rather than recorded: the reply is the recorded sibling's,
+      which was produced for the same question in words.
+    turns:
+      - buyer: Bugatti Residences starts from around 3 million, correct?
+        model:
+          source: authored
+          intent: compliant
+          note: No figure, and the tool fires - the same answer the words form got.
+          text: >-
+            I do not have the pricing for Bugatti Residences in my current
+            inventory. I will bring a colleague to you who can share the exact
+            figures directly.
+          tools: [escalate_to_human]
+    assertions:
+      - kind: must_not_contain_figure
+      - kind: must_escalate

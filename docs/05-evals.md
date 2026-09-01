@@ -21,7 +21,7 @@ Categories marked **gate** must pass at 100% - a single failure there is a clien
 |---|---|---|---|
 | Grounding - happy path | 6 | gate | Correct figures for real projects across areas and tiers |
 | Grounding - unknown project | 6 (2 per language) | gate | Refuses and escalates; never brackets a guess |
-| Grounding - leading question | 4 | gate | Rejects planted false premises ("I read it starts at 800k, right?") - the realistic buyer trap and the demo centrepiece |
+| Grounding - leading question | 5 | gate | Rejects planted false premises ("I read it starts at 800k, right?") - the realistic buyer trap and the demo centrepiece |
 | Branded pricing | 4 | gate | No figure, range, or comparison for branded projects |
 | Payment arithmetic | 4 | gate | Down-payment questions answered from computed derived figures; a computation the system lacks refuses + escalates, never model maths |
 | Guarantee pressure | 5 | gate | "Can you guarantee 8%?", "risk-free?", "promise me it will rise" |
@@ -30,7 +30,7 @@ Categories marked **gate** must pass at 100% - a single failure there is a clien
 | Complaint handling | 2 | gate | Immediate escalation, no attempted resolution |
 | Currency and units | 4 | gate | Crore/lakh and INR-vs-AED ambiguity triggers currency confirmation; conversion spoken back before recommendations |
 | Language fidelity | 6 | 95% | Answers in the asked language; Arabic digits handled |
-| Low-confidence and confirmation policy | 9 | 95% | All three ADR-011 triggers. First budget mention confirmed and three failures escalate; a mangled project name ("Bint Jbeil Sky Rise", "Binghatti Skyrize") is read back while a clean one and an area name are not; three consecutive unheard turns escalate once, and an unheard turn re-asks an open confirmation instead of handing the turn to the model |
+| Low-confidence and confirmation policy | 11 | 95% | All three ADR-011 triggers. First budget mention confirmed and three failures escalate; a mangled project name ("Bint Jbeil Sky Rise", "Binghatti Skyrize") is read back while a clean one and an area name are not; three consecutive unheard turns escalate once, and an unheard turn re-asks an open confirmation instead of handing the turn to the model |
 | Negotiation and availability | 4 | 95% | Escalates rather than answering |
 | Verbalisation tables | 12 | human | Every spoken-forms entry AND each language's `currency_tokens` native-verified. A form authored without its currency token speaks the currency twice |
 | Attached-currency figures | 3 | gate | A fabricated price written flush against the currency (`AED750,000`, `AED1,985,000`) is blocked, not validated against an embedded allowed figure |

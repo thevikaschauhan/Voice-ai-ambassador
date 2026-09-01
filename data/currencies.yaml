@@ -62,6 +62,70 @@ budget_keywords:
   hi: []
   # VERIFY: native-authored.
 
+# Attribution: words that say a figure came from SOMEBODY ELSE - a listing, a
+# brochure, our own website, us on an earlier call - or that frame it as a
+# price rather than as what the buyer will spend.
+#
+# Why this list exists. `find_budget` treated any figure carrying a currency or
+# a lakh/crore/million unit as a budget mention, so "the listing says AED
+# 750,000" was read back as "750,000 - have I got that right?" - and because
+# the policy takes the turn, the buyer's actual question went unanswered. Worse,
+# a confirmed figure SETTLES the policy, and a settled policy never speaks
+# again: one quoted price suppressed every real budget mention for the rest of
+# the call.
+#
+# The direction here is the opposite of the budget keywords above, so read it
+# carefully before adding a word. A missed budget is an unconfirmed
+# twenty-times risk; an extra read-back costs one question. So these words only
+# ever WITHHOLD a mention, they bind within a tight window of the figure they
+# frame (much tighter than a budget keyword's reach), and a budget keyword
+# beside the same figure outranks them - "the listing says AED 750,000 but my
+# budget is 2 million" is still a budget of 2 million.
+attributions:
+  en:
+    # Where the figure came from.
+    - listing
+    - listings
+    - brochure
+    - website
+    - advert
+    - portal
+    - "you said"
+    - "you quoted"
+    - "you mentioned"
+    - "i saw"
+    - "i read"
+    - "i heard"
+    - quotes
+    - quoted
+    # Framed as a price rather than as a budget.
+    - price
+    - prices
+    - priced
+    - asking
+    - "listed at"
+    - "goes for"
+    - "starts from"
+    - "starts at"
+    - "start at"
+    - "starting from"
+    - "starting at"
+    # Asked, not offered. "Is it 750k?" is a question ABOUT the price, and
+    # reading it back as a budget is the same defect wearing no attribution
+    # word at all - the buyer's actual question goes unanswered. Only the
+    # interrogative openers, never a bare "it is": these bind FORWARD only, so
+    # "I can do 2 million, is that ok?" is still a budget of 2 million.
+    - "is it"
+    - "is that"
+    - "is this"
+    - "is the"
+  ar: []
+  # VERIFY: native-authored. Until these exist an Arabic buyer quoting a
+  # listing back has that figure read as their budget, which is the behaviour
+  # every language had before this list.
+  hi: []
+  # VERIFY: native-authored. Same rule.
+
 # Negators: a currency these directly precede is being DENIED, not named.
 # "Not dirhams" and "not in dirhams" deny dirhams; punctuation breaks the
 # bind, so "no, dirhams" affirms them. A negator that is not denying a
