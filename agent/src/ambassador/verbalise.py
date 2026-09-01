@@ -124,16 +124,61 @@ def load_spoken_forms(path: Path | None = None) -> SpokenForms:
     for language, block in (raw or {}).items():
         block = _language_block(block, language, source)
         for entry in block.get("forms") or []:
+            spoken = _entry_spoken(entry, language, source)
+            if spoken is None:
+                continue  # a placeholder row: owed, not authored
             if "surface" in entry:
-                by_surface[(language, entry["surface"])] = entry["spoken"]
+                by_surface[(language, entry["surface"])] = spoken
             else:
-                by_value[(language, entry["kind"], float(entry["value"]))] = entry[
-                    "spoken"
-                ]
+                by_value[(language, entry["kind"], float(entry["value"]))] = spoken
         patterns = _currency_patterns(block.get("currency_tokens") or [])
         if patterns is not None:
             currency[language] = patterns
     return SpokenForms(by_value=by_value, by_surface=by_surface, currency=currency)
+
+
+def _entry_spoken(entry: dict[str, Any], language: str, source: Path) -> str | None:
+    """One entry's spoken form, or None when the row is a placeholder.
+
+    A row may be written with no `spoken` value, to record that a form is OWED
+    and to say who owes it. The hotline is the case that needed it: how a
+    Binghatti number should be read aloud is a client fact, not something this
+    team may author (#10), and without a row the only trace of that would be a
+    comment in a file nobody re-reads. A placeholder row carries `verify:`
+    explaining what is missing - the same discipline `data/whitelist.yaml`
+    applies to its `why`, and it is required rather than optional because an
+    unexplained blank reads as an editing accident.
+
+    **Which way this fails: towards the digit fallback.** A placeholder
+    contributes no form, so verbalisation leaves the digits exactly as it does
+    today - the gap stays visible and nothing new is spoken. The opposite
+    direction is the one that matters: loading placeholder text as a spoken
+    form would put it into a buyer's ear. That is why an empty or non-string
+    `spoken` is REJECTED here rather than quietly treated as absent - a typo
+    that empties a real form must fail in front of whoever made it, not
+    silently downgrade a language that used to speak.
+    """
+    if "spoken" in entry and entry["spoken"] is not None:
+        spoken = entry["spoken"]
+        if not isinstance(spoken, str) or not spoken.strip():
+            raise ValueError(
+                f"{source.name}: the {language!r} spoken form for "
+                f"{entry.get('surface') or entry.get('value')!r} is empty or "
+                "not text. It is substituted into speech verbatim, so it has "
+                "to be a non-empty quoted string - and a row that is not yet "
+                "authored is written with no 'spoken' value and a 'verify:' "
+                "note, not with an empty one."
+            )
+        return spoken
+    if not str(entry.get("verify") or "").strip():
+        raise ValueError(
+            f"{source.name}: the {language!r} entry for "
+            f"{entry.get('surface') or entry.get('value')!r} has no spoken "
+            "form and no 'verify:' note. A row with no form is a claim that "
+            "one is owed, and it has to say by whom and why or it reads as a "
+            "line somebody half-deleted."
+        )
+    return None
 
 
 def _language_block(block: Any, language: str, source: Path) -> dict[str, Any]:
@@ -258,3 +303,36 @@ def quarter_surface_gaps(forms: SpokenForms, language: str) -> list[str]:
     }
     present = {surface for (lang, surface) in forms.by_surface if lang == language}
     return sorted(reference - present)
+
+
+def identifier_gaps(
+    forms: SpokenForms, allowed: AllowedFigures, language: str
+) -> list[float]:
+    """Allowed identifiers with no spoken form in this language.
+
+    Reported separately from `spoken_form_gaps` because the ASK is different,
+    not because the mechanism is. That function deliberately checks
+    `currency_amounts`, since a currency-naming form on a square footage makes
+    the buyer hear "four hundred and twenty dirhams square feet" - and the
+    hotline was swept out of the packet with the square footages, because both
+    are non-currency `amounts`. They are not the same case. A square footage
+    with no form is correct: the digit fallback reads a bare quantity
+    correctly. An identifier with no form is the defect: 80015 is read as
+    "eighty thousand and fifteen", on the escalation path.
+
+    So the packet asks for identifiers, and asks differently - a sequence of
+    digits, naming no currency.
+
+    The lookup is keyed on `"amount"`, which is not a typo. `verbalise()` looks
+    a form up by the kind the EXTRACTOR assigned, and `figures._classify` calls
+    a bare five-digit integer an amount; there is no "identifier" FigureKind
+    and inventing a key here would mean an authored hotline form sat in the
+    file and was never spoken. That is the class of defect this repository
+    keeps finding, so the gap check and the runtime lookup deliberately use one
+    key.
+    """
+    return sorted(
+        value
+        for value in allowed.identifiers
+        if (language, "amount", float(value)) not in forms.by_value
+    )

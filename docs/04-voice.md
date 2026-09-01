@@ -22,6 +22,8 @@ Two lines to carry into the meeting: the LLM dominates, not the safety layer (gu
 
 When projected first audio exceeds ~800ms, a short localised acknowledgment may play ("let me look at the collection for you") - sparingly, only on genuinely slow turns, from `data/prerolls.yaml`, native-reviewed. A filler on every turn reads as a tic.
 
+  Half of that is now true. `data/prerolls.yaml` was the third file in this repository to be configuration in appearance and a document in fact, after `disclosures.yaml` and `lexicon.yaml`: nothing loaded it, so the Arabic and Hindi `VERIFY:` markers could not reach the reviewer packet either, and the copy nobody here may write was also never being asked for. `adapter/prerolls.py` loads and types it, and the packet asks for it. **Choosing and playing one on a slow turn is still unwired** - that is a timing decision in the voice session, and an absent language deliberately gets no filler rather than an English one, because an English acknowledgment inside an Arabic call is a seam the buyer hears rather than one it hides.
+
 ## The dialect problem
 
 The part most likely to embarrass us in the room, and the part a Dubai tech lead is best placed to catch.
@@ -130,4 +132,4 @@ The framework's default false-interruption handling (pause playback, two-second 
 
 ## Voice and persona
 
-A brand decision - bring options, not a choice: neutral international English, warm and measured; Gulf-accented Arabic rather than a neutral MSA voice; consistent gender and register across languages, or deliberately localised per market. Bring two or three samples to the meeting; it is a decision the client will enjoy making and it converts assumption A8 into engagement. `PHASE-2:` cloning a named ambassador's voice - technically easy, contractually and ethically loaded; raise as roadmap and let them ask.
+A brand decision - bring options, not a choice: neutral international English, warm and measured; Gulf-accented Arabic rather than a neutral MSA voice; consistent gender and register across languages, or deliberately localised per market. Bring two or three samples to the meeting; it is a decision the client will enjoy making and it converts assumption A8 into engagement. **Candidates are shortlisted in `docs/voice-shortlist.md`** - three per language, with previews that cost nothing to play, and two findings about Fish's public catalogue (no licensed voice in any language we speak; the most-used Arabic and Hindi voices are clones of identifiable people) that have to be settled before one is played to the client. `PHASE-2:` cloning a named ambassador's voice - technically easy, contractually and ethically loaded; raise as roadmap and let them ask.

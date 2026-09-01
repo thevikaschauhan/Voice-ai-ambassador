@@ -90,6 +90,24 @@ class AllowedFigures:
     # blocked. That is the safe direction on purpose: an under-populated set
     # blocks sentences, it never speaks an unverified figure.
     currency_amounts: frozenset[float] = frozenset()
+    # The subset of `amounts` read as a SEQUENCE rather than as a quantity:
+    # phone numbers, permit numbers. Also a subset, for the same reason
+    # `currency_amounts` is one - the guardrail does not care what a number
+    # means, and verbalisation does.
+    #
+    # It is the mirror image of `currency_amounts`, and the distinction the
+    # spoken-form table cannot express on its own. For a square footage the
+    # digit fallback is CORRECT and an authored form would be the defect; for
+    # an identifier the digit fallback is the defect - 80015 is Binghatti's
+    # hotline and TTS reads it as "eighty thousand and fifteen", on the
+    # escalation path, which AGENTS.md says gets the same polish as the happy
+    # path. So an identifier with no spoken form is a gap the reviewer packet
+    # has to enumerate, and a square footage with no spoken form is not.
+    #
+    # Empty means nothing is enumerated as owed, which is the direction that
+    # under-reports rather than the one that walks an author into giving a
+    # phone number a currency-naming form.
+    identifiers: frozenset[float] = frozenset()
 
 
 # --- Guardrail results ----------------------------------------------------

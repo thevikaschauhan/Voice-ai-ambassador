@@ -209,3 +209,75 @@ def test_a_language_with_nothing_recorded_says_so_rather_than_going_blank(
     section = capsys.readouterr().out.split("## 5b")[1].split("## 6")[0]
     assert "Nothing recorded yet" in section
     assert "uv run eval --live" in section
+
+
+# --- the two things the packet was not asking for --------------------------
+#
+# Both slipped for one structural reason: the packet is generated from the
+# loaders the runtime uses, so a `VERIFY:` in a file no loader reads cannot
+# appear in it. The hotline had a whitelist entry and no row to enumerate;
+# `prerolls.yaml` had no loader at all. Fixed at the wiring, so these tests
+# check the wiring rather than the words.
+
+
+def test_it_asks_how_the_hotline_is_read_aloud(arabic):
+    """The escalation path, which AGENTS.md says gets the same polish as the
+    happy path. Today the digits go to the voice and are read as "eighty
+    thousand and fifteen", and the packet said nothing about it."""
+    sys.path.insert(0, str(AGENT_DIR / "src"))
+    from ambassador.inventory import build_allowed_figures, load_inventory
+
+    allowed = build_allowed_figures(load_inventory())
+    assert allowed.identifiers, "no identifiers - this test would pass vacuously"
+    for value in allowed.identifiers:
+        assert f"- [ ] {int(value)} (" in arabic, value
+
+
+def test_it_asks_for_the_hotline_away_from_the_money(arabic):
+    """The trap the separation exists for. Section 3 tells the reviewer to name
+    the currency inside every phrase, and a hotline number that inherited that
+    instruction becomes a sum of dirhams. So it is asked for in its own
+    section, and never as an `AED` line item."""
+    sys.path.insert(0, str(AGENT_DIR / "src"))
+    from ambassador.inventory import build_allowed_figures, load_inventory
+
+    allowed = build_allowed_figures(load_inventory())
+    for value in allowed.identifiers:
+        assert f"- [ ] AED {int(value):,} ->" not in arabic, value
+    section = arabic.split("## 3e")[1].split("## 4")[0]
+    assert "naming no currency" in section
+
+
+def test_the_hotline_ask_is_labelled_from_the_whitelist_not_typed(arabic):
+    """Generated, like everything else here. A hand-written "Binghatti's
+    toll-free hotline" beside the number would read correctly today and be
+    wrong the day a permit number is whitelisted, with nothing to notice."""
+    import yaml
+
+    data = yaml.safe_load(
+        (AGENT_DIR.parent / "data" / "whitelist.yaml").read_text(encoding="utf-8")
+    )
+    identifiers = [e for e in data["amounts"] if e["kind"] == "identifier"]
+    assert identifiers, "no identifier in the whitelist - vacuous"
+    for entry in identifiers:
+        assert str(entry["why"]).split(".")[0].strip() in arabic
+
+
+def test_it_asks_for_the_prerolls(arabic):
+    """`data/prerolls.yaml` carries `ar: []` and `hi: []` under a `VERIFY:`
+    marker, and until it had a loader that marker could not reach this page."""
+    sys.path.insert(0, str(AGENT_DIR / "src"))
+    from adapter.prerolls import load_prerolls
+
+    section = arabic.split("## 2b")[1].split("## 3.")[0]
+    for line in load_prerolls().for_language("en"):
+        assert line in section, line
+    assert section.count("- [ ] Arabic acknowledgment:") == 2
+
+
+def test_the_preroll_ask_says_we_will_not_borrow_the_english(arabic):
+    """The reviewer has to know that "no natural equivalent" is an acceptable
+    answer, or they will invent one. An English filler in an Arabic call is a
+    seam the buyer hears rather than one it hides."""
+    section = arabic.split("## 2b")[1].split("## 3.")[0]
+    assert "we play nothing" in section

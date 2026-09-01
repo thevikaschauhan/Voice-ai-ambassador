@@ -1,11 +1,13 @@
 import re
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
-from ambassador.schemas import ValidatedSentence
+from ambassador.schemas import Language, ValidatedSentence
 from ambassador.inventory import build_allowed_figures, load_inventory
 from ambassador.verbalise import (
+    identifier_gaps,
     load_spoken_forms,
     quarter_surface_gaps,
     spoken_form_gaps,
@@ -368,3 +370,119 @@ def test_an_unauthored_language_reports_every_figure_it_owes():
             "Q3 2026",
             "Q4 2026",
         ]
+
+
+# --- identifiers: the numbers the digit fallback reads WRONG ----------------
+#
+# `spoken_form_gaps` checks currency amounts, so it correctly leaves square
+# footages alone - the digit fallback reads a bare quantity fine, and a
+# currency-naming form on one produces "four hundred and twenty dirhams square
+# feet". Binghatti's hotline was swept out with them, and for it the digit
+# fallback is the defect: 80015 is spoken as "eighty thousand and fifteen",
+# on the escalation path.
+
+
+def test_the_hotline_is_reported_as_an_identifier_gap(allowed):
+    """The wiring the reviewer packet needs. It has no form in any language -
+    how a Binghatti number is read aloud is a client fact - so every language
+    owes it, English included."""
+    forms = load_spoken_forms()
+    assert 80015.0 in allowed.identifiers
+    for language in get_args(Language):
+        assert identifier_gaps(forms, allowed, language) == [80015.0]
+
+
+def test_square_footages_are_not_identifiers(allowed):
+    """The distinction this field exists to make. Both are non-currency
+    amounts; only one of them is owed a spoken form."""
+    not_money = allowed.amounts - allowed.currency_amounts
+    assert 420.0 in not_money and 420.0 not in allowed.identifiers
+
+
+def test_an_authored_identifier_form_is_actually_spoken(tmp_path: Path):
+    """The claim the key choice rests on, proved by execution rather than
+    asserted in a comment.
+
+    `identifier_gaps` looks a form up under FigureKind "amount" because that is
+    what `figures._classify` calls a bare five-digit integer, and therefore the
+    key `verbalise()` will use at runtime. If the two disagreed, a hotline form
+    could be authored, sit in the file, close the gap in the packet and never
+    reach a buyer - which is the exact shape of defect this repository keeps
+    finding. So the test speaks it.
+    """
+    path = tmp_path / "spoken-forms.yaml"
+    path.write_text(
+        "en:\n"
+        "  currency_tokens: []\n"
+        "  forms:\n"
+        '    - { kind: amount, value: 80015, spoken: "eight double oh one five" }\n',
+        encoding="utf-8",
+    )
+    forms = load_spoken_forms(path)
+
+    out = verbalise(
+        ValidatedSentence(text="Our team is on 80015.", language="en"), forms
+    )
+    assert out.text == "Our team is on eight double oh one five."
+
+    allowed = build_allowed_figures(load_inventory())
+    assert identifier_gaps(forms, allowed, "en") == []
+
+
+# --- placeholder rows: a form that is OWED, recorded where an author looks ---
+
+
+def test_a_placeholder_row_leaves_the_digits_alone(tmp_path: Path):
+    """The failure direction. A row with no `spoken` is a claim that a form is
+    owed, not a form: it must not reach speech, and the sentence must come out
+    exactly as it goes in today."""
+    path = tmp_path / "spoken-forms.yaml"
+    path.write_text(
+        "en:\n"
+        "  currency_tokens: []\n"
+        "  forms:\n"
+        "    - { kind: amount, value: 80015, verify: \"client fact\" }\n",
+        encoding="utf-8",
+    )
+    forms = load_spoken_forms(path)
+    assert forms.by_value == {}
+
+    out = verbalise(
+        ValidatedSentence(text="Our team is on 80015.", language="en"), forms
+    )
+    assert out.text == "Our team is on 80015."
+
+
+def test_the_shipped_hotline_row_is_a_placeholder_and_not_speech(forms, allowed):
+    """The row that ships. It exists so the gap is visible in the file an
+    author edits, and it must not have quietly become a spoken form - nobody
+    here may decide how a Binghatti number is read aloud (#10)."""
+    assert ("en", "amount", 80015.0) not in forms.by_value
+    assert identifier_gaps(forms, allowed, "en") == [80015.0]
+
+
+def test_a_row_with_no_form_and_no_verify_is_refused(tmp_path: Path):
+    """An unexplained blank reads as a line somebody half-deleted."""
+    path = tmp_path / "spoken-forms.yaml"
+    path.write_text(
+        "en:\n  currency_tokens: []\n  forms:\n    - { kind: amount, value: 80015 }\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="no spoken form and no 'verify:' note"):
+        load_spoken_forms(path)
+
+
+def test_an_emptied_form_is_refused_rather_than_treated_as_absent(tmp_path: Path):
+    """The other direction, and the one that matters more. A typo that empties
+    a real form must fail in front of whoever made it, not silently downgrade a
+    language that used to speak into the digit fallback."""
+    path = tmp_path / "spoken-forms.yaml"
+    path.write_text(
+        "en:\n"
+        "  currency_tokens: []\n"
+        "  forms:\n"
+        '    - { kind: amount, value: 985000, spoken: "  ", verify: "oops" }\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="empty or not text"):
+        load_spoken_forms(path)

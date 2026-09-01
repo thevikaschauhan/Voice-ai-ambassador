@@ -12,9 +12,12 @@ list can never drift from what the loaders will actually demand back.
 
     uv run python tools/reviewer_packet.py ar > packet-ar.md
 
-The packet deliberately asks for money, percents and quarters and NOT for
-square footages or the hotline: see data/spoken-forms.yaml for why authoring a
-currency-naming form for a bare quantity is a defect.
+The packet asks for money, percents and quarters and NOT for square footages:
+see data/spoken-forms.yaml for why authoring a currency-naming form for a bare
+quantity is a defect. It asks for the hotline SEPARATELY, in its own section,
+for the same reason - the digit fallback reads a square footage correctly and
+reads a phone number as "eighty thousand and fifteen", so one is not a gap and
+the other is, and they must not be asked for on the same page as each other.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from adapter.confirmations import load_confirmations  # noqa: E402
 from adapter.disclosure import load_disclosures  # noqa: E402
 from adapter.fallbacks import load_fallback_copy  # noqa: E402
 from adapter.lexicon import load_lexicon  # noqa: E402
+from adapter.prerolls import load_prerolls  # noqa: E402
 from ambassador.guardrails.prohibited import (  # noqa: E402
     languages_covered,
     load_patterns,
@@ -35,6 +39,7 @@ from ambassador.guardrails.prohibited import (  # noqa: E402
 from ambassador.inventory import build_allowed_figures, load_inventory  # noqa: E402
 from evals.cases import load_cases  # noqa: E402
 from ambassador.verbalise import (  # noqa: E402
+    identifier_gaps,
     load_spoken_forms,
     quarter_surface_gaps,
     spoken_form_gaps,
@@ -153,6 +158,7 @@ def main(language: str) -> None:
     disclosures = load_disclosures()
     fallbacks = load_fallback_copy()
     lexicon = load_lexicon()
+    prerolls = load_prerolls()
     patterns = load_patterns()
     confirmations = load_confirmations()
 
@@ -201,6 +207,35 @@ def main(language: str) -> None:
     w("**Fallback** - the agent has said nothing and is handing over to a human.")
     w(f"English: > {fallbacks.fallback['en']}")
     w(bullet(f"{name} fallback:"))
+    w("")
+    w("## 2b. Short acknowledgments for a slow turn")
+    w("")
+    w(
+        "Played only when the answer is going to take a moment - never on every "
+        "turn, which reads as a tic. Two short lines, the sort of thing a "
+        "consultant says while they look something up."
+    )
+    w("")
+    covered_prerolls = sorted(prerolls.languages_covered())
+    w(f"(Lines exist today for: {', '.join(covered_prerolls) or 'none'}.)")
+    w("")
+    for line in prerolls.for_language("en"):
+        w(f"English: > {line}")
+    w("")
+    w(
+        f"If there is no natural {name} equivalent, say so and we play nothing "
+        "- an English filler dropped into "
+        f"{article(name)} {name} call is a seam the buyer hears rather than one "
+        "it hides, so we would rather have none than borrow ours."
+    )
+    w("")
+    existing = prerolls.for_language(language)
+    for line in existing:
+        w(f"Already have: > {line}")
+    if existing:
+        w("")
+    w(bullet(f"{name} acknowledgment:"))
+    w(bullet(f"{name} acknowledgment:"))
     w("")
     w("## 3. Money, percentages and dates spoken aloud")
     w("")
@@ -369,6 +404,34 @@ def main(language: str) -> None:
     w("")
     w(bullet("filler sounds:"))
     w("")
+    identifiers = identifier_gaps(forms, allowed, language)
+    if identifiers:
+        w("## 3e. The numbers that are not quantities")
+        w("")
+        w(
+            "Read as a SEQUENCE, the way a phone number is read - not as a "
+            "quantity, and naming no currency. This is deliberately a separate "
+            "question from section 3: every figure there is money and its "
+            "phrase says so, and the same treatment here would turn a hotline "
+            "number into a sum of dirhams."
+        )
+        w("")
+        w(
+            "Today they go to the voice as bare digits, so each number below "
+            "is read aloud as one quantity rather than as a sequence."
+        )
+        w("")
+        w(
+            "`VERIFY:` the digits themselves are still being confirmed with "
+            "the client, so please write the READING rather than checking the "
+            "number - if it changes, the pattern you give us carries over."
+        )
+        w("")
+        notes = _identifier_notes()
+        for value in identifiers:
+            note = notes.get(int(value))
+            w(bullet(f"{int(value)}{f' ({note})' if note else ''} ->"))
+        w("")
     w("## 4. How these names should sound")
     w("")
     already = sorted(lexicon.languages_covered())
@@ -465,6 +528,33 @@ def _recorded_replies(language: str) -> list[tuple[str, str]]:
                         replies.append(entry)
                 fixture = fixture.retry
     return replies
+
+
+def _identifier_notes() -> dict[int, str]:
+    """What each whitelisted identifier IS, in the reviewer's words.
+
+    Generated rather than typed for the reason the rest of this file is: today
+    there is exactly one identifier and a hand-written "Binghatti's toll-free
+    hotline" beside it would read correctly and be wrong the day a permit
+    number is whitelisted, with nothing to notice.
+
+    Taken from the whitelist's own `why`, up to its first full stop. The rest
+    of that field is the VERIFY: note and the reasoning, which is written for
+    us and not for a reviewer.
+    """
+    import yaml
+
+    path = Path(__file__).resolve().parents[2] / "data" / "whitelist.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    notes: dict[int, str] = {}
+    for entry in data.get("amounts") or []:
+        if entry.get("kind") != "identifier":
+            continue
+        why = str(entry.get("why") or "").strip()
+        first = why.split(".")[0].strip()
+        if first:
+            notes[int(entry["value"])] = first
+    return notes
 
 
 def _terms() -> list[str]:

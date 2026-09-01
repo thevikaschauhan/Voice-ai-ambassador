@@ -45,6 +45,23 @@ en:
     - { kind: amount, value: 390000, spoken: "three hundred and ninety thousand dirhams" }
     - { kind: amount, value: 195000, spoken: "one hundred and ninety-five thousand dirhams" }
     - { kind: amount, value: 2000000, spoken: "two million dirhams" }
+    # identifiers - read as a SEQUENCE, never as a quantity, and naming no
+    # currency. A row with no `spoken` is a form that is OWED: it loads as
+    # absent, so the digit fallback stays exactly as it is today, and
+    # `verbalise.identifier_gaps()` reports it so the reviewer packet asks.
+    # Keyed `kind: amount` on purpose - that is what the extractor calls a bare
+    # five-digit integer, and it is the key `verbalise()` will look up, so a
+    # form authored here is a form that is actually spoken.
+    - kind: amount
+      value: 80015
+      verify: >-
+        Binghatti's toll-free hotline, spoken when routing a buyer to a human.
+        BOTH the real number and how it should be read aloud are client facts
+        (issue #10) - digit by digit, grouped as 800-15, or the words a UAE
+        caller expects. Until they are answered the digits go to TTS and are
+        read as "eighty thousand and fifteen". Do not guess: a wrong hotline
+        spoken warmly is worse than digits. When authored, it must NOT name a
+        currency - it is not money.
     # percents
     - { kind: percent, value: 10, spoken: "ten per cent" }
     - { kind: percent, value: 20, spoken: "twenty per cent" }
