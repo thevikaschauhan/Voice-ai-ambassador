@@ -155,6 +155,7 @@ def _ambiguous_unit(surface: str) -> bool:
     found = _budget_units().search(surface)
     return bool(found) and found.group(1).lower() in _AMBIGUOUS_UNITS
 
+
 # Attribution, ownership and dimensions are decided by SEGMENT, not by character
 # distance. The first attempt ran a distance contest - a source word within 14
 # characters, a budget keyword within 30 - and a natural modifier defeats it:
@@ -403,9 +404,7 @@ class _CurrencyHit:
 
 
 def _token_pattern(token: str) -> str:
-    return (
-        rf"(?<!\w){re.escape(token)}(?!\w)" if token.isalnum() else re.escape(token)
-    )
+    return rf"(?<!\w){re.escape(token)}(?!\w)" if token.isalnum() else re.escape(token)
 
 
 def _negator_spans(lowered: str, vocabulary: CurrencyVocabulary, language: str):
@@ -444,9 +443,7 @@ def _currency_hits(
                     and not _PUNCTUATION.search(lowered[neg_end : found.start()])
                     for _, neg_end in negators
                 )
-                hits.append(
-                    _CurrencyHit(currency, found.start(), found.end(), negated)
-                )
+                hits.append(_CurrencyHit(currency, found.start(), found.end(), negated))
     return hits
 
 
@@ -489,9 +486,7 @@ def read_reply(
     # hits sit within the gap of this negator.
     contradicted = False
     for neg_start, neg_end in _negator_spans(lowered, vocabulary, language):
-        binds = any(
-            h.negated and 0 <= h.start - neg_end <= _NEGATION_GAP for h in hits
-        )
+        binds = any(h.negated and 0 <= h.start - neg_end <= _NEGATION_GAP for h in hits)
         if not binds:
             contradicted = True
             break
@@ -603,9 +598,7 @@ def find_budget(
     # or binds a marker to a figure, because three designs built that way each
     # shipped adjacent regressions.
     def says(where: str, words: tuple[str, ...]) -> bool:
-        return any(
-            word and re.search(_token_pattern(word), where) for word in words
-        )
+        return any(word and re.search(_token_pattern(word), where) for word in words)
 
     def word_list(name: str) -> tuple[str, ...]:
         return getattr(vocabulary, name).get(language, ())
@@ -648,9 +641,7 @@ def find_budget(
             for found in re.finditer(_token_pattern(word), lowered):
                 cuts.add(found.start())
 
-        bounds = [
-            (a, b) for a, b in zip(sorted(cuts), sorted(cuts)[1:], strict=False)
-        ]
+        bounds = [(a, b) for a, b in zip(sorted(cuts), sorted(cuts)[1:], strict=False)]
 
         # RANGE FUSION. Two figures joined by NOTHING but a connector, a
         # currency token and punctuation are one quoted range sharing one fate:
@@ -733,11 +724,7 @@ def find_budget(
         750,000 the asking price?"."""
         opening = sentence.strip()
         return any(
-            word
-            and (
-                opening.startswith(word + " ")
-                or opening.startswith(word + "'")
-            )
+            word and (opening.startswith(word + " ") or opening.startswith(word + "'"))
             for word in word_list("question_openers")
         )
 
@@ -806,6 +793,7 @@ def find_budget(
             region, word_list("pricing_verbs")
         ):
             return True
+
         # The first-person exemption is about WHO IS SAYING, so it keys on the
         # subject of the saying verb rather than on any first-person token in
         # the segment. "I said 2 crore" and "I told you 2 crore" are the buyer
@@ -897,11 +885,7 @@ def find_budget(
         # the price noun being present, it cannot touch "AED 750,000 is
         # affordable for me", which names no price at all.
         crossing = rf"(?:\w+\s+){{0,{reach}}}" if reach else ""
-        gap = (
-            rf"\s*{crossing}(?:(?:{money})\s*)?$"
-            if money
-            else rf"\s*{crossing}$"
-        )
+        gap = rf"\s*{crossing}(?:(?:{money})\s*)?$" if money else rf"\s*{crossing}$"
         for term in terms:
             if not term:
                 continue
@@ -913,9 +897,9 @@ def find_budget(
                     rf"^\s*{re.escape(copula)}\s+{crossing}"
                     rf"(?:the|a|an)?\s*{re.escape(term)}(?!\w)"
                 )
-                if re.search(
-                    before, lowered[region_start:figure_start]
-                ) or re.match(after, lowered[figure_end:region_end]):
+                if re.search(before, lowered[region_start:figure_start]) or re.match(
+                    after, lowered[figure_end:region_end]
+                ):
                     return True
         return False
 
@@ -993,9 +977,7 @@ def find_budget(
         # The anaphor has to follow this figure, and no later figure may sit
         # between them - otherwise it is referring to that one instead.
         after_here = spans[i][1]
-        next_figure = next(
-            (s for s, _ in spans if s > after_here), len(lowered)
-        )
+        next_figure = next((s for s, _ in spans if s > after_here), len(lowered))
         window = lowered[after_here:next_figure]
         for shape in shapes:
             found = re.search(shape, window)
@@ -1044,7 +1026,6 @@ def find_budget(
             ),
             keyword=keyword_in_segment(i),
         )
-
 
     currency_of: dict[int, tuple[int, Currency]] = {}
     for hit in _currency_hits(lowered, vocabulary, language):

@@ -69,7 +69,7 @@ async def test_the_pcm_mime_type_takes_the_framework_off_the_decoder_path():
 
 
 def test_pcm_and_wav_share_fishs_default_sample_rate():
-    """"This changes no resampling behaviour" is only true while the plugin's
+    """ "This changes no resampling behaviour" is only true while the plugin's
     two defaults agree. If a release ever splits them, the session would quietly
     resample every frame and this is the test that says so first."""
     defaults = fishaudio.tts._DEFAULT_SAMPLE_RATE

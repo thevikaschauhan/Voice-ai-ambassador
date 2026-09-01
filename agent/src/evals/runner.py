@@ -84,6 +84,7 @@ from .backends import ESCALATE_TOOL, BackendError, ModelBackend, ModelRequest
 from .cases import EvalCase, ModelFixture
 from .outcome import Observed, Spoken, TurnOutcome
 
+
 @dataclass(frozen=True)
 class Harness:
     """Everything loaded once, shared by every case.
@@ -200,9 +201,7 @@ def run_case(case: EvalCase, harness: Harness, backend: ModelBackend) -> Observe
         if spoken:
             history.append(("assistant", spoken))
 
-    return Observed(
-        language=language, forms=harness.forms, turns=tuple(turns)
-    )
+    return Observed(language=language, forms=harness.forms, turns=tuple(turns))
 
 
 def run_turn(

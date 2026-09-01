@@ -154,9 +154,7 @@ def test_a_no_break_space_is_not_swallowed_into_a_surface():
 def test_the_arabic_percent_sign_is_a_percentage():
     # U+066A is language-neutral punctuation, so it needs no native reviewer:
     # without it "١٢٪" was an exempt count of twelve.
-    assert _values("الدفعة هي ١٢٪.") == [
-        ("percent", 12.0)
-    ]
+    assert _values("الدفعة هي ١٢٪.") == [("percent", 12.0)]
     for symbol in ("%", "٪", "％", "﹪"):
         assert _values(f"12{symbol}") == [("percent", 12.0)], repr(symbol)
 
@@ -174,9 +172,7 @@ def test_composed_arithmetic_is_reported_and_never_computed():
 
 def test_composed_arithmetic_covers_a_lone_operator_and_a_superscript():
     assert [m.figure.surface for m in find_composed_arithmetic("AED 8*5")] == ["8*5"]
-    assert [m.figure.surface for m in find_composed_arithmetic("AED 10⁵")] == [
-        "10⁵"
-    ]
+    assert [m.figure.surface for m in find_composed_arithmetic("AED 10⁵")] == ["10⁵"]
     assert [m.figure.surface for m in find_composed_arithmetic("AED 8 · 5")] == [
         "8 · 5"
     ]

@@ -415,7 +415,10 @@ async def test_the_shutdown_path_closes_the_events_bridge(tmp_path):
     assert not handshake.exists()
 
     # The surface still sees the session end before the socket goes away.
-    assert json.loads(await asyncio.wait_for(reader.readline(), 2))["event"] == "session_end"
+    assert (
+        json.loads(await asyncio.wait_for(reader.readline(), 2))["event"]
+        == "session_end"
+    )
     writer.close()
 
 
@@ -1030,7 +1033,7 @@ async def test_giving_up_notifies_a_human_too():
 
 
 async def test_denying_dirhams_is_not_recorded_as_dirhams():
-    """"Not dirhams" settled AED and went permanently silent. There are two
+    """ "Not dirhams" settled AED and went permanently silent. There are two
     currencies, so the denial names rupees - which without a confirmed rate
     is a handover, not a conversion."""
     agent, log, buf = _budget_agent()
@@ -1629,7 +1632,9 @@ async def test_two_paths_asking_for_a_human_hand_over_once():
     # One handover for the turn, and the second attempt is visible rather than
     # dropped silently.
     assert len(escalations(buf)) == 1
-    suppressed = [ln for ln in json_lines(buf) if ln["event"] == "escalation_suppressed"]
+    suppressed = [
+        ln for ln in json_lines(buf) if ln["event"] == "escalation_suppressed"
+    ]
     assert [ln["turn"] for ln in suppressed] == [1]
     assert suppressed[0]["reason"] == "[redacted]"
 
@@ -1657,7 +1662,10 @@ async def test_the_model_calling_the_tool_first_still_leaves_one_handover():
     await log.aclose()
     assert len(escalations(buf)) == 1
     assert escalations(buf)[0]["reason"] == "[redacted]"
-    assert len([ln for ln in json_lines(buf) if ln["event"] == "escalation_suppressed"]) == 1
+    assert (
+        len([ln for ln in json_lines(buf) if ln["event"] == "escalation_suppressed"])
+        == 1
+    )
 
 
 async def test_a_later_turn_can_hand_over_again():
@@ -1800,7 +1808,9 @@ async def test_a_refusing_regeneration_that_also_calls_the_tool_pages_one_human(
 
     await log.aclose()
     assert len(escalations(buf)) == 1
-    assert [ln["turn"] for ln in json_lines(buf) if ln["event"] == "escalation_suppressed"] == [1]
+    assert [
+        ln["turn"] for ln in json_lines(buf) if ln["event"] == "escalation_suppressed"
+    ] == [1]
     assert agent.tracker is not None
     assert agent.tracker.actions == ["escalate_to_human", "escalate_to_human"]
 
@@ -1821,6 +1831,8 @@ async def test_a_conversational_count_in_a_regeneration_is_not_a_corrected_figur
 
     await log.aclose()
     assert len(escalations(buf)) == 1
+
+
 # --- ADR-011 trigger 2: the project-name confirmation -----------------------
 #
 # Same seam as the budget policy, same reason: the model never runs on a turn
@@ -2099,7 +2111,9 @@ def test_the_prompt_keeps_the_model_confirming_names_where_the_policy_is_off():
 
 async def test_three_unusable_turns_in_a_row_hand_the_buyer_over():
     agent, log, buf = _budget_agent()
-    agent._llm = SpyLLM([HealthyStream(["Sorry, could you repeat that? "]) for _ in range(2)])
+    agent._llm = SpyLLM(
+        [HealthyStream(["Sorry, could you repeat that? "]) for _ in range(2)]
+    )
 
     for unusable in ("", "   "):
         agent._tracker = None
@@ -2246,8 +2260,7 @@ def test_every_terminal_line_may_carry_no_slot_of_any_kind(tmp_path):
         bad = tmp_path / f"{key}.yaml"
         broken = dict(authored, **{key: authored[key] + " {amount.foo}"})
         bad.write_text(
-            "en:\n"
-            + "".join(f'  {k}: "{v}"\n' for k, v in broken.items()),
+            "en:\n" + "".join(f'  {k}: "{v}"\n' for k, v in broken.items()),
             encoding="utf-8",
         )
         with pytest.raises(ValueError, match=key):
@@ -2302,7 +2315,9 @@ async def test_each_reply_is_read_by_the_question_it_answers():
 
     agent._tracker = None
     third = spoken(await run_llm_node(agent, user_ctx("Dirhams.")))
-    assert "did you mean" not in third, "the budget's answer was read as a project reply"
+    assert "did you mean" not in third, (
+        "the budget's answer was read as a project reply"
+    )
     assert "A studio is" in third
 
 
@@ -2355,9 +2370,7 @@ async def test_a_project_question_does_not_resume_after_a_handover_either():
             await run_llm_node(agent, user_ctx(""))
         )
     agent._tracker = None
-    assert "not hearing you clearly" in spoken(
-        await run_llm_node(agent, user_ctx(""))
-    )
+    assert "not hearing you clearly" in spoken(await run_llm_node(agent, user_ctx("")))
     for _ in range(2):
         agent._tracker = None
         assert "did you mean" not in spoken(await run_llm_node(agent, user_ctx("")))
@@ -2400,14 +2413,10 @@ async def test_nothing_resumes_after_recognition_hands_the_call_over():
     )
     for _ in range(2):
         agent._tracker = None
-        assert "dirhams or in rupees" in spoken(
-            await run_llm_node(agent, user_ctx(""))
-        )
+        assert "dirhams or in rupees" in spoken(await run_llm_node(agent, user_ctx("")))
 
     agent._tracker = None
-    assert "not hearing you clearly" in spoken(
-        await run_llm_node(agent, user_ctx(""))
-    )
+    assert "not hearing you clearly" in spoken(await run_llm_node(agent, user_ctx("")))
     assert agent._recognition.handed_over
 
     for _ in range(2):

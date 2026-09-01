@@ -88,7 +88,9 @@ class PacedTransport(httpx.AsyncBaseTransport):
         )
 
 
-def make_extractor(transport: httpx.AsyncBaseTransport, events: list[tuple]) -> BriefExtractor:
+def make_extractor(
+    transport: httpx.AsyncBaseTransport, events: list[tuple]
+) -> BriefExtractor:
     return BriefExtractor(
         api_key=FAKE_KEY,
         model="qwen/qwen3.7-flash",
@@ -166,7 +168,9 @@ async def test_two_failures_keep_the_last_good_brief():
     assert first_good is not None
 
     # Same extractor, a later turn that fails twice.
-    extractor._client = httpx.AsyncClient(transport=ScriptedTransport(["{", "also bad"]))
+    extractor._client = httpx.AsyncClient(
+        transport=ScriptedTransport(["{", "also bad"])
+    )
     await extractor.schedule(TRANSCRIPT, turn_index=2)
 
     assert extractor.last_good == first_good  # unchanged, not cleared
@@ -210,7 +214,9 @@ async def test_a_late_turn_does_not_overwrite_a_newer_brief():
     assert extractor.last_good.stage == "booking"
 
     # Turn 1's slow extraction lands afterwards.
-    extractor._client = httpx.AsyncClient(transport=ScriptedTransport([json.dumps(older)]))
+    extractor._client = httpx.AsyncClient(
+        transport=ScriptedTransport([json.dumps(older)])
+    )
     await extractor.schedule(TRANSCRIPT, turn_index=1)
 
     assert extractor.last_good.stage == "booking"
@@ -237,7 +243,9 @@ async def test_overlapping_extractions_completing_out_of_order_keep_the_newer():
         on_event=lambda name, **fields: events.append((name, fields)),
         client=httpx.AsyncClient(
             # Call order is task creation order; turn 1 goes first and is slow.
-            transport=PacedTransport([(0.2, json.dumps(older)), (0.0, json.dumps(newer))])
+            transport=PacedTransport(
+                [(0.2, json.dumps(older)), (0.0, json.dumps(newer))]
+            )
         ),
     )
 
@@ -262,7 +270,9 @@ async def test_a_repeat_of_the_same_turn_is_still_accepted():
     await extractor.schedule(TRANSCRIPT, turn_index=3)
 
     later = {**VALID_BRIEF, "stage": "booking"}
-    extractor._client = httpx.AsyncClient(transport=ScriptedTransport([json.dumps(later)]))
+    extractor._client = httpx.AsyncClient(
+        transport=ScriptedTransport([json.dumps(later)])
+    )
     await extractor.schedule(TRANSCRIPT, turn_index=3)
 
     assert extractor.last_good.stage == "booking"

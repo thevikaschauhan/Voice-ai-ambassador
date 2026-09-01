@@ -381,5 +381,7 @@ def bridge_from_env(log: EventLog) -> EventsBridge | None:
         try:
             port = int(raw_port)
         except ValueError as exc:
-            raise ValueError(f"{PORT_ENV} must be an integer, got {raw_port!r}") from exc
+            raise ValueError(
+                f"{PORT_ENV} must be an integer, got {raw_port!r}"
+            ) from exc
     return EventsBridge(log, handshake_path=Path(path), port=port)

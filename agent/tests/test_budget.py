@@ -129,7 +129,7 @@ def test_a_keyword_marks_only_the_figure_beside_it(vocabulary):
 
 
 def test_weak_keywords_are_not_budget_markers(vocabulary):
-    """"Around" and "looking at" qualify positions and floors as easily as
+    """ "Around" and "looking at" qualify positions and floors as easily as
     money; with them in the list, "I'm around floor 15" was a budget of 15."""
     assert budget(vocabulary, "I'm around floor 15.") is None
     assert budget(vocabulary, "We are looking at floor 20.") is None
@@ -213,7 +213,7 @@ def test_an_uncovered_language_still_detects_the_figure_and_asks(vocabulary):
 
 
 def test_the_buyers_budget_beats_a_price_they_are_quoting(vocabulary):
-    """"The villa is 5 million dirhams but I only want to spend 2 crore
+    """ "The villa is 5 million dirhams but I only want to spend 2 crore
     rupees" is a 2 crore budget. First-qualifying-figure selection returned
     the villa's price - in the wrong currency - as the buyer's budget."""
     mention = budget(
@@ -254,7 +254,7 @@ def test_read_reply_hears_denial_and_affirmation(vocabulary):
 
 
 def test_a_comma_separates_a_contradiction_from_the_answer(vocabulary):
-    """"No, dirhams" affirms dirhams; "not dirhams" denies them."""
+    """ "No, dirhams" affirms dirhams; "not dirhams" denies them."""
     reading = read_reply("No, dirhams.", vocabulary, "en")
     assert reading.affirmed == ("AED",)
     assert reading.contradicted
@@ -322,7 +322,7 @@ def test_a_rejected_read_back_recovers_to_a_settled_budget(vocabulary):
 
 
 def test_a_restated_budget_replaces_the_stale_one(vocabulary):
-    """"Sorry, I meant 5 million dirhams" is about 5 million; settling the
+    """ "Sorry, I meant 5 million dirhams" is about 5 million; settling the
     misheard 2 crore against it was a shipped defect."""
     p = policy(vocabulary)
     assert p.observe("My budget is 2 crore.").action == "ask_currency"
@@ -423,7 +423,7 @@ def test_abandon_settles_without_consent_and_the_policy_stays_silent(vocabulary)
 
 
 def test_a_contradiction_beats_a_currency_named_in_the_same_reply(vocabulary):
-    """"No, dirhams" rejects the read-back; the dirhams is grammar, not
+    """ "No, dirhams" rejects the read-back; the dirhams is grammar, not
     consent. The currency used to win because it was read first."""
     p = policy(vocabulary)
     p.observe("My budget is 5 million dirhams.")
@@ -433,7 +433,7 @@ def test_a_contradiction_beats_a_currency_named_in_the_same_reply(vocabulary):
 
 
 def test_uncertainty_about_a_currency_never_settles_it(vocabulary):
-    """"I'm not sure about rupees" must not settle INR and hand over."""
+    """ "I'm not sure about rupees" must not settle INR and hand over."""
     p = policy(vocabulary)
     p.observe("My budget is 2 crore.")
     d = p.observe("I'm not sure about rupees.")
@@ -443,7 +443,7 @@ def test_uncertainty_about_a_currency_never_settles_it(vocabulary):
 
 
 def test_a_doubted_currency_out_of_negation_reach_still_reads_as_doubt(vocabulary):
-    """"I don't think it was dirhams": the negator sits too far from the
+    """ "I don't think it was dirhams": the negator sits too far from the
     currency to deny it, but it is still a contradiction, never consent."""
     p = policy(vocabulary)
     p.observe("My budget is 5 million dirhams.")
@@ -453,7 +453,7 @@ def test_a_doubted_currency_out_of_negation_reach_still_reads_as_doubt(vocabular
 
 
 def test_a_signal_free_reply_to_a_read_back_is_not_consent(vocabulary):
-    """"Can you repeat that?" carries no signal at all. Consent must be said
+    """ "Can you repeat that?" carries no signal at all. Consent must be said
     - it settled as agreement, which confuses a non-answer with a yes."""
     p = policy(vocabulary)
     p.observe("My budget is 5 million dirhams.")
@@ -476,7 +476,7 @@ def test_a_currency_does_not_reach_across_a_clause_to_another_figure(vocabulary)
 
 
 def test_a_keyword_tie_goes_to_the_figure_it_precedes(vocabulary):
-    """"The price is AED 985,000 and my budget is AED 2,000,000": the word
+    """ "The price is AED 985,000 and my budget is AED 2,000,000": the word
     "budget" sits at the same gap from both figures, and the tie must go to
     the buyer's number, not the quoted price."""
     mention = budget(
@@ -489,9 +489,7 @@ def test_a_currency_in_the_next_sentence_does_not_bind(vocabulary):
     """Nearest-figure ownership alone cannot save this one: the dirhams is
     the crore's nearest figure AND inside the distance window, and only the
     sentence boundary says it belongs to different talk."""
-    mention = budget(
-        vocabulary, "My budget is 2 crore. My salary is paid in dirhams."
-    )
+    mention = budget(vocabulary, "My budget is 2 crore. My salary is paid in dirhams.")
     assert mention.surface == "2 crore"
     assert mention.needs_currency
 
@@ -528,9 +526,7 @@ def test_a_keyword_in_the_previous_sentence_does_not_mark(vocabulary):
         "prices start at AED 750,000",
     ],
 )
-def test_a_figure_the_buyer_attributes_elsewhere_is_not_their_budget(
-    vocabulary, said
-):
+def test_a_figure_the_buyer_attributes_elsewhere_is_not_their_budget(vocabulary, said):
     """F3. A quoted price took the turn from the model, so the buyer's actual
     question went unanswered - and once confirmed it settled the policy, which
     suppressed every real budget mention for the rest of the session."""
@@ -642,7 +638,7 @@ def test_every_money_sized_unit_in_the_data_file_is_reachable():
 
 
 def test_units_below_money_size_are_still_not_budget_markers(vocabulary):
-    """"Two hundred" is a count, not a sum. The threshold is what keeps a
+    """ "Two hundred" is a count, not a sum. The threshold is what keeps a
     bedroom count out, and dropping it would make every small number a
     budget."""
     from ambassador.budget import _budget_units
@@ -696,9 +692,7 @@ def test_a_quoted_figure_the_buyer_adopts_is_still_their_budget(vocabulary):
     override uses a wider reach, which is safe because it can only ever RESTORE
     a mention, never invent one on the wrong figure.
     """
-    mention = budget(
-        vocabulary, "the listing says AED 750,000 and that is my budget"
-    )
+    mention = budget(vocabulary, "the listing says AED 750,000 and that is my budget")
     assert mention is not None
     assert mention.value == 750_000.0
 
@@ -852,9 +846,7 @@ def test_a_folded_unit_is_still_money_without_a_dimension(vocabulary, said, valu
         ("I can spend 1.5m on a place with a balcony", 1_500_000.0),
     ],
 )
-def test_a_dimension_word_only_withholds_the_ambiguous_unit(
-    vocabulary, said, value
-):
+def test_a_dimension_word_only_withholds_the_ambiguous_unit(vocabulary, said, value):
     """Round two, finding 1. "m" is the collision - metres against millions.
     A currency-bearing figure, or one carrying any other money unit, is not
     made ambiguous by a room being mentioned in the same breath."""
@@ -900,9 +892,7 @@ def test_ownership_needs_a_first_person_subject(vocabulary, said):
         ("The price is AED 985,000 and my budget is AED 2,000,000.", 2_000_000.0),
     ],
 )
-def test_ownership_claims_its_own_figure_in_either_order(
-    vocabulary, said, value
-):
+def test_ownership_claims_its_own_figure_in_either_order(vocabulary, said, value):
     """Round two, finding 3. "Introduces" is not always forward."""
     mention = budget(vocabulary, said)
     assert mention is not None, said

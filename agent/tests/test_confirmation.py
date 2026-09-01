@@ -48,9 +48,7 @@ def coordinator(parts, *, recognition: bool = True) -> ConfirmationCoordinator:
 
 def said(policies: ConfirmationCoordinator, utterance: str):
     """The step that speaks on this turn, or None."""
-    return next(
-        (step for step in policies.observe(utterance) if step.speaks), None
-    )
+    return next((step for step in policies.observe(utterance) if step.speaks), None)
 
 
 # --- ownership ---------------------------------------------------------------

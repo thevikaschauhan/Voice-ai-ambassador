@@ -121,7 +121,9 @@ Band = Literal["confident", "marginal"]
 
 def _tokens(text: str) -> tuple[str, ...]:
     return tuple(
-        t for t in _TOKEN.findall(normalise_digits(text).lower()) if len(t) >= _MIN_TOKEN
+        t
+        for t in _TOKEN.findall(normalise_digits(text).lower())
+        if len(t) >= _MIN_TOKEN
     )
 
 
@@ -319,7 +321,9 @@ def match_project_name(
         return None
 
     ranked = sorted(
-        best.items(), key=lambda item: (item[1].similarity, item[1].coverage), reverse=True
+        best.items(),
+        key=lambda item: (item[1].similarity, item[1].coverage),
+        reverse=True,
     )
     project_id, fit = ranked[0]
     runner_up = ranked[1][1].similarity if len(ranked) > 1 else 0.0
@@ -415,9 +419,7 @@ def _says_any(lowered: str, words: tuple[str, ...]) -> bool:
     return any(word and re.search(_token_pattern(word), lowered) for word in words)
 
 
-def read_agreement(
-    utterance: str, words: AgreementWords, language: str
-) -> Agreement:
+def read_agreement(utterance: str, words: AgreementWords, language: str) -> Agreement:
     """Did this reply accept the project we named, reject it, or neither?
 
     A negator counts as a contradiction here, unlike in the budget policy
@@ -489,9 +491,7 @@ class ProjectNamePolicy:
     is what stops "did you mean Skyrise?" / "no" / "did you mean Skyrise?".
     """
 
-    def __init__(
-        self, index: NameIndex, words: AgreementWords, language: str
-    ) -> None:
+    def __init__(self, index: NameIndex, words: AgreementWords, language: str) -> None:
         self._index = index
         self._words = words
         self._language = language

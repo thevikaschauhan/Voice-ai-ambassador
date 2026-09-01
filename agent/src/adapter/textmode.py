@@ -209,7 +209,9 @@ class TextSession:
         response - only on a slow one, which its own timeout bounds.
         """
         assert self._brief is not None
-        transcript = [{"role": role, "content": content} for role, content in self._history]
+        transcript = [
+            {"role": role, "content": content} for role, content in self._history
+        ]
         self._brief.schedule(transcript, index)
         await self._brief.drain(timeout=20.0)
         # No `brief` event is appended here: the extractor emits its own
@@ -230,7 +232,9 @@ class TextSession:
             await self._brief.aclose()
 
 
-def _brief_extractor(settings: Any, harness: Harness, language: Language, on_event: Any):
+def _brief_extractor(
+    settings: Any, harness: Harness, language: Language, on_event: Any
+):
     """None when nothing is configured to run it, rather than a broken one.
 
     The surface renders an empty brief panel with copy that says extraction has

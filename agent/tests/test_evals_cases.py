@@ -45,7 +45,9 @@ def test_every_case_loads_and_ids_are_unique(cases):
 def test_every_case_belongs_to_a_declared_category(cases, categories):
     known = set(categories.by_key())
     unknown = sorted({c.category for c in cases} - known)
-    assert not unknown, f"cases in categories that categories.yaml does not declare: {unknown}"
+    assert not unknown, (
+        f"cases in categories that categories.yaml does not declare: {unknown}"
+    )
 
 
 def test_every_scored_category_meets_its_minimum_coverage(cases, categories):

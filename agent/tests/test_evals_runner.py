@@ -61,9 +61,7 @@ def spoken(observed) -> str:
 
 
 def test_an_inventory_figure_is_spoken_in_its_spoken_form(harness):
-    backend = ScriptedBackend(
-        ModelReply("Binghatti Skyrise starts from AED 985,000.")
-    )
+    backend = ScriptedBackend(ModelReply("Binghatti Skyrise starts from AED 985,000."))
     observed = run_case(case("What does Skyrise cost?"), harness, backend)
     assert spoken(observed) == (
         "Binghatti Skyrise starts from nine hundred and eighty-five thousand dirhams."
@@ -110,9 +108,7 @@ def test_audio_already_played_gets_a_bridge_and_spends_no_retry(harness):
     """A blind mid-turn retry would repeat or contradict what the buyer just
     heard, so the second sentence is replaced rather than regenerated."""
     backend = ScriptedBackend(
-        ModelReply(
-            "Binghatti Skyrise is in Business Bay. It starts from AED 750,000."
-        )
+        ModelReply("Binghatti Skyrise is in Business Bay. It starts from AED 750,000.")
     )
     observed = run_case(case("Where is Skyrise?"), harness, backend)
     assert spoken(observed) == (
@@ -130,11 +126,11 @@ def test_a_blocked_reply_never_enters_the_next_turn_context(harness):
         ModelReply("The price is AED 750,000."),
         ModelReply("Binghatti Circle starts from AED 650,000."),
     )
-    observed = run_case(
-        case(["Is it 750k?", "What about Circle?"]), harness, backend
-    )
+    observed = run_case(case(["Is it 750k?", "What about Circle?"]), harness, backend)
     history = dict.fromkeys(
-        content for role, content in backend.requests[-1].messages if role == "assistant"
+        content
+        for role, content in backend.requests[-1].messages
+        if role == "assistant"
     )
     assert "750,000" not in " ".join(history)
     assert COPY.fallback["en"] in " ".join(history)
@@ -158,9 +154,7 @@ def test_the_regenerated_reply_s_tool_call_counts_as_an_escalation(harness):
     model that never escalated."""
     backend = ScriptedBackend(
         ModelReply("Bugatti Residences starts from AED 19,000,000."),
-        ModelReply(
-            "I am not able to quote that.", tools=("escalate_to_human",)
-        ),
+        ModelReply("I am not able to quote that.", tools=("escalate_to_human",)),
     )
     observed = run_case(case("What is Bugatti?"), harness, backend)
     assert observed.escalated
@@ -225,7 +219,10 @@ def test_a_broken_confirmation_template_fails_closed_to_a_human(harness):
     answer on an unconfirmed budget, which is the twenty-times error."""
     broken = Harness(
         **{
-            **{f.name: getattr(harness, f.name) for f in harness.__dataclass_fields__.values()},
+            **{
+                f.name: getattr(harness, f.name)
+                for f in harness.__dataclass_fields__.values()
+            },
             "confirmations": harness.confirmations.__class__(
                 by_language={
                     "en": {
@@ -238,9 +235,7 @@ def test_a_broken_confirmation_template_fails_closed_to_a_human(harness):
             ),
         }
     )
-    observed = run_case(
-        case("My budget is about 2 crore."), broken, ScriptedBackend()
-    )
+    observed = run_case(case("My budget is about 2 crore."), broken, ScriptedBackend())
     assert observed.escalated
     assert spoken(observed) == broken.confirmations.line("en", "give_up")
     assert "{" not in spoken(observed)
@@ -253,9 +248,7 @@ def test_the_policy_is_off_where_no_confirmation_copy_exists(harness):
         ModelReply("दो करोड़ रुपये लगभग AED 880,000 होते हैं।"),
         ModelReply("दो करोड़ रुपये लगभग AED 880,000 के बराबर हैं।"),
     )
-    observed = run_case(
-        case("मेरा बजट दो करोड़ है।", language="hi"), harness, backend
-    )
+    observed = run_case(case("मेरा बजट दो करोड़ है।", language="hi"), harness, backend)
     assert not observed.confirmed
     assert "880" not in spoken(observed)
     assert spoken(observed) == COPY.fallback["hi"]
@@ -369,7 +362,9 @@ def test_a_regeneration_that_refuses_in_words_hands_the_buyer_over(harness):
     observed = run_case(case("What is Sapphire Bay?"), harness, backend)
 
     assert "current listings" in spoken(observed)
-    assert "put you through" not in spoken(observed)  # the model spoke, not the fallback
+    assert "put you through" not in spoken(
+        observed
+    )  # the model spoke, not the fallback
     assert observed.escalated
 
 

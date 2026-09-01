@@ -63,9 +63,7 @@ def policy(index, words, language: str = "en") -> ProjectNamePolicy:
         ("Binghatti Cirkle", CIRCLE),
     ],
 )
-def test_a_mangled_name_is_marginal_and_names_the_project(
-    index, utterance, expected
-):
+def test_a_mangled_name_is_marginal_and_names_the_project(index, utterance, expected):
     match = match_project_name(utterance, index)
     assert match is not None, utterance
     assert match.project_id == expected
@@ -272,9 +270,7 @@ def test_a_settled_project_is_never_read_back_again(index, words):
     assert not p.observe("and what does a studio at Binghatti Skyrize cost").speaks
 
 
-def test_no_to_a_read_back_asks_which_project_and_never_re_offers_it(
-    index, words
-):
+def test_no_to_a_read_back_asks_which_project_and_never_re_offers_it(index, words):
     p = policy(index, words)
     assert p.observe("Binghatti Skyrize").action == "confirm_project"
 
@@ -327,9 +323,7 @@ def test_a_handed_over_policy_never_speaks_again(index, words):
     assert not p.observe("Binghatti Aquarize").speaks
 
 
-def test_the_pending_question_is_readable_without_consuming_an_attempt(
-    index, words
-):
+def test_the_pending_question_is_readable_without_consuming_an_attempt(index, words):
     """The seam the failed-recognition trigger needs: a turn nobody could hear
     re-asks the open question and counts nothing, because it answered
     nothing."""

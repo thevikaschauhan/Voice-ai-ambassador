@@ -129,9 +129,9 @@ def test_recovering_correctly_is_still_asked_for_first():
     """This is a failure path, but a model nudged to escalate ahead of answering
     refuses figures it holds, and an agent that escalates on everything is as
     broken as one that never does."""
-    assert REGENERATION_INSTRUCTION.index("Reply again") < REGENERATION_INSTRUCTION.index(
-        TOOL
-    )
+    assert REGENERATION_INSTRUCTION.index(
+        "Reply again"
+    ) < REGENERATION_INSTRUCTION.index(TOOL)
 
 
 def test_the_instruction_still_carries_the_violation_detail():

@@ -103,9 +103,7 @@ def load_noise_words(path: Path | None = None) -> NoiseWords:
     return NoiseWords(by_language=by_language)
 
 
-def is_failed_recognition(
-    utterance: str, noise: NoiseWords, language: str
-) -> bool:
+def is_failed_recognition(utterance: str, noise: NoiseWords, language: str) -> bool:
     """Did this turn carry anything the agent can answer?"""
     text = normalise_digits(utterance)
     if not _CONTENT.search(text):

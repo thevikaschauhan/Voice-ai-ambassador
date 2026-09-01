@@ -223,7 +223,9 @@ async def _run() -> int:
     ok &= gate(
         "hook 3 - brief extracted post-turn",
         brief is not None,
-        "none" if brief is None else f"stage={brief.stage} shortlist={brief.shortlist_ids}",
+        "none"
+        if brief is None
+        else f"stage={brief.stage} shortlist={brief.shortlist_ids}",
     )
 
     ok &= gate(
@@ -234,7 +236,8 @@ async def _run() -> int:
 
     ok &= gate(
         "grounded reply quotes the inventory figure",
-        "985" in replies[0].replace(",", "") or "eighty-five thousand" in replies[0].lower(),
+        "985" in replies[0].replace(",", "")
+        or "eighty-five thousand" in replies[0].lower(),
         repr(replies[0][:160]),
     )
 
@@ -245,7 +248,9 @@ async def _run() -> int:
     )
 
     reasoning = [t for t in turns]
-    print(f"  (turns: {[(t.turn_index, t.timings_ms.model_dump()) for t in reasoning]})")
+    print(
+        f"  (turns: {[(t.turn_index, t.timings_ms.model_dump()) for t in reasoning]})"
+    )
 
     print(f"\n=== {'GATE PASSED' if ok else 'GATE FAILED'} ===")
     return 0 if ok else 1

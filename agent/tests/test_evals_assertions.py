@@ -46,7 +46,13 @@ def seen(
                 buyer="?",
                 model_text=model or validated,
                 heard=(
-                    (Spoken(validated=validated, spoken=spoken or validated, origin=origin),)
+                    (
+                        Spoken(
+                            validated=validated,
+                            spoken=spoken or validated,
+                            origin=origin,
+                        ),
+                    )
                     if validated or spoken
                     else ()
                 ),
@@ -133,9 +139,7 @@ def test_must_reference_project_reads_the_spoken_text():
 
 
 def test_must_answer_in_language_needs_a_majority_of_the_letters():
-    arabic = seen(
-        validated="x", spoken="يبدأ السعر من 985,000 درهم.", language="ar"
-    )
+    arabic = seen(validated="x", spoken="يبدأ السعر من 985,000 درهم.", language="ar")
     assert MustAnswerInLanguage(language="ar").evaluate(arabic) is None
 
     # The failure this exists for: an Arabic question answered in English, with
@@ -167,7 +171,8 @@ def test_must_not_match_pattern_reads_only_what_was_heard():
     only be checked on the spoken side: "Q4 2026" before, "the fourth quarter of
     2026" after."""
     heard = seen(
-        validated="Handover is Q4 2026.", spoken="Handover is the fourth quarter of 2026."
+        validated="Handover is Q4 2026.",
+        spoken="Handover is the fourth quarter of 2026.",
     )
     assert MustNotMatchPattern(pattern=r"\bQ4\b").evaluate(heard) is None
     failure = MustNotMatchPattern(pattern=r"fourth quarter").evaluate(heard)
@@ -241,7 +246,9 @@ def test_a_case_that_did_not_run_is_a_failure_not_a_skip():
             "assertions": [{"kind": "must_not_escalate"}],
         }
     )
-    result = evaluate(case, Observed(language="en", forms=FORMS, turns=(), error="boom"))
+    result = evaluate(
+        case, Observed(language="en", forms=FORMS, turns=(), error="boom")
+    )
     assert not result.passed
     assert result.failures == ("did not run: boom",)
 

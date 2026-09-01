@@ -140,9 +140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         observed = run_case(case, harness, backend)
         results_by_category[case.category].append(evaluate(case, observed))
 
-    shown = (
-        [specs[key] for key in args.category] if args.category else table.categories
-    )
+    shown = [specs[key] for key in args.category] if args.category else table.categories
     categories = [
         CategoryResult(spec=spec, results=tuple(results_by_category[spec.key]))
         for spec in shown
