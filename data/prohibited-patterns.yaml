@@ -4,15 +4,29 @@
 # agent (AGENTS.md). Reviewable by a non-engineer: each pattern is a regular
 # expression matched case-insensitively against one generated sentence.
 #
-# `language` IS PROVENANCE, NOT ROUTING. It records the language the pattern
-# was authored to catch, and therefore the competence its author needed. Every
-# pattern below is matched against every sentence whatever language the call is
-# in, deliberately: Arabic-English code-switching is the default Dubai register,
-# so an Arabic reply that slips into English to promise "guaranteed returns" is
-# caught by these English patterns, and routing by the call's language would
-# silently give that up. Over-matching blocks a sentence; under-matching speaks
-# an unverified one. Do not add filtering here without reading
-# guardrails/prohibited.py first.
+# `language` IS PROVENANCE AND ROUTING, under ONE ASYMMETRIC RULE:
+#
+#     ENGLISH PATTERNS ALWAYS APPLY, PLUS THE SENTENCE'S OWN LANGUAGE.
+#
+# The English half is not a convenience. Arabic-English code-switching is the
+# default Dubai register, so an Arabic reply that slips into English to promise
+# "guaranteed returns" is caught by the English patterns below, and it is the
+# only kind of Arabic or Hindi violation catchable at all today. Routing purely
+# by the call's language would silently give that up.
+#
+# The per-language half exists so that the Arabic patterns a native reviewer
+# writes apply to Arabic calls and not to Hindi ones. Read
+# guardrails/prohibited.py before changing either half.
+#
+# `language` must be one of en / ar / hi. A code the system does not offer
+# switches the whole group OFF silently - it is not English, so it never
+# always-applies, and it matches no call either - so the loader rejects it at
+# start-up. It used to be harmless.
+#
+# An ABSENT `patterns` key is an accident and fails to load. An explicitly
+# empty `patterns: []` is a DECLARATION: the slot is real, validated, and
+# waiting for its author. The ar and hi slots at the bottom of this file are
+# exactly that.
 
 - category: return_guarantees
   language: en
@@ -48,3 +62,60 @@
   patterns:
     # VERIFY: competitor list with FFI before the demo; keep names lowercase.
     - "\\b(emaar|damac|sobha|nakheel|meraas|aldar|omniyat)\\b.{0,60}\\b(worse|inferior|poor|delays?|avoid|unreliable)\\b"
+
+# --- Arabic and Hindi: declared, empty, awaiting their author ---------------
+#
+# VERIFY: EVERY PATTERN BELOW MUST BE WRITTEN BY A NATIVE SPEAKER. Nobody on
+# the build team may fill these in, machine translation included (AGENTS.md);
+# an unreadable regex in a compliance guardrail is worse than an absent one,
+# because it looks like coverage. `docs/review-packet-ar.md` and
+# `docs/review-packet-hi.md` ask the reviewer for exactly these, by category.
+#
+# Until they are written, an Arabic or Hindi sentence is checked against the
+# English patterns above and nothing else. That means a violation written
+# wholly in Arabic or Devanagari script is NOT caught. This is the disclosed
+# limit on the compliance claim, stated in docs/03-, and `languages_covered()`
+# reports it at session start - a declared-but-empty slot deliberately does not
+# count as coverage.
+#
+# To fill one in: add regexes to its `patterns` list. Nothing else changes.
+
+- category: return_guarantees
+  language: ar
+  patterns: []
+
+- category: advice_framing
+  language: ar
+  patterns: []
+
+- category: future_certainty
+  language: ar
+  patterns: []
+
+- category: regulatory_overreach
+  language: ar
+  patterns: []
+
+- category: competitor_disparagement
+  language: ar
+  patterns: []
+
+- category: return_guarantees
+  language: hi
+  patterns: []
+
+- category: advice_framing
+  language: hi
+  patterns: []
+
+- category: future_certainty
+  language: hi
+  patterns: []
+
+- category: regulatory_overreach
+  language: hi
+  patterns: []
+
+- category: competitor_disparagement
+  language: hi
+  patterns: []

@@ -38,7 +38,7 @@ def run_guardrails(
             ),
             figures=numeric_violations,
         )
-    prohibited_hits = check_prohibited(raw, patterns)
+    prohibited_hits = check_prohibited(raw, patterns, language)
     if prohibited_hits:
         return GuardrailViolation(
             validator="prohibited_language",

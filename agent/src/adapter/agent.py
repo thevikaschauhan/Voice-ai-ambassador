@@ -240,12 +240,13 @@ class AmbassadorAgent(Agent):
         # (docs/04-). There is then no runtime guard call here to fail open,
         # and none to fail closed either.
         self._fixed_lines = self._compose_fixed_lines()
-        # Stated, not assumed. Every pattern runs against every sentence, so a
+        # Stated, not assumed. English patterns apply in every language, so a
         # reply that code-switches into English is checked whatever language
         # the call is in - but a violation written wholly in Arabic or
         # Devanagari script matches nothing until someone authors patterns for
-        # it. Without this line the record shows a guardrail that looks equally
-        # strong in all three languages.
+        # it. `covered` is therefore AUTHORSHIP, not protection. Without this
+        # line the record shows a guardrail that looks equally strong in all
+        # three languages.
         log.emit(
             "prohibited_coverage",
             languages=sorted(covered),
