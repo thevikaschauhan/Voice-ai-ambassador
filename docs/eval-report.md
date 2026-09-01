@@ -1,10 +1,10 @@
 # Eval report - Binghatti voice ambassador
 
-Generated 2026-09-01 11:29 UTC · mode **offline** · model `fixtures (no model called)` · ambassador prompt `43904c2c25ce`
+Generated 2026-09-01 12:16 UTC · mode **offline** · model `fixtures (no model called)` · ambassador prompt `43904c2c25ce`
 
 **Offline mode measures the pipeline, not the model.** Each case replays a model reply recorded or authored beside it and asks what the buyer actually heard. A pass here is the claim "given this reply, the guardrails, the recovery policy and verbalisation produce this speech" - which is the claim the system rests on, and the one that runs in CI with no keys and no spend. It is NOT a claim about how often the model behaves well; only a live run is.
 
-**GATES HELD** — 76/76 scored cases pass (100%). Categories marked `gate` must pass at 100%: a single failure there is a client-facing incident (docs/05-).
+**GATES BROKEN** — 73/76 scored cases pass (96%). Categories marked `gate` must pass at 100%: a single failure there is a client-facing incident (docs/05-).
 
 | Category | Cases | Pass | Rate | Bar | Gate | Status | Proves |
 |---|---:|---:|---:|---|---|---|---|
@@ -16,10 +16,10 @@ Generated 2026-09-01 11:29 UTC · mode **offline** · model `fixtures (no model 
 | Currency and units | 5 | 5 | 100% | `████████████` | 100% | pass | Crore/lakh and INR-vs-AED ambiguity confirmed, never converted on a guess |
 | Digit emission | 3 | 3 | 100% | `████████████` | 100% | pass | Figures stay machine-readable even when asked to say it in words |
 | Grounding - happy path | 7 | 7 | 100% | `████████████` | 100% | pass | Correct figures for real projects across areas and tiers |
-| Grounding - leading question | 5 | 5 | 100% | `████████████` | 100% | pass | Rejects planted false premises - the realistic buyer trap and the demo centrepiece |
+| Grounding - leading question | 5 | 4 | 80% | `██████████░░` | 100% | FAIL | Rejects planted false premises - the realistic buyer trap and the demo centrepiece |
 | Grounding - unknown project | 7 | 7 | 100% | `████████████` | 100% | pass | Refuses and escalates; never brackets a guess |
 | Payment arithmetic | 5 | 5 | 100% | `████████████` | 100% | pass | Down-payment answers from computed derived figures; an unheld computation refuses |
-| Low-confidence and confirmation policy | 11 | 11 | 100% | `████████████` | 95% | pass | All three ADR-011 triggers - budget currency, marginal project names, three unheard turns - which question owns each reply, and that a figure the buyer quotes back is not claimed as their budget |
+| Low-confidence and confirmation policy | 11 | 9 | 82% | `██████████░░` | 95% | FAIL | All three ADR-011 triggers - budget currency, marginal project names, three unheard turns - which question owns each reply, and that a figure the buyer quotes back is not claimed as their budget |
 | Language fidelity | 8 | 8 | 100% | `████████████` | 95% | pass | Answers in the asked language; Arabic digits handled |
 | Negotiation and availability | 4 | 4 | 100% | `████████████` | 95% | pass | Escalates rather than answering |
 | Barge-in audit | 0 | 0 | - | `            ` | human | human | By ear - interrupted chunk recorded completed=false |
@@ -49,7 +49,32 @@ Generated 2026-09-01 11:29 UTC · mode **offline** · model `fixtures (no model 
 
 ## Failures
 
-None.
+### `leading.bugatti-3-million-in-digits` — grounding_leading_question
+
+The sibling of `leading.bugatti-3-million`, in the wording that case had to avoid. Its figure is spelled out in words because digits with a multiplier ("around 3 million") used to make the budget policy claim the premise as the buyer's BUDGET and take the turn from the model - so the designed refusal was replaced by a currency question (issue #25, F3). Attribution reading fixed that, and this case is what stops it coming back. Authored rather than recorded: the reply is the recorded sibling's, which was produced for the same question in words.
+
+- buyer: Bugatti Residences starts from around 3 million, correct?
+  - heard (confirmation): 3 million - is that in dirhams or in rupees?
+
+**Failed:** an amount reached the buyer when none was allowed: 3e+06 in '3 million - is that in dirhams or in rupees?'
+
+**Failed:** no human was notified - escalate_to_human never fired and the policy never handed over. The buyer heard: '3 million - is that in dirhams or in rupees?'
+
+### `confirm.a-quoted-price-is-not-a-budget` — confirmation_policy
+
+F3. "The listing says AED 750,000" was read back as "750,000 - have I got that right?", and because the policy takes the turn the buyer's actual question went unanswered. The model fixture below is the regression: if the policy claims the figure again, the confirmation copy reaches the buyer instead of this reply and the figure assertion fails.
+
+- buyer: The listing says AED 750,000 for a studio at Skyrise, is that right?
+  - heard (confirmation): 750,000 - have I got that right?
+
+**Failed:** 985000 was never spoken; the buyer heard: '750,000 - have I got that right?'
+
+### `confirm.a-folded-unit-budget-is-confirmed` — confirmation_policy
+
+F4. `extract_figures` folds the multiplier into the surface, so a k/m budget arrives as "800k" and the old `\bk\b` could not match inside it - "around 800k" was detected only when a budget keyword happened to sit nearby. `model: null` is the regression: it asserts the policy takes this turn, and the runner fails loudly if it does not.
+
+
+**Failed:** did not run: confirm.a-folded-unit-budget-is-confirmed: no model fixture for this turn. Offline mode has nothing to replay, and a case that cannot run must fail rather than disappear from the denominator.
 
 ## Outstanding: human-verified rows
 

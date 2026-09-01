@@ -740,3 +740,95 @@ def test_a_unit_too_small_to_be_money_never_marks_a_budget():
     assert pattern.search("3 thousand")
     assert not pattern.search("3 hundred"), "a count is not a sum"
     assert not pattern.search("2 dozen")
+
+
+# --- PR #44 review: four reproduced findings -------------------------------
+#
+# Meredith's exact strings, each written before its fix. Two of these are
+# regressions the first attempt INTRODUCED - it withheld real budgets - which
+# is the direction the attribution rule was designed to protect.
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # One attribution token owned only its NEAREST figure, so the second
+        # price in a quoted list or range walked straight past it.
+        "The listing says AED 750,000 or AED 800,000.",
+        "You quoted AED 750,000 to AED 900,000.",
+        "Prices start at AED 750,000 and go up to AED 900,000.",
+        # Three figures, in case two was the accident.
+        "The listing says AED 750,000, AED 800,000 or AED 900,000.",
+    ],
+)
+def test_a_quoted_range_is_attributed_whole(vocabulary, said):
+    """Finding 1. Attribution is a property of the CLAUSE, not of one figure:
+    a listing that quotes two prices is quoting both of them.
+
+    Note the third string: "up to" is a budget keyword, and letting a generic
+    keyword rescue a figure inside a quoted range is what made the old
+    character-distance contest wrong.
+    """
+    assert budget(vocabulary, said) is None, said
+
+
+@pytest.mark.parametrize(
+    "said,value",
+    [
+        # Finding 2. A natural modifier puts "my budget" outside a 30-character
+        # window while a source word sits inside 14. Both of these are
+        # confirmed on the base commit and were lost by the first attempt.
+        ("My budget after checking your website is AED 750,000.", 750_000.0),
+        ("My price range after checking the listing is AED 750,000.", 750_000.0),
+        # Finding 3. A generic interrogative opener cannot tell a question
+        # about the seller's price from a question about whether the buyer's
+        # own amount is enough. These state a budget interrogatively.
+        ("Is that AED 800,000 enough for me?", 800_000.0),
+        ("Is this AED 800,000 enough for a studio?", 800_000.0),
+        ("Is that 2 crore enough for me?", 20_000_000.0),
+    ],
+)
+def test_the_buyer_s_own_budget_survives_a_source_word(vocabulary, said, value):
+    """Findings 2 and 3, which are one mistake: withholding is decided by
+    distance and by a generic opener rather than by who owns the figure.
+
+    A missed budget is an unconfirmed twenty-times risk. First-person
+    ownership - "my budget", "I can spend", "enough for me" - outranks any
+    source word in the same clause, at any distance.
+    """
+    mention = budget(vocabulary, said)
+    assert mention is not None, said
+    assert mention.value == value
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # Finding 4. "m" is the metre abbreviation in the exact domain this
+        # agent sells in, and F4 made a folded unit sufficient on its own - so
+        # a balcony took the deterministic budget turn.
+        "I need a 2m wide balcony.",
+        "The room is 2m wide.",
+        "Is the ceiling 3m high?",
+        "I want a 2m deep terrace",
+    ],
+)
+def test_a_physical_measurement_is_not_a_budget(vocabulary, said):
+    assert budget(vocabulary, said) is None, said
+
+
+@pytest.mark.parametrize(
+    "said,value",
+    [
+        # And the F4 headline still holds: a folded unit with no dimension
+        # word about it is money.
+        ("around 800k", 800_000.0),
+        ("around 2m", 2_000_000.0),
+        ("my budget is 2m", 2_000_000.0),
+        ("2m dirhams", 2_000_000.0),
+    ],
+)
+def test_a_folded_unit_is_still_money_without_a_dimension(vocabulary, said, value):
+    mention = budget(vocabulary, said)
+    assert mention is not None, said
+    assert mention.value == value

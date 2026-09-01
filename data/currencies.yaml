@@ -126,6 +126,95 @@ attributions:
   hi: []
   # VERIFY: native-authored. Same rule.
 
+# Ownership: the buyer saying the figure is THEIRS. This outranks attribution
+# in the same clause, at any distance.
+#
+# It exists because the first attempt decided the contest by character
+# distance - a source word within 14, a budget keyword within 30 - and a
+# natural modifier breaks that immediately: in "My budget after checking your
+# website is AED 750,000" the word "website" is 8 characters from the figure
+# and "budget" is 36, so the source word won and a stated budget went
+# unconfirmed. Who owns a figure is not a question about spacing.
+#
+# Affordability cues belong here too. "Is that AED 800,000 enough for me?" is
+# a buyer stating a budget interrogatively, and a generic question opener
+# cannot tell it apart from a question about our price.
+#
+# These words only ever RESTORE a mention, never create one on a figure that
+# was not budget-like to begin with, so the safe direction is to be generous.
+ownership:
+  en:
+    - "my budget"
+    - "our budget"
+    - "my price range"
+    - "our price range"
+    - "my maximum"
+    - "my max"
+    - "my limit"
+    - "i can spend"
+    - "we can spend"
+    - "i can afford"
+    - "we can afford"
+    - "i can do"
+    - "i can go"
+    - "i could spend"
+    - "i could go"
+    - "i want to spend"
+    - "looking to spend"
+    - "willing to spend"
+    # Bare, because a modifier lands between the pronoun and the verb often
+    # enough to matter: "I can only spend 2 crore" is not "I can spend".
+    - spend
+    - spending
+    - enough
+    - afford
+    - affordable
+  ar: []
+  # VERIFY: native-authored. Until these exist, attribution in Arabic cannot be
+  # overridden - but neither can it fire, because the attribution list above is
+  # empty too, so the pair stays consistent.
+  hi: []
+  # VERIFY: native-authored. Same rule.
+
+# Dimensions: words that make a figure a MEASUREMENT rather than a sum.
+#
+# "m" is a money multiplier in data/numerals.yaml and the metre abbreviation in
+# the exact domain this agent sells in, so once a folded unit was enough on its
+# own, "I need a 2m wide balcony" took the deterministic budget turn and asked
+# the buyer which currency their balcony was in. A budget keyword or an
+# ownership phrase outranks these, so "my budget is 2m for a wide balcony" is
+# still a budget.
+dimensions:
+  en:
+    - wide
+    - width
+    - long
+    - length
+    - high
+    - height
+    - tall
+    - deep
+    - depth
+    - ceiling
+    - ceilings
+    - balcony
+    - terrace
+    - room
+    - rooms
+    - metre
+    - metres
+    - meter
+    - meters
+    - square
+    - sqft
+    - "sq ft"
+    - "floor area"
+    - frontage
+  ar: []
+  # VERIFY: native-authored.
+  hi: []
+  # VERIFY: native-authored.
+
 # Negators: a currency these directly precede is being DENIED, not named.
 # "Not dirhams" and "not in dirhams" deny dirhams; punctuation breaks the
 # bind, so "no, dirhams" affirms them. A negator that is not denying a

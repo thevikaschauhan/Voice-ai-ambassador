@@ -134,28 +134,13 @@ def _budget_units() -> re.Pattern[str]:
     return budget_unit_pattern(default_numerals())
 
 
-# How close an ATTRIBUTION word must sit to the figure it frames. Much tighter
-# than a budget keyword's reach, and deliberately so: these words withhold a
-# mention, and a withheld budget is an unconfirmed twenty-times risk. Measured
-# against the utterances in the issue rather than guessed - every attributed
-# phrasing binds within 10 characters ("the listing says AED 750,000" is 10,
-# "it starts from about 3 million" is 7), while the nearest phrasings that must
-# NOT bind sit at 23 and beyond ("the price is too high, I can do 2 million").
-_ATTRIBUTION_BEFORE = 14
-# How far a budget keyword may sit from an ATTRIBUTED figure and still rescue
-# it. Wider than `_KEYWORD_AFTER`, and in both directions, because those
-# windows were calibrated for a different job - deciding which of several
-# figures is the budget - while this one can only ever RESTORE a mention, never
-# invent one on the wrong figure. "The listing says 750,000 and that is my
-# budget" is the buyer adopting a quoted figure as their own, and withholding
-# it is the expensive direction.
-_ATTRIBUTION_OVERRIDE = 30
-
-# And it binds FORWARD ONLY. Attribution leads its figure in every phrasing
-# measured, and letting it reach backwards costs real budgets: "I can do 2
-# million, is that ok?" and "I have 2 crore, what is the price?" both put a
-# marker just after the buyer's own number. Withholding those is the expensive
-# direction, so a marker that follows its figure is ignored.
+# Attribution, ownership and dimensions are bound by CLAUSE, not by character
+# distance. The first attempt ran a distance contest - a source word within 14
+# characters, a budget keyword within 30 - and a natural modifier defeats it:
+# "My budget after checking your website is AED 750,000" puts "website" 8
+# characters from the figure and "budget" 36, so the source word won and a
+# stated budget went unconfirmed. Who owns a figure is not a question about
+# spacing, and both numbers are gone.
 
 
 @dataclass(frozen=True)
@@ -188,11 +173,16 @@ class CurrencyVocabulary:
     # inferred from the absence of an objection - "can you repeat that?" is
     # not a yes.
     affirmations: dict[str, tuple[str, ...]]
-    # "the listing says", "priced at": the figure beside these came from
-    # somewhere else, or is a price rather than a budget. The only list here
-    # that WITHHOLDS a mention, so it binds tightly and loses to a budget
-    # keyword.
+    # "the listing says", "priced at": the figures after these in the same
+    # clause came from somewhere else, or are prices rather than budgets.
     attributions: dict[str, tuple[str, ...]]
+    # "my budget", "I can spend", "enough for me": the buyer saying a figure is
+    # THEIRS. Outranks attribution in the same clause, at any distance.
+    ownership: dict[str, tuple[str, ...]]
+    # "wide", "ceiling", "balcony": the figure measures something. "m" is a
+    # money multiplier in the numeral table and the metre abbreviation in this
+    # domain, and a folded unit is enough to make a figure budget-like.
+    dimensions: dict[str, tuple[str, ...]]
     rate: ConversionRate
 
     def languages_covered(self) -> frozenset[str]:
@@ -282,6 +272,8 @@ def load_currency_vocabulary(path: Path | None = None) -> CurrencyVocabulary:
         contradictions=_word_lists(raw, "contradictions"),
         affirmations=_word_lists(raw, "affirmations"),
         attributions=_word_lists(raw, "attributions"),
+        ownership=_word_lists(raw, "ownership"),
+        dimensions=_word_lists(raw, "dimensions"),
         rate=rate,
     )
 
@@ -513,48 +505,84 @@ def find_budget(
             if distance <= reach and not crosses_clause(found.start(), found.end(), i):
                 marked.add(i)
 
-    # Figures the buyer attributed to a listing, to our own website, or to us
-    # on an earlier call - and figures framed as a price rather than as what
-    # they will spend. Same ownership machinery as the keywords above, on a
-    # tighter window, and `marked` outranks it below.
-    attributed: set[int] = set()
-    for word in vocabulary.attributions.get(language, ()):
-        if not word:
-            continue
-        for found in re.finditer(_token_pattern(word), lowered):
-            i, distance = owner(found.start(), found.end(), prefer_following=True)
-            if found.end() > spans[i][0]:
-                continue
-            if distance <= _ATTRIBUTION_BEFORE and not crosses_clause(
-                found.start(), found.end(), i
-            ):
-                attributed.add(i)
+    def in_clause(start: int, end: int, i: int) -> bool:
+        return not crosses_clause(start, end, i)
 
-    # A budget keyword near an attributed figure rescues it, on the wider reach
-    # above: the buyer is adopting the quoted number as their own.
-    adopted: set[int] = set()
-    for keyword in vocabulary.budget_keywords.get(language, ()):
-        if not keyword:
-            continue
-        for found in re.finditer(_token_pattern(keyword), lowered):
-            i, distance = owner(found.start(), found.end(), prefer_following=True)
-            if distance <= _ATTRIBUTION_OVERRIDE and not crosses_clause(
-                found.start(), found.end(), i
-            ):
-                adopted.add(i)
+    def bound(
+        words: tuple[str, ...], *, whole_clause: bool = False, leads: bool = False
+    ) -> set[int]:
+        """The figures these words claim.
+
+        `whole_clause` claims every figure AFTER the word in its clause rather
+        than only the nearest one, which is what a quoted range needs: "The
+        listing says AED 750,000 or AED 800,000" is quoting both prices, and
+        binding one token to one figure let the second walk straight past.
+
+        `leads` claims the figure the word INTRODUCES - the nearest one that
+        follows it in the clause, falling back to a preceding figure only when
+        none does. Nearest-with-a-tie-break is not enough for a phrase: the
+        single word "budget" sits at an exact tie between the two figures of
+        "The price is AED 985,000 and my budget is AED 2,000,000" and the
+        tie-break sends it forwards, but the PHRASE "my budget" starts four
+        characters earlier and reaches backwards to the quoted price instead.
+        A phrase that names an owner names what comes after it.
+        """
+        claimed: set[int] = set()
+        for word in words:
+            if not word:
+                continue
+            for found in re.finditer(_token_pattern(word), lowered):
+                if whole_clause:
+                    claimed.update(
+                        i
+                        for i, (figure_start, _) in enumerate(spans)
+                        if figure_start >= found.end()
+                        and in_clause(found.start(), found.end(), i)
+                    )
+                    continue
+                if leads:
+                    following = [
+                        i
+                        for i, (figure_start, _) in enumerate(spans)
+                        if figure_start >= found.end()
+                        and in_clause(found.start(), found.end(), i)
+                    ]
+                    if following:
+                        claimed.add(following[0])
+                        continue
+                i, _ = owner(found.start(), found.end(), prefer_following=True)
+                if in_clause(found.start(), found.end(), i):
+                    claimed.add(i)
+        return claimed
+
+    # Quoted, not offered: attributed to a listing, to our own website, or to
+    # us on an earlier call - or framed as a price rather than as what the
+    # buyer will spend. Forward-only, so a source word cannot reach back over a
+    # figure the buyer stated before mentioning any source.
+    attributed = bound(vocabulary.attributions.get(language, ()), whole_clause=True)
+    # The buyer claiming a figure as their own. Overrides both withholding
+    # rules, at any distance inside the clause.
+    owned = bound(vocabulary.ownership.get(language, ()), leads=True)
+    # A measurement rather than a sum.
+    measured = bound(vocabulary.dimensions.get(language, ()))
 
     fallback: BudgetMention | None = None
     for i, match in enumerate(candidates):
         held = currency_of.get(i)
         currency = None if held is None else held[1]
         unit = _budget_units().search(match.figure.surface)
-        if i in attributed and i not in marked and i not in adopted:
-            # Quoted, not offered. A budget keyword bound to the same figure
-            # outranks the attribution twice over - as the marker that picks
-            # the budget out of several figures, and on the wider reach that
-            # rescues a quoted figure the buyer has adopted. "The listing says
-            # AED 750,000 but my budget is 2 million" is a real budget of 2
-            # million, and withholding one is the expensive direction.
+        if (i in attributed or i in measured) and i not in owned:
+            # Withheld: quoted from somewhere else, or measuring something.
+            #
+            # Only OWNERSHIP overrides this, never a plain budget keyword, and
+            # the difference is a quoted range: "up to" is a budget keyword and
+            # it appears in "Prices start at AED 750,000 and go up to AED
+            # 900,000", where it belongs to the range rather than to the buyer.
+            # A generic keyword says which figure is the budget once we know
+            # one of them is; only the buyer saying "my budget" or "I can
+            # spend" says that a quoted figure is theirs after all - and
+            # withholding a real budget is the expensive direction, so that
+            # list is generous.
             continue
         if currency is None and unit is None and i not in marked:
             continue
