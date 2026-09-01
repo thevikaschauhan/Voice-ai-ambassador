@@ -118,6 +118,26 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+# Provisional Fish voice ids, one per shipped language (docs/voice-shortlist.md).
+#
+# PROVISIONAL, and the word is load-bearing: these are the top register match in
+# each language's shortlist, not a choice anybody has made by ear. The point of
+# that page is that the CLIENT chooses, and two candidates per language still go
+# to the meeting. What these defaults settle is only the thing nobody wants to
+# decide by accident - without them the session falls through to
+# `fishaudio.tts.DEFAULT_VOICE_ID`, which is an English voice nobody selected,
+# used for Arabic and Hindi as well.
+#
+# The human decided on 2026-09-01 that a voice without Fish's `licensed` flag
+# may ship for the POC; no voice in en/ar/hi carries that flag, and the ar/hi
+# candidates are community uploads of unverified provenance. What the paid tier
+# grants for a public-library voice is still `VERIFY:` for anything
+# client-facing, and it is tracked on that page rather than resolved here.
+PROVISIONAL_VOICE_ID_EN = "536d3a5e000945adb7038665781a4aca"  # "Ethan", Fish Official
+PROVISIONAL_VOICE_ID_AR = "10c5c2a37a284a81bb0cf3c53955d795"  # Gulf-accented, community
+PROVISIONAL_VOICE_ID_HI = "6209a5682085409fa935f901f0bce950"  # "neel", community
+
+
 def _resolve(file_values: dict[str, str], key: str, default: str = "") -> str:
     """Process environment wins over the file, so a one-off run can override
     without editing .env (`GUARDRAIL_MODE=warn uv run ...`)."""
@@ -330,9 +350,23 @@ def load_settings(env_path: Path | None = None) -> Settings:
         stt_enabled=_resolve_bool(file_values, "STT_ENABLED", default=False),
         fish_api_key=_resolve(file_values, "FISH_API_KEY"),
         fish_tts_model=_resolve(file_values, "FISH_TTS_MODEL", "s2.1-pro"),
-        tts_voice_id_en=_resolve(file_values, "TTS_VOICE_ID_EN"),
-        tts_voice_id_ar=_resolve(file_values, "TTS_VOICE_ID_AR"),
-        tts_voice_id_hi=_resolve(file_values, "TTS_VOICE_ID_HI"),
+        # These defaults have to be repeated in agent/.env.example, not left
+        # blank there. `parse_env_file` records a bare `KEY=` as an empty
+        # STRING, and an empty string is a value: `_resolve` returns it and the
+        # default below never runs. So an example shipping `TTS_VOICE_ID_EN=`
+        # would silently switch the default off for every operator who copied
+        # it - the same drift ADR-017's default hit one variable deeper, where
+        # the example disagreed with the code. A test loads the example and
+        # asserts the two agree.
+        tts_voice_id_en=_resolve(
+            file_values, "TTS_VOICE_ID_EN", PROVISIONAL_VOICE_ID_EN
+        ),
+        tts_voice_id_ar=_resolve(
+            file_values, "TTS_VOICE_ID_AR", PROVISIONAL_VOICE_ID_AR
+        ),
+        tts_voice_id_hi=_resolve(
+            file_values, "TTS_VOICE_ID_HI", PROVISIONAL_VOICE_ID_HI
+        ),
         guardrail_mode=guardrail_mode,
         prompt_mode=prompt_mode,
         demo_mode=_resolve_bool(file_values, "DEMO_MODE"),

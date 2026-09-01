@@ -1,9 +1,16 @@
 # Fish voice shortlist - candidates to audition
 
-`TTS_VOICE_ID_EN`, `_AR` and `_HI` are all empty, so every run so far has used
-Fish's default voice. `docs/04-` asks for two or three samples to be brought to
-the meeting rather than a choice already made: it converts assumption A8 (will
-they accept a synthetic voice) into something the client enjoys deciding.
+`docs/04-` asks for two or three samples to be brought to the meeting rather
+than a choice already made: it converts assumption A8 (will they accept a
+synthetic voice) into something the client enjoys deciding.
+
+**Wired since 2026-09-01:** `TTS_VOICE_ID_EN`, `_AR` and `_HI` were all empty,
+so every run used Fish's default voice - an English voice nobody selected, used
+for Arabic and Hindi too. They now default to the top register match in each
+list below (marked PROVISIONAL in `adapter/config.py` and `agent/.env.example`).
+That is not the decision. It settles only what nobody wanted decided by
+accident; two candidates per language still go to the meeting, and the client
+still chooses.
 
 **This page is the shortlist, not the decision. Nobody on the build team has
 listened to any of these.** Every candidate below was found by reading Fish's
@@ -29,9 +36,14 @@ exactly seven voices - all seven Japanese, all of them narration or
 customer-support voices. There is no licensed voice in any language this system
 speaks. So the licence question for a client-facing demo is not answered by
 picking carefully from this list; it is answered by Fish, by the account tier,
-or by commissioning a voice. `VERIFY:` with Fish what the paid tier actually
-grants for a public-library voice, before a voice is played in a Binghatti
-boardroom.
+or by commissioning a voice.
+
+> **Human decision, 2026-09-01: a voice without the `licensed` flag is
+> acceptable for the POC demo.** That is what unblocked wiring the provisional
+> defaults, and it is scoped to the POC. `VERIFY:` with Fish what the paid tier
+> actually grants for a public-library voice **stays open** for anything
+> client-facing beyond the demo, and it is the question to settle before this
+> becomes a deployed system rather than a meeting.
 
 **2. The top of the Arabic and Hindi catalogues is clones of identifiable real
 people.** Not a stylistic problem, a likeness one. The most-used Arabic voices
@@ -101,10 +113,15 @@ TTS swap decision happens then, not on day 3.
    "Binghatti" is the wrong voice, and it is the sentence nobody thinks to
    test. This is the first step that spends anything; it is cents, but ask
    before running it.
-3. Set `TTS_VOICE_ID_EN` / `_AR` / `_HI` in `agent/.env`, and note in
-   `docs/06-` that day 1's "voices shortlisted" item is closed.
+3. Replace the provisional defaults with what you chose. They live in TWO
+   places and both have to move together - `PROVISIONAL_VOICE_ID_*` in
+   `adapter/config.py` and the same three lines in `agent/.env.example` - and a
+   test fails if they disagree. `agent/.env` overrides both for a local run,
+   which is the right way to try a candidate without committing to it.
 4. Take two per language to the meeting, not one. The point of this page is
-   that the client chooses.
+   that the client chooses, and a provisional default in the repository is not
+   a choice - it is what stops the demo speaking Arabic in an unselected
+   English voice while the choice is still open.
 
 `PHASE-2:` cloning a named Binghatti ambassador's voice is technically easy and
 contractually loaded (`docs/04-`). Raise it as roadmap; let them ask.

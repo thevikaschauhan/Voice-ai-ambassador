@@ -257,7 +257,9 @@ STT_MODEL_AR=                  # openrouter path only, and expected to stay empt
 TTS_PROVIDER=fishaudio         # decided, ADR-014
 FISH_API_KEY=
 FISH_TTS_MODEL=s2.1-pro        # s2.1-pro-free for dev; paid model for the demo (SLA + commercial licence)
-TTS_VOICE_ID_EN= / _AR= / _HI= # Fish voice reference ids, chosen by ear
+TTS_VOICE_ID_EN= / _AR= / _HI= # Fish voice reference ids. Defaulted to the PROVISIONAL picks in
+                               # docs/voice-shortlist.md so no language falls through to Fish's
+                               # own default voice; the client chooses at the meeting
 GUARDRAIL_MODE=enforce|warn    # warn logs violations without blocking; enforce is default
 PROMPT_MODE=ambassador|naive   # naive pairs with warn for the defence-in-depth demo (docs/03-)
 DEMO_MODE=true|false           # seeds the scripted conversation from docs/07-
