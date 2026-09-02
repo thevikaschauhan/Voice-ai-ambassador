@@ -50,23 +50,42 @@ export default defineRailway(() => {
       // variables - docs/09-deploy.md, "Verifying a deploy", says what does.
       healthcheckPath: "/",
       healthcheckTimeout: 60,
-      restartPolicyType: "ON_FAILURE",
+      // No restartPolicyType. Railway's default already IS on-failure with a
+      // maximum of ten restarts (docs/deployments/restart-policy), and the
+      // platform does not STORE a setting that equals its default: it reads
+      // back as null. Declaring it therefore protects nothing and makes every
+      // future `railway config plan` show a pending change that can never be
+      // applied away - which is how a plan stops being read. Measured, not
+      // assumed: after the 13:31Z apply the read-back showed
+      // restartPolicyType null on both services. Only the value that DIFFERS
+      // from the default is worth declaring, so this stays:
       restartPolicyMaxRetries: 3,
     },
     replicas: { ams: 1 },
+    // Five variables, and the short list is the point. This service was
+    // provisioned with the agent's whole environment, so a public-facing Node
+    // container was holding DEEPGRAM_API_KEY and OPENROUTER_API_KEY - two
+    // metered provider credentials it has no code path to use. `web` reads
+    // exactly the three LIVEKIT_ values (`lib/livekit/config.ts`) plus the two
+    // gates below; every other name was removed from the service rather than
+    // left listed here, because a credential that cannot be reached from a
+    // container cannot leak from it.
+    //
+    // The three LIVEKIT_ROOM / AMBASSADOR_* names stay deliberately ABSENT
+    // rather than listed: docs/09-'s web contract sets them unset on purpose,
+    // and naming them here would be the first step towards someone setting
+    // them.
     variables: {
-      BRIEF_MODEL: preserve(),
-      DEEPGRAM_API_KEY: preserve(),
-      DEEPGRAM_MODEL: preserve(),
+      // The talk page's two gates (#73). Listed because omit means delete:
+      // once the human sets DEMO_ACCESS_CODE in the dashboard, an apply from a
+      // file that did not name it would take it away again. DEMO_MAX_ROOMS
+      // defaults to 2 in the route when unset, so it is named for the same
+      // reason rather than because it has to be set.
+      DEMO_ACCESS_CODE: preserve(),
+      DEMO_MAX_ROOMS: preserve(),
       LIVEKIT_API_KEY: preserve(),
       LIVEKIT_API_SECRET: preserve(),
       LIVEKIT_URL: preserve(),
-      LLM_BASE_URL: preserve(),
-      LLM_MODEL: preserve(),
-      LLM_THINKING: preserve(),
-      OPENROUTER_API_KEY: preserve(),
-      STT_ENABLED: preserve(),
-      STT_PROVIDER: preserve(),
     },
   });
 
@@ -89,8 +108,14 @@ export default defineRailway(() => {
       // No startCommand. The image's CMD carries `--drain-timeout 600`, and a
       // start command set here would silently replace it and take the drain
       // with it.
-      restartPolicyType: "ON_FAILURE",
-      restartPolicyMaxRetries: 10,
+      //
+      // No restart policy either, and for this service BOTH halves are the
+      // platform default: on-failure, ten restarts. See the note on `web`
+      // above for why a declared default is worse than an undeclared one. The
+      // behaviour docs/09 relies on - a non-zero exit crash-looping instead of
+      // stopping quietly - is unchanged, because that behaviour IS the default.
+      // The drain below is declared because 600 is not a default; the default
+      // is 0.
       // The platform half of that drain, and it was missing entirely. This is
       // the SIGTERM-to-SIGKILL window, and Railway's default is 0 seconds: the
       // worker asked for 600 to finish a call and was being killed
