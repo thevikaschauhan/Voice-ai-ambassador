@@ -138,7 +138,7 @@ describes was exercised in the image before this sentence changed.
 | `DEMO_ACCESS_CODE` | service variable, never `NEXT_PUBLIC_` | `api/talk` answers 403 to every attempt, with the same words for a wrong code and an unset one - an unset gate is a closed gate. Its presence is also what tells the service it is the hosted one, which is what closes `api/session/room` and text mode |
 | `DEMO_MAX_ROOMS` | service variable | the cap falls back to 2, its in-code default, rather than to unlimited. A value that is not a positive integer falls back the same way rather than reading as no limit |
 | `PORT` | injected by Railway | falls back to 3000, set in the image |
-| `NODE_ENV` | `production`, set in the image | the npm scripts pin it anyway, and that pin is load-bearing |
+| `NODE_ENV` | `production`, set in the image | the npm scripts pin it anyway. That pin was load-bearing under Next 15; under Next 16 it changes nothing measurable in the build, and it is kept for one command everywhere |
 
 The three LiveKit variables carry the same names the agent uses, so they are the
 `agent/.env.example` entries by reference and are not re-listed with values.
@@ -279,18 +279,36 @@ decodes and yields each chunk's own content, and `readAll` is what concatenates.
 That was settled by reading `livekit-client`'s source, because appending
 cumulative chunks would print every word an increasing number of times.
 
-### The trap in `next start`
+### The trap in `next start`, and how Next 16 closed it
 
-`next start` loads `next.config.ts`, and a TypeScript config needs a TypeScript
-compiler to read. With production-only dependencies installed, Next does not
-fail with a missing module - it tries to **install TypeScript at boot, with
-yarn, over the network, into the running container**, and the version it reaches
-for is not the one this repo pins. It needs egress at start-up, it writes into
-the image at runtime, and as a non-root user it simply fails. The image
-therefore ships the pinned `typescript` from the same lockfile the build used.
-Renaming the config to `.mjs` would also close it, and is deliberately not done:
-it would trade a real `NextConfig` type for a JSDoc comment on a file that
-several cards read.
+Under Next 15, `next start` re-read `next.config.ts` at boot, and a TypeScript
+config needs a TypeScript compiler to read. With production-only dependencies
+installed Next did not fail with a missing module - it tried to **install
+TypeScript at boot, with yarn, over the network, into the running container**, at
+a version this repo does not pin. It needed egress at start-up, it wrote into
+the image at runtime, and as a non-root user it failed outright. The image
+shipped the pinned compiler to close it.
+
+Next 16 resolves the config at **build** time and bakes it into
+`.next/required-server-files.json` - that file carries this project's
+`outputFileTracingRoot` of `/srv/` - so `next start` never parses the TypeScript
+again. Checked by deleting `node_modules/typescript` from the image and starting
+it: ready in 215ms, every route 200, and no install attempted in the boot log.
+The compiler is therefore gone from the runtime tree, taking 23MB and a comment
+that had stopped being true with it.
+
+The config *file* still ships. It is 300 bytes and it is the declared source of
+truth for `outputFileTracingRoot`; dropping it would make the image depend on a
+build-artifact detail rather than on the file the repository maintains.
+
+The same re-check settled the other half. The `NODE_ENV` pin in the npm scripts
+was load-bearing under Next 15, where an inherited `NODE_ENV=development` made
+the build prerender `/404` from the dev pages-router error component and fail on
+`<Html>`. Under Next 16 the fourteen client chunks from a
+`NODE_ENV=development` build are byte-identical to the pinned one. The pin stays
+regardless: it costs nothing, `next start`'s runtime behaviour under a
+development `NODE_ENV` was not measured, and one build command everywhere is
+worth more than two saved lines.
 
 ## Build reproducibility
 

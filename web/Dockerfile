@@ -11,7 +11,7 @@
 # implementation detail - cwd is `/srv/web`, so `..` is `/srv`, and `/srv/data`
 # is the same data the agent reads.
 #
-# SIZE, and the option not taken. This ships ~950MB: node:24-slim, the traced
+# SIZE, and the option not taken. This ships ~930MB: node:24-slim, the traced
 # `.next` output and production `node_modules` (`next` plus its platform SWC
 # binaries are 286MB of that). `output: 'standalone'` would cut it to roughly a
 # third, and it is deliberately NOT used here: it relocates the whole app tree
@@ -55,10 +55,15 @@ COPY --from=deps /srv/web/node_modules ./node_modules
 COPY web ./
 # `next build` does not read data/ - every route that does is dynamic (`ƒ`) and
 # renders on demand - so the data lands in the runtime stage only.
-# NODE_ENV is pinned by the npm script itself, and that is load-bearing: an
-# inherited NODE_ENV=development makes `next build` prerender /404 from the dev
-# pages-router error component and fail on `<Html>` (README, AGENTS.md
-# 2026-08-31). Calling the script rather than `next build` keeps that pin.
+# NODE_ENV is pinned by the npm script itself. Under Next 15 that pin was
+# load-bearing: an inherited NODE_ENV=development made `next build` prerender
+# /404 from the dev pages-router error component and fail on `<Html>`, an error
+# naming a pages-router problem this app does not have. Next 16 no longer does
+# that - measured here, the client chunks from a NODE_ENV=development build are
+# byte-identical to the pinned one, all fourteen of them. The script is still
+# what gets called: the pin costs nothing, `next start`'s runtime behaviour
+# under a development NODE_ENV was not measured, and one command for the build
+# in the image, in CI and on a laptop is worth more than the two lines saved.
 RUN npm run build
 
 
@@ -77,22 +82,26 @@ ENV PORT=3000
 
 # The runtime tree, and nothing else.
 COPY --from=prod-deps --chown=node:node /srv/web/node_modules ./node_modules
-# `next start` LOADS next.config.ts, and a TypeScript config needs a TypeScript
-# compiler to read. Without one Next does not fail - it tries to INSTALL
-# typescript at boot, with yarn, over the network, into the running container:
+# next.config.ts is copied but a TypeScript compiler is NOT, and the difference
+# between those two facts is a Next 16 change worth recording.
 #
-#   ⚠ Installing TypeScript as it was not found while loading "next.config.ts".
-#   Installing devDependencies (yarn): - typescript@5.8.2
+# Under Next 15, `next start` re-read next.config.ts at boot, so a runtime with
+# production-only dependencies had no compiler to read it - and Next did not
+# fail, it tried to INSTALL typescript at start-up, with yarn, over the network,
+# into the running container, at a version this repo does not pin. This image
+# therefore shipped the compiler.
 #
-# That is a production hazard three ways over - it needs egress at boot, it
-# writes into the image at runtime (and fails as a non-root user, which is how
-# this was found), and the version it reaches for is unpinned and NOT the 5.9.2
-# this repo pins. So the compiler ships, from the same lockfile the build used.
-# One dependency-free directory, ~23MB, and no second source of truth for the
-# version. The alternative is renaming the config to .mjs, which is left alone
-# deliberately: it would trade a real `NextConfig` type for a JSDoc comment on
-# a file three services read.
-COPY --from=deps --chown=node:node /srv/web/node_modules/typescript ./node_modules/typescript
+# Next 16 resolves the config at BUILD time and bakes it into
+# `.next/required-server-files.json` (verified: that file carries this project's
+# `outputFileTracingRoot` of /srv/), so `next start` never parses the TypeScript
+# again. Proved rather than assumed - with `node_modules/typescript` deleted
+# from this image, the server is ready in 215ms, every route answers 200, and
+# the boot log attempts no install. So the compiler is gone from the runtime
+# tree, and with it 23MB and a comment that had stopped being true.
+#
+# The config FILE stays. It is 300 bytes, it is the declared source of truth
+# for `outputFileTracingRoot`, and dropping it would make this image depend on
+# a build-artifact detail rather than on the file the repository maintains.
 COPY --from=builder --chown=node:node /srv/web/.next ./.next
 COPY --chown=node:node web/package.json web/next.config.ts ./
 # The sibling `data/` the request path reads. Copied last because it is the
@@ -100,5 +109,5 @@ COPY --chown=node:node web/package.json web/next.config.ts ./
 COPY --chown=node:node data /srv/data
 
 EXPOSE 3000
-# The npm script, again for the NODE_ENV pin.
+# The npm script, so the start path is the same one everywhere.
 CMD ["npm", "run", "start"]
