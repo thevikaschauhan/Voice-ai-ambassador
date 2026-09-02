@@ -16,6 +16,12 @@
 **/.pytest_cache
 **/.ruff_cache
 
+# The Railway IaC engine's dependencies. The root `package.json` exists only so
+# `railway config plan` can evaluate `.railway/railway.ts`; this image copies
+# `agent/` and `data/` explicitly and never touches it, so the tree would be
+# pure build-context weight on every worker deploy.
+**/node_modules
+
 # The other services and the fleet's own working state.
 web/
 hive/
