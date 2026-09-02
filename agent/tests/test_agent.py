@@ -83,6 +83,7 @@ def make_settings(**overrides: Any) -> Settings:
         stt_model_default="qwen/qwen3-asr-1.7b",
         stt_model_ar="",
         stt_enabled=False,
+        stt_enabled_explicit=True,
         deepgram_api_key="",
         deepgram_model="nova-3",
         fish_api_key=FAKE_KEY,
@@ -3039,8 +3040,8 @@ def test_console_is_not_asked_for_credentials_it_never_uses(monkeypatch):
             livekit_url="", livekit_api_key="", livekit_api_secret="", fish_api_key=""
         ),
     )
-    assert adapter_agent.preflight(["console"]) == []
-    assert adapter_agent.preflight(["console", "--text"]) == []
+    assert adapter_agent.preflight(["console"]) is None
+    assert adapter_agent.preflight(["console", "--text"]) is None
 
 
 def test_download_files_is_not_asked_either(monkeypatch):
@@ -3051,7 +3052,7 @@ def test_download_files_is_not_asked_either(monkeypatch):
     monkeypatch.setattr(
         adapter_agent, "load_settings", lambda: make_settings(livekit_url="")
     )
-    assert adapter_agent.preflight(["download-files"]) == []
+    assert adapter_agent.preflight(["download-files"]) is None
 
 
 def test_flags_before_the_command_do_not_hide_it(monkeypatch):
@@ -3085,7 +3086,7 @@ def test_a_configured_worker_passes_preflight(monkeypatch):
             deepgram_api_key="k",
         ),
     )
-    assert adapter_agent.preflight(["start"]) == []
+    assert adapter_agent.preflight(["start"]) is None
 
 
 def test_an_empty_argv_is_not_a_worker(monkeypatch):
@@ -3096,4 +3097,112 @@ def test_an_empty_argv_is_not_a_worker(monkeypatch):
     monkeypatch.setattr(
         adapter_agent, "load_settings", lambda: make_settings(livekit_url="")
     )
-    assert adapter_agent.preflight([]) == []
+    assert adapter_agent.preflight([]) is None
+
+
+# --- the preflight refuses a worker that never chose to hear ---------------
+#
+# The measured hole this closes: a hosted worker with every secret set
+# registered and could not hear, because STT_ENABLED defaults False and with it
+# off the recogniser's key is never asked for. The refusal is scoped exactly
+# like the credential check - connecting subcommands only.
+
+
+def _configured(**overrides):
+    base = dict(
+        livekit_url="wss://x",
+        livekit_api_key="k",
+        livekit_api_secret="s",
+        fish_api_key="k",
+        openrouter_api_key="k",
+        stt_enabled=True,
+        stt_provider="deepgram",
+        deepgram_api_key="k",
+        stt_enabled_explicit=True,
+    )
+    base.update(overrides)
+    return make_settings(**base)
+
+
+def test_a_worker_that_never_chose_stt_is_refused(monkeypatch):
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(
+        adapter_agent, "load_settings", lambda: _configured(stt_enabled_explicit=False)
+    )
+    for command in ("start", "dev", "connect"):
+        refusal = adapter_agent.preflight([command])
+        assert refusal is not None, command
+        assert "STT_ENABLED" in refusal, command
+
+
+def test_choosing_to_run_deaf_still_starts(monkeypatch):
+    """The boundary that decides whether this check is safe. A card about
+    refusing to start must not refuse the deliberate text-mode worker."""
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(
+        adapter_agent,
+        "load_settings",
+        lambda: _configured(
+            stt_enabled=False, stt_enabled_explicit=True, deepgram_api_key=""
+        ),
+    )
+    assert adapter_agent.preflight(["start"]) is None
+
+
+def test_console_is_not_asked_to_choose_either(monkeypatch):
+    """Console dials nothing and `download-files` runs in an image build where
+    no configuration exists. Scoped exactly like the credential check, or this
+    would break the venue plan B and the Dockerfile that bakes the models in."""
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(
+        adapter_agent, "load_settings", lambda: _configured(stt_enabled_explicit=False)
+    )
+    assert adapter_agent.preflight(["console"]) is None
+    assert adapter_agent.preflight(["console", "--text"]) is None
+    assert adapter_agent.preflight(["download-files"]) is None
+    assert adapter_agent.preflight([]) is None
+
+
+def test_both_kinds_of_problem_are_reported_at_once(monkeypatch):
+    """An operator on a platform pays a rebuild and a deploy per cycle, so
+    learning about the second problem after fixing the first costs a round trip
+    for nothing."""
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(
+        adapter_agent,
+        "load_settings",
+        lambda: _configured(fish_api_key="", stt_enabled_explicit=False),
+    )
+    refusal = adapter_agent.preflight(["start"])
+    assert refusal is not None
+    assert "FISH_API_KEY" in refusal
+    assert "STT_ENABLED" in refusal
+
+
+def test_a_fully_configured_worker_still_passes(monkeypatch):
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(adapter_agent, "load_settings", lambda: _configured())
+    assert adapter_agent.preflight(["start"]) is None
+
+
+def test_the_refusal_echoes_no_value(monkeypatch):
+    """Names only, never values: the message is printed by whatever supervisor
+    restarted the process."""
+    from adapter import agent as adapter_agent
+
+    secret = "sk-or-v1-must-not-appear"
+    monkeypatch.setattr(
+        adapter_agent,
+        "load_settings",
+        lambda: _configured(
+            openrouter_api_key=secret, fish_api_key="", stt_enabled_explicit=False
+        ),
+    )
+    refusal = adapter_agent.preflight(["start"])
+    assert refusal is not None
+    assert secret not in refusal

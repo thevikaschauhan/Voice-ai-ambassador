@@ -147,11 +147,37 @@ def _resolve(file_values: dict[str, str], key: str, default: str = "") -> str:
     return file_values.get(key, default)
 
 
+# The spellings a toggle accepts, in one place because two of them now read it:
+# `_resolve_bool` to get a value, and `_explicit_bool` to decide whether anyone
+# actually chose one. Split across two literals they would drift.
+_TRUE_SPELLINGS: Final = frozenset({"1", "true", "yes", "on"})
+_FALSE_SPELLINGS: Final = frozenset({"0", "false", "no", "off"})
+
+
 def _resolve_bool(file_values: dict[str, str], key: str, default: bool = False) -> bool:
     raw = _resolve(file_values, key, "").lower()
     if not raw:
         return default
-    return raw in ("1", "true", "yes", "on")
+    return raw in _TRUE_SPELLINGS
+
+
+def _explicit_bool(file_values: dict[str, str], key: str) -> bool:
+    """Whether a toggle was actually SET, as opposed to resolved from a default.
+
+    The value alone cannot answer this. `_resolve_bool` returns the default on
+    an empty value, so "off" and "never mentioned" are the same boolean - and a
+    worker that is deaf on purpose then looks exactly like one that is deaf by
+    omission. Same discipline as the event stream's rule that a missing
+    measurement must not look like a zero.
+
+    An unrecognised spelling counts as NOT set. `STT_ENABLED=ture` resolves to
+    False and is exactly as deaf, and exactly as accidental, as leaving it out;
+    treating it as a choice would honour the letter of "set it explicitly" and
+    miss the point of it. Empty counts as not set too, which is what a blank
+    variable in a platform dashboard produces.
+    """
+    raw = _resolve(file_values, key, "").lower()
+    return raw in _TRUE_SPELLINGS or raw in _FALSE_SPELLINGS
 
 
 @dataclass(frozen=True)
@@ -175,6 +201,9 @@ class Settings:
     stt_model_default: str
     stt_model_ar: str
     stt_enabled: bool
+    # Whether anyone chose `stt_enabled`, rather than inheriting its default.
+    # A worker must not be deaf by omission; see `undeclared_for_worker`.
+    stt_enabled_explicit: bool
     deepgram_api_key: str
     deepgram_model: str
 
@@ -292,11 +321,31 @@ class Settings:
         """
         return self.missing_for_transport() + self.missing_for_voice()
 
+    def undeclared_for_worker(self) -> list[str]:
+        """Settings a worker must CHOOSE rather than inherit, by name, or empty.
+
+        `STT_ENABLED` defaults to False, and with STT off `missing_for_voice`
+        does not ask for `DEEPGRAM_API_KEY`. So a hosted worker with every
+        secret set registers, passes every check the platform can see, and
+        cannot hear a word - a deploy that looks healthy and is deaf, which is
+        worse than one that refuses to start. The default stays False because
+        text mode is a real configuration; what is refused is not choosing.
+
+        A list, and named for the worker, for the same reason `missing_for_*`
+        are: a second setting that must be chosen gets the same treatment
+        rather than a second special case.
+        """
+        return [] if self.stt_enabled_explicit else ["STT_ENABLED"]
+
 
 # Remedies named per credential, because "missing DEEPGRAM_API_KEY" on a
 # checkout that worked yesterday is a question, not an answer. Keyed by variable
 # so a second conditional credential gets the same treatment rather than a
 # second special case.
+_WHERE_TO_SET: Final = (
+    "Set them in agent/.env (see agent/.env.example) or in the environment."
+)
+
 _REMEDIES: Final[dict[str, str]] = {
     "DEEPGRAM_API_KEY": (
         "Deepgram nova-3 is the recogniser (ADR-017: 258-327ms after endpoint "
@@ -322,12 +371,56 @@ def missing_credentials_error(missing: list[str]) -> str:
     is testable, and an error message nobody can test is one nobody notices
     going stale.
     """
+    return "\n".join([*_credential_lines(missing), _WHERE_TO_SET])
+
+
+def _credential_lines(missing: list[str]) -> list[str]:
     lines = ["missing credentials for the voice path: " + ", ".join(missing)]
     lines += [f"  {name}: {_REMEDIES[name]}" for name in missing if name in _REMEDIES]
-    lines.append(
-        "Set them in agent/.env (see agent/.env.example) or in the environment."
-    )
-    return "\n".join(lines)
+    return lines
+
+
+def undeclared_settings_error(undeclared: list[str]) -> str:
+    """The startup message for a setting nobody chose.
+
+    Separate from `missing_credentials_error` because it is a different
+    failure: nothing is missing, a decision is. The remedy names BOTH answers,
+    including the one that runs deaf, so the check reads as a question to answer
+    rather than a value to guess.
+    """
+    return "\n".join([*_undeclared_lines(undeclared), _WHERE_TO_SET])
+
+
+def _undeclared_lines(undeclared: list[str]) -> list[str]:
+    lines = ["settings a worker must choose explicitly: " + ", ".join(undeclared)]
+    if "STT_ENABLED" in undeclared:
+        lines.append(
+            "  STT_ENABLED: set STT_ENABLED=true for the voice path (ADR-017), "
+            "or =false to run deaf on purpose. It defaults to false, and with it "
+            "off the recogniser's key is never asked for, so a worker starts "
+            "happily and hears nothing."
+        )
+    return lines
+
+
+def worker_refusal(missing: list[str], undeclared: list[str]) -> str | None:
+    """Everything wrong with a worker's configuration at once, or None.
+
+    Both kinds of refusal in one message, because an operator on a platform
+    pays a rebuild and a deploy per cycle: learning about the second problem
+    after fixing the first costs a round trip for nothing. That is the same
+    reasoning `missing_for_worker` already applies across the credentials.
+
+    The pointer to where variables are set is appended ONCE. Printing the two
+    complete messages back to back repeats it, which reads like two unrelated
+    failures rather than one refusal with two causes.
+    """
+    lines: list[str] = []
+    if missing:
+        lines += _credential_lines(missing)
+    if undeclared:
+        lines += _undeclared_lines(undeclared)
+    return "\n".join([*lines, _WHERE_TO_SET]) if lines else None
 
 
 def load_settings(env_path: Path | None = None) -> Settings:
@@ -380,6 +473,7 @@ def load_settings(env_path: Path | None = None) -> Settings:
         # balance (AGENTS.md project learnings, 2026-08-27), and the agent must
         # stay runnable in text mode without it.
         stt_enabled=_resolve_bool(file_values, "STT_ENABLED", default=False),
+        stt_enabled_explicit=_explicit_bool(file_values, "STT_ENABLED"),
         fish_api_key=_resolve(file_values, "FISH_API_KEY"),
         fish_tts_model=_resolve(file_values, "FISH_TTS_MODEL", "s2.1-pro"),
         # These defaults have to be repeated in agent/.env.example, not left

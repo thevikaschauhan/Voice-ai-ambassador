@@ -81,7 +81,12 @@ from ambassador.recognition import RecognitionMonitor, load_noise_words
 from ambassador.verbalise import load_spoken_forms
 
 from .brief import BriefExtractor
-from .config import Settings, load_settings, missing_credentials_error
+from .config import (
+    Settings,
+    load_settings,
+    missing_credentials_error,
+    worker_refusal,
+)
 from .confirmations import (
     PROJECT_KEYS,
     RECOGNITION_KEYS,
@@ -1464,8 +1469,15 @@ async def entrypoint(ctx: JobContext) -> None:
 _CONNECTING_COMMANDS: Final = frozenset({"start", "dev", "connect"})
 
 
-def preflight(argv: list[str] | None = None) -> list[str]:
-    """Credentials this invocation cannot start without, by name, or empty.
+def preflight(argv: list[str] | None = None) -> str | None:
+    """Why this invocation must not start, ready to print, or None to proceed.
+
+    Returns the composed message rather than a list of names because there are
+    now two kinds of refusal - a credential that is missing and a setting nobody
+    chose - and they read differently. Reporting BOTH at once is the same
+    reasoning `missing_for_worker` already applies to credentials: an operator
+    on a platform pays a rebuild and a deploy per cycle, so learning about the
+    second problem after fixing the first costs a round trip for nothing.
 
     Runs BEFORE `cli.run_app`, which is the only anchor that precedes the
     framework's own argument check - and that check cannot be relied on: with no
@@ -1492,16 +1504,19 @@ def preflight(argv: list[str] | None = None) -> list[str]:
     # VALUE literally spelled `start`, `dev` or `connect`, and it errs towards
     # checking credentials, which is the direction that fails safe.
     if not _CONNECTING_COMMANDS.intersection(arguments):
-        return []
-    return load_settings().missing_for_worker()
+        return None
+    settings = load_settings()
+    return worker_refusal(
+        settings.missing_for_worker(), settings.undeclared_for_worker()
+    )
 
 
 if __name__ == "__main__":
-    _missing = preflight()
-    if _missing:
+    _refusal = preflight()
+    if _refusal:
         # stderr and a non-zero exit, so the platform sees a failed start rather
         # than a clean one. Names only, never values: the message is printed by
         # whatever supervisor restarted the process.
-        print(missing_credentials_error(_missing), file=sys.stderr)
+        print(_refusal, file=sys.stderr)
         raise SystemExit(1)
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
