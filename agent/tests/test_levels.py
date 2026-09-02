@@ -122,7 +122,13 @@ def test_unity_returns_the_same_object_rather_than_a_copy():
 
 def test_the_gains_bring_the_measured_levels_together():
     """The claim, on signals at exactly the measured levels of the three
-    voices: after the gain they land on one level."""
+    voices: after the gain they land on one level.
+
+    On FIXED inputs, which is what makes this arithmetic rather than a
+    prediction. The live path does not reach 2%, because the vendor re-renders
+    the same text at a different level; `adapter/levels.py` carries the
+    measured variance and the ~1.8 dB figure that is true of the product.
+    """
     normalised = [
         speech_rms(apply_gain(tone(measured), gain_for(voice_id)), SAMPLE_RATE)
         for voice_id, measured in SPEECH_RMS.items()
@@ -231,6 +237,13 @@ def test_the_table_still_matches_the_audio_it_came_from():
     for voice_id, value in measured.items():
         assert value == pytest.approx(SPEECH_RMS[voice_id], rel=0.01), voice_id
 
+    # The tolerance below is tight because these ARE the files the table was
+    # measured from, so this is a reproducibility check on the constants and
+    # not a claim about the live path. A fresh render does not land here: Fish
+    # does not synthesise the same text at the same level twice, and a second
+    # render of these same scripts came in at ar +21.3% and settled at a 1.23x
+    # spread rather than 1.02. See adapter/levels.py; that number is the one to
+    # quote about the product.
     normalised = {
         voice_id: value * gain_for(voice_id) for voice_id, value in measured.items()
     }

@@ -138,12 +138,30 @@ louder-than-average sentence has somewhere unpleasant to go.
 `adapter/levels.py` holds a per-voice gain and `tts_node` applies it to the
 frames on their way out. **Every gain is at most 1.0**: voices are matched DOWN
 to the quietest rather than up to a middle. That is the safety argument, not a
-preference. The table is calibrated from about 25 seconds per voice, which
-estimates a voice's average level and bounds nothing; attenuation turns a bad
-estimate into a small loudness error, while amplification turns the same error
-into clipping - the one artefact a listener cannot un-hear, on the one path
-where no test can catch it (#41). The cost is that the demo sits at the
-quietest voice's level, which is a volume knob on the listener's side.
+preference.
+
+**What it delivers is about two decibels, not within two percent.** The unit
+tests show the gains collapsing the spread to within 2%, and that is correct
+for what they measure: fixed inputs. The vendor is not a fixed input. Fish does
+not synthesise the same text at the same level twice, and re-rendering the
+identical scripts in the identical voices the same day measured en -1.5%,
+hi +4.6% and **ar +21.3%** against the calibration render. So a static
+per-voice gain is bounded below by the voice's own run-to-run variance, and
+averaging more renders into the table sharpens the estimate without touching
+the variance in the render that ships.
+
+Measured on a render the table had never seen: the three voices went from
+4.13x apart (12.3 dB) to 1.23x (1.8 dB). Twelve decibels is a listener noticing
+the volume changed; under two is a listener hearing a different voice. Quote
+that number, not the test's.
+
+The same variance is why the gain may not exceed 1.0. A 21% surprise under
+attenuation costs 21% of loudness accuracy; the identical surprise under
+amplification costs 21% of headroom, and on that second render the Hindi voice
+arrived at 0.95 of full scale with 5% of it left. Clipping is the one artefact
+a listener cannot un-hear, on the one path where no test can catch it (#41).
+The cost of matching downward is that the demo sits at the quietest voice's
+level, which is a volume knob on the listener's side.
 
 A voice with no measurement is passed through untouched, which is what it did
 before this existed. That is silent at runtime by design, so a test asserts

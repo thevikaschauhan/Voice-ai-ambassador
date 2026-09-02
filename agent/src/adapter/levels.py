@@ -16,23 +16,48 @@ front of a client that is a jump in loudness on a language change, and the
 headroom on the Hindi voice is thin enough that a louder-than-average sentence
 has somewhere unpleasant to go.
 
+## What ~25 seconds of calibration actually buys
+
+Less than the first version of this docstring claimed, and the gap is a fact
+about the vendor rather than about the sample size. Fish does not synthesise
+the same text at the same level twice. Re-rendering the identical scripts in
+the identical voices the same day, measured against the calibration render:
+
+    en   -1.5%
+    hi   +4.6%
+    ar  +21.3%
+
+So the table is not a description of what a voice WILL measure; it is an
+estimate whose error, on the evidence of two renders, can reach a fifth. A
+static per-voice gain therefore cannot do better than the voice's own
+run-to-run variance, and no amount of extra calibration changes that: averaging
+more renders sharpens the estimate and does nothing to the variance in the
+render that actually ships.
+
+What it buys in practice: the three voices went from 4.13x apart (12.3 dB) to
+1.23x (1.8 dB) on a render this table had never seen. Twelve decibels is a
+listener noticing the volume changed; under two is a listener hearing a
+different voice. That is the honest claim, and it is not the within-2% figure
+the unit tests show - those fix their input, and the vendor is not a fixed
+input.
+
 ## Attenuation only, and that is the whole safety argument
 
 Every gain here is <= 1.0. Voices are matched DOWN to the quietest rather than
-up to a middle, and that is not a stylistic preference:
+up to a middle, and the variance above is exactly why that is not a stylistic
+preference.
 
-The table below is calibrated from roughly 25 seconds of one script per voice.
-That is a fair sample of a voice's average level and it is certainly not a
-bound on its peaks. So the mechanism has to be one whose failure mode, when the
-estimate is wrong, is a small loudness error - never distortion. Attenuation
-cannot clip, for any utterance, in any voice, however badly this table
-underestimates. A gain above 1.0 turns exactly the same estimation error into
-clipping, which is the one artefact a listener cannot un-hear and no test in
-this repository can catch (#41: the audio path fails by SOUNDING wrong and
-raising nothing).
+The mechanism has to be one whose failure mode, when the estimate is wrong, is
+a small loudness error and never distortion. Attenuation cannot clip, for any
+utterance, in any voice, however badly this table underestimates: a 21%
+surprise costs 21% of loudness accuracy. A gain above 1.0 turns the identical
+surprise into 21% of HEADROOM, and on the second render the Hindi voice arrived
+at 0.95 of full scale with 5% of it left. Clipping is the one artefact a
+listener cannot un-hear, on the one path where no test in this repository can
+catch it (#41: the audio path fails by SOUNDING wrong and raising nothing).
 
 The cost is that the demo sits at the quietest voice's level. That is a volume
-knob on the listener's side, and every voice still lands between 0.24 and 0.68
+knob on the listener's side, and every voice still lands between 0.24 and 0.63
 of full scale, which is healthy.
 
 ## What happens to a voice that is not in the table
@@ -51,7 +76,8 @@ which is the reminder this file cannot give at runtime.
 reproducible rather than folklore. Synthesise ~25 seconds in the new voice,
 run it through `speech_rms`, add the row. `test_levels.py` re-measures the
 audition WAVs and checks the table against them whenever those files are
-present.
+present - which pins the numbers to the audio they came from, and is a
+different claim from "a fresh render will measure this".
 """
 
 from __future__ import annotations
@@ -63,6 +89,11 @@ from array import array
 # (~25s each, the recorded eval fixtures, synthesised through the shipped
 # pipeline). Keyed by voice id rather than by language: the level belongs to the
 # voice, and the languages are only how we currently reach them.
+# Re-measured on a second render of the same scripts (2026-09-02, main at
+# 7624c65): en 2100.9, ar 2905.7, hi 8677.0. Those are not corrections to the
+# numbers below - they are what the same voices measured on a different day,
+# and the spread between them is the reason this table is an estimate. See the
+# module docstring.
 SPEECH_RMS: dict[str, float] = {
     "536d3a5e000945adb7038665781a4aca": 2133.2,  # en, "Ethan", Fish Official
     "10c5c2a37a284a81bb0cf3c53955d795": 2395.1,  # ar, Gulf-accented, community
