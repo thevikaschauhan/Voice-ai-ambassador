@@ -41,7 +41,7 @@ async function ask(question: string) {
 }
 
 beforeEach(() => {
-  render(<TextMode projects={PROJECTS} live={false} />)
+  render(<TextMode projects={PROJECTS} availability="replay" />)
 })
 
 afterEach(() => {

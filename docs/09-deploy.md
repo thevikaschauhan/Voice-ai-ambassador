@@ -121,10 +121,9 @@ The last two are same-host paths, and the section below is about what that means
 ## The `web` service contract
 
 The table above is the inventory; this is the destination. Every value here is
-verified against a running container, not read off the source, with one stated
-exception: the two `DEMO_` rows name variables that **do not exist yet**. They
-are listed so this document and the build cards use the same words for them, and
-they are the only rows in this table that nothing has run against.
+verified against a running container, not read off the source. The two `DEMO_`
+rows no longer carry an exception: they exist, and the behaviour each one
+describes was exercised in the image before this sentence changed.
 
 | Variable | Railway value | If absent |
 |---|---|---|
@@ -132,10 +131,10 @@ they are the only rows in this table that nothing has run against.
 | `LIVEKIT_API_KEY` | service variable | same |
 | `LIVEKIT_API_SECRET` | service variable | same |
 | `LIVEKIT_ROOM` | unset | the server picks a room name, which is the intended behaviour. It must stay unset once the talk path ships: pinning one room name would send every client into the same call |
-| `AMBASSADOR_AGENT_DIR` | **unset** | text mode has no agent to spawn. Today that means it serves the labelled replay core; once `task-hosted-talk-page` lands it refuses with a reason instead (issue #63) |
+| `AMBASSADOR_AGENT_DIR` | **unset** | text mode has no agent to spawn, so on the hosted service it refuses with a reason and the page says so. A laptop with no agent still gets the labelled replay: both conditions are required (issue #63) |
 | `AMBASSADOR_BRIDGE_HANDSHAKE` | **unset** | `api/session/stream` answers 503 `{"live":false,"reason":"bridge not configured"}`. Stays unset on the hosted service by decision, not by omission: the hosted transcript comes from `lk.transcription` instead (issue #63) |
-| `DEMO_ACCESS_CODE` | service variable, never `NEXT_PUBLIC_` | the talk page refuses every attempt rather than letting anyone in; an unset gate is a closed gate, not an open one |
-| `DEMO_MAX_ROOMS` | service variable | the concurrency cap falls back to its in-code default rather than to unlimited |
+| `DEMO_ACCESS_CODE` | service variable, never `NEXT_PUBLIC_` | `api/talk` answers 403 to every attempt, with the same words for a wrong code and an unset one - an unset gate is a closed gate. Its presence is also what tells the service it is the hosted one, which is what closes `api/session/room` and text mode |
+| `DEMO_MAX_ROOMS` | service variable | the cap falls back to 2, its in-code default, rather than to unlimited. A value that is not a positive integer falls back the same way rather than reading as no limit |
 | `PORT` | injected by Railway | falls back to 3000, set in the image |
 | `NODE_ENV` | `production`, set in the image | the npm scripts pin it anyway, and that pin is load-bearing |
 
@@ -191,6 +190,42 @@ start path is defined once, in the file that also pins `NODE_ENV`.
 page that reads `../data`, so a mislayered image fails its health check instead
 of serving broken prices. `watchPatterns` covers `web/**` and `data/**`: an
 inventory edit is a deploy for this service.
+
+### The talk path, as built
+
+`api/talk` is a POST, because it creates a metered resource and a GET that mints
+one is a prefetch away from a bill. The order of its checks is the security
+order rather than the convenient one: the access code is compared before
+anything reaches LiveKit, so a refused attempt costs one string comparison
+instead of a `listRooms` round trip.
+
+`mintTalkGrant` sits beside `mintViewerGrant` rather than inside it. The viewer
+grant withholds exactly the capability the talk path needs, so a single function
+with a `canPublish` argument would be one wrong call away from handing a publish
+token to the read-only surface. Both grants are decoded and inspected in tests,
+which is what makes the pair a guarantee rather than an intention.
+
+Every room is created here, per call, named `demo-<uuid>`, and the token is
+scoped to that name. That is what makes "no listen-only token for a room the
+requester did not create" enforceable rather than aspirational: there is no
+lookup to get wrong, because the room did not exist until the call that asked
+for it. `api/session/room` is therefore **closed on the hosted service** - its
+newest-occupied-room lookup is right for a laptop watching its own agent and
+would hand a stranger's conversation to whoever asked next. The laptop path is
+untouched.
+
+The cap counts only rooms whose names carry the `demo-` prefix, so a room some
+other tool created in the same LiveKit project cannot lock the demo out. It is
+counted before the room is created, and two visitors arriving in the same
+instant can both pass the check: an accepted race whose cost is one extra room,
+against a lock this service has nowhere to keep.
+
+The transcript rail reads the framework's `lk.transcription` streams and appends
+each chunk. `TextStreamReader`'s own docstring says an async iteration returns
+the whole string received so far, which reads as cumulative; the implementation
+decodes and yields each chunk's own content, and `readAll` is what concatenates.
+That was settled by reading `livekit-client`'s source, because appending
+cumulative chunks would print every word an increasing number of times.
 
 ### The trap in `next start`
 
@@ -353,14 +388,15 @@ response body:
 
 | Response | What it means |
 |---|---|
+| 403 `{"room":null,"reason":"the listening view is not available on the hosted demo; start a call instead"}` | **This is the pass on the hosted service**, and it is the first row because it is the only one a deployed `web` with `DEMO_ACCESS_CODE` set will ever give you. The listening view finds its room by asking LiveKit for the newest occupied one, which is right for a laptop watching its own agent and wrong on a service where rooms are per-visitor. The rows below are the laptop's answers, and you will see them only with the access code unset. |
 | 503 `{"room":null,"reason":"no LiveKit room is open; the agent is not in a call"}` | **This is the pass.** All three variables are set and LiveKit accepted them; there is simply no call in progress yet. This is the correct answer for a healthy, idle deployment. |
 | 200 `{"url":...,"token":...,"room":...}` | Also healthy, and a call is live right now. The token is listen-only and expires in ten minutes. |
 | 503 `{"room":null,"reason":"LiveKit is not configured"}` | At least one of `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` is missing or blank on the service. A variable set to nothing but whitespace counts as missing here, because the reader trims before it tests, so a half-finished paste looks identical to an absent one. |
 | 503 `{"room":null,"reason":"LiveKit call failed: ..."}` | The variables are set and LiveKit refused them or could not be reached. The tail carries the cause: `invalid API key` (observed) is a key this project does not know. A well-formed key and secret that do not match each other surface instead as `LiveKit rejected the API key and secret for this project`. |
 
-**A healthy idle deployment answers 503, and that is not a defect.** It is worth
-saying plainly because the instinct is to read any 5xx as broken and start
-changing variables. The route is honest rather than reassuring: it will not mint
+**A healthy idle deployment answers 403 hosted, or 503 on a laptop, and neither
+is a defect.** It is worth saying plainly because the instinct is to read any
+4xx or 5xx as broken and start changing variables. The route is honest rather than reassuring: it will not mint
 a ticket to a call that does not exist. If you want a 200 out of this endpoint,
 start a call.
 
@@ -397,11 +433,27 @@ Python in it and a handshake file the other container owns.
    instead; stderr there names the missing variable. If it is green and the line
    is absent, look for the retry warnings and the drain.
 2. `GET /` on the web domain returns 200. The image is layered right.
-3. `GET /api/session/room` and read the reason. `no LiveKit room is open` or a
-   200 are both passes; `is not configured` or `call failed` are the two real
-   failures, and they tell you which.
+3. `GET /api/session/room` and read the reason. On the hosted service the pass
+   is 403 `the listening view is not available` - that route is closed there by
+   design. On a laptop, `no LiveKit room is open` or a 200 are both passes, and
+   `is not configured` or `call failed` are the two real failures.
 4. `GET /api/session/stream` returns 503 `bridge not configured`. Expected.
    Leave it.
+5. `GET /talk` returns 200, then `POST /api/talk` with no body:
+
+   ```
+   curl -i -X POST https://<your-railway-domain>/api/talk \
+     -H 'content-type: application/json' -d '{"language":"en"}'
+   ```
+
+   403 `that access code was not accepted` is the pass, and it is the same
+   answer whether the code is wrong or unset - the difference is in the service
+   log, which says `an unset gate is a closed gate` when nobody has set one.
+   Getting a 200 out of this endpoint means minting a real room, so do it with
+   the code once and then let the room's departure timeout reclaim it rather
+   than leaving it against the cap.
+6. `GET /text` shows `Unavailable` and says the page does not answer. That is
+   the hosted refusal, not a broken page.
 
 Anything beyond this is a live call, which is `task-railway-live-smoke` and
 `docs/07-demo-runbook.md`, not deploy verification.

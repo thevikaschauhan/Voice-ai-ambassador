@@ -7,6 +7,7 @@ import { LatencyMeter } from '@/components/latency-meter'
 import { TranscriptRail } from '@/components/transcript-rail'
 import type { AgentEvent } from '@/lib/session/events'
 import { initialState, reduce } from '@/lib/session/state'
+import type { TextModeAvailability } from '@/lib/textmode/availability'
 import type { Project } from '@/lib/types'
 
 /**
@@ -19,11 +20,18 @@ import type { Project } from '@/lib/types'
  */
 export function TextMode({
   projects,
-  live,
+  availability,
 }: {
   projects: readonly Project[]
-  /** True when the route is backed by the real Python core, not a fixture. */
-  live: boolean
+  /**
+   * Which of the three states this page is in, decided on the server.
+   *
+   * A boolean used to be enough, when the only question was whether the core
+   * was real. The hosted service adds a third answer - refused - and it is not
+   * "replay with a different label": the composer is gone, because there is
+   * nothing honest to do with what a visitor would type into it.
+   */
+  availability: TextModeAvailability
 }) {
   const [state, dispatch] = useReducer(reduce, undefined, () =>
     initialState({ connection: 'live' }),
@@ -32,6 +40,8 @@ export function TextMode({
   const [failure, setFailure] = useState<string | null>(null)
   const turnRef = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const live = availability === 'real'
+  const refused = availability === 'refused'
 
   const send = useCallback(
     async (text: string) => {
@@ -82,13 +92,15 @@ export function TextMode({
                 live ? 'border-brass-500 text-brass-400' : 'border-ink-700 text-ink-400'
               }`}
             >
-              {live ? 'Live core' : 'Replay'}
+              {live ? 'Live core' : refused ? 'Unavailable' : 'Replay'}
             </span>
           </div>
           <p className="mt-1.5 max-w-[74ch] text-[12px] leading-relaxed text-ink-500">
             {live
               ? 'The same core, demonstrated as chat: the same prompt, guardrail, recovery policy and escalation routing a call runs. This is the plan for a venue where the audio fails. The stages that only exist on the voice path report themselves missing rather than reporting a zero.'
-              : 'Scripted replies, not the core. No agent is configured, so this shows the shape of text mode without running the pipeline behind it.'}
+              : refused
+                ? 'Text mode runs the ambassador as chat, and it needs the agent on the same machine as this page. On this hosted demo they are separate services, so rather than answer you from a script and call it the ambassador, this page does not answer at all. Use the call instead - that is the real thing.'
+                : 'Scripted replies, not the core. No agent is configured, so this shows the shape of text mode without running the pipeline behind it.'}
           </p>
         </div>
         <Link className="text-[12px] text-ink-400 hover:text-brass-400" href="/">
@@ -105,6 +117,18 @@ export function TextMode({
       <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr] lg:items-start">
         <div className="flex flex-col gap-6">
           <TranscriptRail turns={state.turns} />
+          {refused ? (
+            <p
+              className="border border-ink-700 px-5 py-3.5 text-[13px] leading-relaxed text-ink-400"
+              role="status"
+            >
+              Not available here. Start a call instead.{' '}
+              <Link className="text-ink-300 underline hover:text-brass-400" href="/talk">
+                Talk to the ambassador
+              </Link>
+              .
+            </p>
+          ) : (
           <form
             className="flex gap-3"
             onSubmit={(event) => {
@@ -134,6 +158,7 @@ export function TextMode({
               {pending ? 'Sending' : 'Send'}
             </button>
           </form>
+          )}
         </div>
         <div className="flex flex-col gap-6">
           <AmbassadorView state={state} projects={projects} />
