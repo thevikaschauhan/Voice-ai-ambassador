@@ -447,3 +447,95 @@ def test_the_provisional_ids_are_the_ones_the_shortlist_names():
         PROVISIONAL_VOICE_ID_HI,
     ):
         assert f"`{voice_id}`" in shortlist, voice_id
+
+
+# --- what a WORKER cannot start without ------------------------------------
+#
+# `docs/09-deploy.md` says startup "says which one during preflight rather than
+# failing on the first sentence of a call". That was not true: `missing_for_voice`
+# ran inside `entrypoint`, which only runs once a job is dispatched, so a worker
+# with LiveKit credentials and no FISH_API_KEY registered, passed every check the
+# platform could see, and failed on the first buyer.
+
+
+def worker_settings(env_file, **overrides) -> Settings:
+    base = load_settings(env_file).redacted()
+    return Settings(**{**base, **overrides})  # type: ignore[arg-type]
+
+
+def test_transport_credentials_are_named_when_absent(env_file):
+    settings = worker_settings(
+        env_file, livekit_url="", livekit_api_key="", livekit_api_secret=""
+    )
+    assert settings.missing_for_transport() == [
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+    ]
+
+
+def test_the_framework_cannot_be_trusted_to_catch_them(env_file):
+    """Measured at the #64 gate: with no transport credentials the framework
+    logs "worker failed", drains, and exits ZERO - so a restart-on-failure
+    policy never trips and a misconfigured deploy stops quietly. That is why
+    these are checked here rather than left to it."""
+    settings = worker_settings(env_file, livekit_url="")
+    assert "LIVEKIT_URL" in settings.missing_for_worker()
+
+
+def test_a_worker_needs_transport_AND_the_provider_keys(env_file):
+    settings = worker_settings(
+        env_file,
+        livekit_url="",
+        livekit_api_key="k",
+        livekit_api_secret="s",
+        openrouter_api_key="k",
+        fish_api_key="",
+        stt_enabled=True,
+        stt_provider="deepgram",
+        deepgram_api_key="",
+    )
+    assert settings.missing_for_worker() == [
+        "LIVEKIT_URL",
+        "FISH_API_KEY",
+        "DEEPGRAM_API_KEY",
+    ]
+
+
+def test_a_fully_configured_worker_is_missing_nothing(env_file):
+    settings = worker_settings(
+        env_file,
+        livekit_url="wss://x",
+        livekit_api_key="k",
+        livekit_api_secret="s",
+        openrouter_api_key="k",
+        fish_api_key="k",
+        stt_enabled=True,
+        stt_provider="deepgram",
+        deepgram_api_key="k",
+    )
+    assert settings.missing_for_worker() == []
+
+
+def test_transport_is_reported_before_the_provider_keys(env_file):
+    """A worker with no LiveKit credentials has nothing to register with, so
+    that is the first thing an operator should read."""
+    settings = worker_settings(
+        env_file, livekit_url="", fish_api_key="", openrouter_api_key=""
+    )
+    missing = settings.missing_for_worker()
+    assert missing.index("LIVEKIT_URL") < missing.index("FISH_API_KEY")
+
+
+def test_the_worker_failure_message_still_echoes_no_value(env_file):
+    settings = worker_settings(env_file)
+    message = missing_credentials_error(settings.missing_for_worker())
+    for value in (
+        settings.livekit_api_secret,
+        settings.livekit_api_key,
+        settings.openrouter_api_key,
+        settings.fish_api_key,
+        settings.deepgram_api_key,
+    ):
+        if value:
+            assert value not in message

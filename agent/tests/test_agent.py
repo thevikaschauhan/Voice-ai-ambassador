@@ -2990,3 +2990,110 @@ async def test_the_opening_disclosure_is_not_mistaken_for_a_replacement():
     ]
     await log.aclose()
     assert "generation_discarded" not in [ln["event"] for ln in json_lines(buf)]
+
+
+# --- the startup preflight, and which commands it applies to ---------------
+#
+# `docs/09-deploy.md`: startup "says which one during preflight rather than
+# failing on the first sentence of a call". It did not. `missing_for_voice` ran
+# inside `entrypoint`, which only runs once a job is dispatched, so a worker
+# with LiveKit credentials and no FISH_API_KEY registered, passed every check
+# the platform could see, and failed on the first buyer.
+#
+# And the transport credentials cannot be left to the framework: with none set
+# it logs "worker failed", drains, and exits ZERO, so a restart-on-failure
+# policy never trips and a misconfigured deploy stops quietly.
+
+
+def test_a_worker_command_demands_transport_and_provider_keys(monkeypatch):
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(
+        adapter_agent,
+        "load_settings",
+        lambda: make_settings(
+            livekit_url="", livekit_api_key="", livekit_api_secret="", fish_api_key=""
+        ),
+    )
+    for command in ("start", "dev", "connect"):
+        missing = adapter_agent.preflight([command])
+        assert "LIVEKIT_URL" in missing, command
+        assert "FISH_API_KEY" in missing, command
+
+
+def test_console_is_not_asked_for_credentials_it_never_uses(monkeypatch):
+    """Console runs a mock job in a `console-room` and dials nothing - verified
+    by running it with no transport credentials at all, which reached
+    `session_end` normally. Demanding them would refuse to start the venue plan
+    B (docs/06- text-mode fallback) over keys it does not use.
+
+    Its provider keys are still checked, by `entrypoint`, which its mock job
+    dispatches immediately - so nothing there becomes later or quieter.
+    """
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(
+        adapter_agent,
+        "load_settings",
+        lambda: make_settings(
+            livekit_url="", livekit_api_key="", livekit_api_secret="", fish_api_key=""
+        ),
+    )
+    assert adapter_agent.preflight(["console"]) == []
+    assert adapter_agent.preflight(["console", "--text"]) == []
+
+
+def test_download_files_is_not_asked_either(monkeypatch):
+    """It runs in an image build, where no credential exists yet. Demanding one
+    would break the Dockerfile that bakes the plugin models in."""
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(
+        adapter_agent, "load_settings", lambda: make_settings(livekit_url="")
+    )
+    assert adapter_agent.preflight(["download-files"]) == []
+
+
+def test_flags_before_the_command_do_not_hide_it(monkeypatch):
+    """The command is the first non-flag argument, so a global option in front
+    of it must not make a worker look like a console session."""
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(
+        adapter_agent, "load_settings", lambda: make_settings(livekit_url="")
+    )
+    assert "LIVEKIT_URL" in adapter_agent.preflight(["--log-level", "debug", "start"])
+
+
+def test_a_configured_worker_passes_preflight(monkeypatch):
+    """The boundary that matters most: no behaviour change when the keys are
+    there. A preflight that refused a working deploy would be worse than the
+    silence it replaces."""
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(
+        adapter_agent,
+        "load_settings",
+        lambda: make_settings(
+            livekit_url="wss://x",
+            livekit_api_key="k",
+            livekit_api_secret="s",
+            fish_api_key="k",
+            openrouter_api_key="k",
+            stt_enabled=True,
+            stt_provider="deepgram",
+            deepgram_api_key="k",
+        ),
+    )
+    assert adapter_agent.preflight(["start"]) == []
+
+
+def test_an_empty_argv_is_not_a_worker(monkeypatch):
+    """`python -m adapter.agent` with no command prints usage and exits; it must
+    not be refused for credentials first."""
+    from adapter import agent as adapter_agent
+
+    monkeypatch.setattr(
+        adapter_agent, "load_settings", lambda: make_settings(livekit_url="")
+    )
+    assert adapter_agent.preflight([]) == []
