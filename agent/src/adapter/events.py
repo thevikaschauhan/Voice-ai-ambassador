@@ -190,6 +190,13 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "language_selected": "two language codes, an enum source and an enum reason",
     "call_duration_cap_armed": "one integer, the configured cap in seconds",
     "call_duration_cap": "one integer and a fixed literal action",
+    # One of three fixed reasons - buyer_farewell, duration_cap,
+    # buyer_left - and never the utterance that triggered it. The buyer's
+    # closing words are their own text and stay in the TurnRecord like
+    # every other utterance.
+    "call_ended": "one of three fixed reasons",
+    "farewell_spoken": "a turn index; the copy itself is authored, not buyer-derived",
+    "farewell_interrupted": "the same fixed reason, for a close the buyer talked over",
     "disclosure": "two language codes and a boolean, all from configuration",
     "budget_policy": "language codes and booleans, all from configuration",
     # An enum action, a currency code and booleans - and deliberately NOT the
@@ -853,6 +860,17 @@ class TurnTracker:
         """The warm hand-over after three consecutive unusable turns."""
         self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
         self._log.emit("recognition_escalation_spoken", turn=self.turn_index)
+
+    def record_farewell(self, text: str) -> None:
+        """The authored goodbye that ends the call.
+
+        Recorded like the other deterministic lines, so the audit for the last
+        turn says what the buyer actually heard. `completed=True` is corrected
+        by `mark_interrupted` if they talked over it - which is also the signal
+        that cancels the close.
+        """
+        self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
+        self._log.emit("farewell_spoken", turn=self.turn_index)
 
     def mark_interrupted(self) -> None:
         """Barge-in: the last chunk handed to TTS may not have finished

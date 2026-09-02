@@ -32,6 +32,7 @@ A head start already exists: the pure core (schemas, inventory loading with comp
 | Per-call language | The room carries its language in room metadata and the entrypoint reads it, falling back to `LANGUAGE`. Three languages from one worker, instead of one worker per language (`task-hosted-language-from-metadata`) |
 | Hosted transcript source | The framework's own `lk.transcription` text streams, which carry the buyer-visible words and nothing else. No event bridge on the hosted service (`task-hosted-language-from-metadata` verifies it) |
 | Hosted access controls | A public URL in front of paid providers, so: an access code checked server-side, a cap on concurrent demo rooms, a short token TTL, short room timeouts, and a per-call duration cap. Named in `docs/09-deploy.md` |
+| Graceful call ending | The agent detects that the buyer is closing the conversation, speaks an authored farewell in the call's language, and ends the job so the room closes and the browser sees the disconnect. Asked for by the client after their first hosted call: today nothing ends a call but the buyer closing the tab, so a client who says goodbye hears silence (`task-graceful-goodbye`) |
 
 ### Faked (`STUB:`)
 

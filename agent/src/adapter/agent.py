@@ -29,7 +29,7 @@ import json
 import logging
 import os
 import sys
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any, Final, Literal, get_args
 
@@ -62,6 +62,7 @@ from livekit.plugins import silero
 
 from ambassador.budget import BudgetPolicy, Decision, load_currency_vocabulary
 from ambassador.confirmation import ConfirmationCoordinator, Step
+from ambassador.farewell import is_farewell, load_farewells
 from ambassador.guardrails.prohibited import languages_covered, load_patterns
 from ambassador.inventory import (
     build_allowed_figures,
@@ -139,7 +140,7 @@ class _OwedTurn:
     """
 
     text: str
-    policy: Literal["budget", "project", "recognition"]
+    policy: Literal["budget", "project", "recognition", "farewell"]
     action: str
 
 
@@ -156,6 +157,7 @@ class AmbassadorAgent(Agent):
         settings: Settings,
         log: EventLog,
         guard_factory: Callable[..., SentenceGuard] = SentenceGuard,
+        close_call: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         projects = load_inventory()
         self._projects = projects
@@ -356,6 +358,29 @@ class AmbassadorAgent(Agent):
             settings.language,
             allow_uncertified=settings.allow_uncertified_language,
         )
+
+        # The end of the call. Loaded and guard-checked HERE, after
+        # `resolve_opening` has settled which language is actually being
+        # spoken, so a degraded call validates the line it will really use
+        # rather than one for a language it is not speaking.
+        self._farewells = load_farewells()
+        # Detection is per requested language and may simply be off: a
+        # language with no authored closing phrases ends its calls the way it
+        # did before this existed, which is the safe direction. The farewell
+        # SPEECH is loaded regardless, because the duration cap can end a call
+        # the buyer never said goodbye in.
+        self._farewell_detects = self._farewells.detects(settings.language)
+        self._farewell_line = self._compose_farewell()
+        self._close_call = close_call
+        # One close per call, whichever path asks for it. A second farewell
+        # over the first would be the same defect class as the double
+        # handover `record_escalation` exists to prevent.
+        self._closing = False
+        # The turn whose audio, once over, ends the call. Set when the farewell
+        # is handed the turn; read in `_seal`.
+        self._closing_turn: int | None = None
+        # Held so a close cannot be garbage-collected while it waits.
+        self._closing_task: asyncio.Task[None] | None = None
 
     @property
     def brief_extractor(self) -> BriefExtractor:
@@ -642,6 +667,112 @@ class AmbassadorAgent(Agent):
                 ) from exc
         return composed
 
+    def _compose_farewell(self) -> str:
+        """The authored farewell, validated through the guardrails now.
+
+        Same reasoning as `_compose_fixed_lines`, and the same refusal: this is
+        spoken verbatim at the end of every call that ends politely, so copy
+        that fails our own guardrails is a defect in the copy and belongs in
+        front of whoever started the process. There is then no runtime guard
+        call on the close path to fail open, and none to fail closed either.
+        """
+        raw = self._farewells.farewell_speech(self._opening_language)
+        try:
+            return self._guard.compose(raw)
+        except Exception as exc:
+            raise RuntimeError(
+                f"the farewell copy for {self._opening_language!r} fails our "
+                f"own guardrails: {exc}. It is spoken verbatim when a call "
+                "ends, so it is checked here rather than on a live call - fix "
+                "the copy in data/farewells.yaml."
+            ) from exc
+
+    def _is_closing_line(self, utterance: str) -> bool:
+        """Has the buyer ended the conversation?
+
+        Off entirely for a language with no authored closing phrases, which is
+        the safe direction: the call then ends the way it did before this
+        existed, rather than on a guessed phrase list.
+        """
+        if self._closing:
+            return False
+        if not self._farewell_detects:
+            return False
+        return is_farewell(utterance, self._farewells, self._settings.language)
+
+    def _close_after_farewell_turn(self, interrupted: bool) -> None:
+        """End the call now that the farewell turn's audio is over.
+
+        Called from `_seal`, which is the framework's own "this turn's audio is
+        finished" signal and the only place that knows whether it played out or
+        was cut off. Sealing first is deliberate: the turn record is written
+        before the call ends, so the audit cannot lose the farewell to the
+        shutdown.
+
+        An interrupted farewell CANCELS the close. A buyer who talks over the
+        goodbye is not finished, and hanging up mid-sentence is the one outcome
+        worse than the silence this replaces. It also covers the risk of
+        deciding on a transcript the recogniser was still revising: if the
+        buyer really was mid-sentence, they interrupt, and the call continues.
+        """
+        self._closing_turn = None
+        if interrupted:
+            self._log.emit("farewell_interrupted", reason="buyer_farewell")
+            return
+        if self._closing:
+            return
+        self._closing = True
+        self._log.emit("call_ended", reason="buyer_farewell")
+        if self._close_call is not None:
+            self._closing_task = asyncio.create_task(self._close_call("buyer_farewell"))
+
+    async def say_farewell_and_close(self, reason: str) -> None:
+        """Say goodbye, wait for it to be HEARD, then end the call.
+
+        The order is the whole of it. Shutting the job down while the farewell
+        is still in the TTS pipeline is a hang-up rather than a goodbye, so the
+        close waits on the speech handle's playout.
+
+        An interrupted farewell CANCELS the close. A buyer who talks over the
+        goodbye is not finished, and hanging up on someone mid-sentence is
+        worse than the silence this whole card exists to remove - so the
+        farewell is interruptible, unlike the opening disclosure, which has the
+        opposite requirement (it must complete because it is a notice).
+        `_closing` is released on that path so a later goodbye still works.
+
+        `call_ended` is emitted before the close is asked for, so the audit
+        seal that `shutdown_session` writes stays the LAST event of the session
+        rather than racing this one.
+
+        Unlike the buyer's own goodbye, THIS close insists. An interrupted
+        farewell cancels the buyer's close because a buyer who talks over it
+        was not finished asking - a request they can withdraw. The duration cap
+        is not a request: it bounds spend on a public URL (docs/09-), so
+        talking over the goodbye must not extend the call. The audit still
+        records that it was talked over.
+        """
+        if self._closing:
+            return
+        self._closing = True
+        handle = self.session.say(self._farewell_line, allow_interruptions=True)
+        await handle.wait_for_playout()
+        if handle.interrupted:
+            self._log.emit("farewell_interrupted", reason=reason)
+        self._log.emit("call_ended", reason=reason)
+        if self._close_call is not None:
+            await self._close_call(reason)
+
+    def note_buyer_left(self) -> None:
+        """The buyer disconnected. Nothing to say and nobody to say it to.
+
+        Recorded rather than spoken, and it still marks the call closed so a
+        farewell cannot be started into an empty room.
+        """
+        if self._closing:
+            return
+        self._closing = True
+        self._log.emit("call_ended", reason="buyer_left")
+
     def _fixed_line(self, key: str) -> str:
         """A terminal line, already composed and validated at construction."""
         return self._fixed_lines.get(
@@ -650,6 +781,20 @@ class AmbassadorAgent(Agent):
 
     def _deterministic_turn(self, tracker: TurnTracker) -> _OwedTurn | None:
         """Copy to speak instead of running this turn, or None to carry on."""
+        # The farewell is checked ABOVE the observed-turn gate, and that
+        # placement is the whole of a bug the first local runs found twice.
+        # `preemptive_generation` runs this on the PARTIAL transcript; if the
+        # final is not equivalent the framework cancels that generation and
+        # calls `llm_node` again, and below the gate the second call fell
+        # through to the model - so the authored farewell was cancelled, the
+        # model's own reply played instead, and the call still ended. Re-asking
+        # costs nothing: the question is idempotent and spends none of the
+        # buyer's policy attempts, which is the only thing the gate protects.
+        if self._is_closing_line(tracker.buyer_utterance):
+            # Ahead of the policies too: a buyer who has said goodbye is not
+            # owed a budget question, and asking one would be the agent talking
+            # past the end of the conversation.
+            return _OwedTurn(self._farewell_line, "farewell", "buyer_farewell")
         if self._policy_observed_turn == tracker.turn_index:
             # The second half of a tool-using turn. The policies already read
             # this utterance; reading it again would burn a second attempt on
@@ -901,7 +1046,14 @@ class AmbassadorAgent(Agent):
         # the buyer's behalf.
         owed = self._deterministic_turn(tracker)
         if owed is not None:
-            if owed.policy == "budget":
+            if owed.policy == "farewell":
+                tracker.record_farewell(owed.text)
+                # Armed, not fired. The close happens when this turn's audio is
+                # over, which is `_seal` - the framework's own signal, and the
+                # only place that knows whether the farewell played out or was
+                # talked over.
+                self._closing_turn = tracker.turn_index
+            elif owed.policy == "budget":
                 tracker.record_confirmation(owed.text, owed.action)
             elif owed.policy == "project":
                 tracker.record_project_confirmation(owed.text, owed.action)
@@ -1260,6 +1412,12 @@ class AmbassadorAgent(Agent):
                 # honest point to open a replacement.
                 self._reprewarm_tts(pending.tracker.turn_index)
         pending.tracker.finish(audit_incomplete=audit_incomplete)
+        # After the record is written, so `turn_complete` precedes `call_ended`
+        # and the audit keeps the farewell turn even as the call ends.
+        if self._closing_turn == pending.tracker.turn_index:
+            self._close_after_farewell_turn(
+                interrupted=handle is not None and handle.interrupted
+            )
         if self._pending is pending:
             self._pending = None
         if pending.chat_ctx is None:
@@ -1469,7 +1627,10 @@ def job_room_metadata(ctx: JobContext) -> str:
 
 
 def start_call_duration_cap(
-    ctx: JobContext, log: EventLog, seconds: int
+    ctx: JobContext,
+    log: EventLog,
+    seconds: int,
+    farewell: Callable[[], Awaitable[None]] | None = None,
 ) -> asyncio.Task[None] | None:
     """Shut the call down after `seconds`. Returns None when there is no cap.
 
@@ -1491,6 +1652,13 @@ def start_call_duration_cap(
         # log. Reversing these two loses the one event that distinguishes a
         # capped call from a visitor hanging up.
         log.emit("call_duration_cap", limit_seconds=seconds, action="shutdown")
+        if farewell is not None:
+            # The same authored copy the buyer's own goodbye speaks, and the
+            # same wait for playout - a cap that cuts the audio mid-word is the
+            # hang-up this whole card exists to remove, whoever ended the call.
+            # `farewell` owns the shutdown, so `call_ended` still precedes it.
+            await farewell()
+            return
         ctx.shutdown(reason=f"demo call duration cap reached ({seconds}s)")
 
     task = asyncio.create_task(_expire(), name="call-duration-cap")
@@ -1544,7 +1712,19 @@ async def entrypoint(ctx: JobContext) -> None:
         worker_default=worker_default,
     )
 
-    agent = AmbassadorAgent(settings=settings, log=log)
+    async def _end_call(reason: str) -> None:
+        """Hand the close to the framework once the farewell has been heard.
+
+        `ctx.shutdown` runs the registered shutdown callback, which is what
+        seals the audit - so the agent emits `call_ended` before calling this
+        and the seal stays last. Shutting the job down disconnects the agent,
+        the room closes behind it, and the browser gets LiveKit's own
+        `Disconnected` event, which is the entire contract with the web
+        surface.
+        """
+        ctx.shutdown(reason=reason)
+
+    agent = AmbassadorAgent(settings=settings, log=log, close_call=_end_call)
 
     stt_node = build_stt(settings)
     if stt_node is not None:
@@ -1604,7 +1784,12 @@ async def entrypoint(ctx: JobContext) -> None:
     # its own. Counting starts here, before `connect`, so setup counts against
     # the cap rather than being free - the number bounds a call's cost, and
     # everything after this point costs.
-    cap = start_call_duration_cap(ctx, log, settings.demo_max_call_seconds)
+    async def _cap_farewell() -> None:
+        await agent.say_farewell_and_close("duration_cap")
+
+    cap = start_call_duration_cap(
+        ctx, log, settings.demo_max_call_seconds, _cap_farewell
+    )
 
     async def _shutdown() -> None:
         # Cancel first: a call that ends on its own must not leave a timer
@@ -1620,6 +1805,13 @@ async def entrypoint(ctx: JobContext) -> None:
         )
 
     ctx.add_shutdown_callback(_shutdown)
+
+    # A buyer who simply closes the tab gets no farewell - there is nobody to
+    # say it to - but the call is still marked closed, so a goodbye cannot be
+    # started into an empty room and the audit records why the call ended.
+    @ctx.room.on("participant_disconnected")
+    def _on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
+        agent.note_buyer_left()
 
     await ctx.connect()
     await session.start(agent=agent, room=ctx.room)

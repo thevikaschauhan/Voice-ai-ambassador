@@ -125,6 +125,18 @@ Ours is only the audit consequence: the `TurnRecord` marks the interrupted chunk
 
 The framework's default false-interruption handling (pause playback, two-second grace, resume if the "interruption" was a cough) is deliberately kept, and the audit adapts to it rather than the reverse: the turn seals when the speech handle resolves, not when the agent state changes - so a resumed false interruption audits `completed: true`, a confirmed interruption audits `completed: false`, and sealing is asynchronous relative to `agent_state_changed`. A session driver that tears down mid-speech must close the session (or call the agent's finalise hook) or the last turn seals with `audit_incomplete: true`.
 
+## Ending the call
+
+A call has an authored ending, not just an absence. The buyer's closing line is detected deterministically in the core (`ambassador/farewell.py`, phrase tables per language in `data/farewells.yaml`) rather than by asking the model, because the two failure directions are not symmetric: a false negative leaves the call exactly as it behaves today, while a false positive hangs up on a live buyer. So the match is deliberately conservative - a farewell has to be what the utterance IS, not a word inside a longer question, or "before we say goodbye, what about the payment plan" would end the call on the question it was asking.
+
+The farewell TAKES THE TURN AWAY from the model, on the same seam ADR-011's confirmations use, and that is not a detail. The first version detected the goodbye after the turn and called `interrupt()`: nothing was speaking yet, so the interrupt did nothing, the model then produced its own "Thank you for your time. Have a pleasant day.", and the buyer heard two farewells. Measured, on the first local run. Taking the turn away is the only arrangement in which that cannot happen.
+
+The close is then a sequence, and the order is the whole of it. The farewell is authored copy in the call's language, spoken through the same guardrail pipeline as any other speech, and the call ends only when that turn's audio is OVER - the framework's own signal, which is also the only place that knows whether the speech played out or was talked over. `turn_complete` is written first, so the audit keeps the farewell turn even as the call ends, and `call_ended` is emitted before the shutdown callback seals the session, so the seal stays last rather than racing it.
+
+An interrupted farewell CANCELS the close. A buyer who talks over the goodbye is not finished, and hanging up mid-sentence is the one outcome worse than the silence this replaces. That guard does a second job: the deterministic seam reads whatever transcript the recogniser has settled on, which on the voice path can still be a partial, and a buyer who really was mid-sentence interrupts the farewell and keeps the call.
+
+Three reasons, and only the first two speak: `buyer_farewell`, `duration_cap` (the same copy, spoken outside any turn, since the cap can fire when nobody said goodbye) and `buyer_left`, which is a buyer who simply disconnected and has nobody left to address.
+
 ## Levels
 
 The three shipping voices are not level-matched, and two of them are community
