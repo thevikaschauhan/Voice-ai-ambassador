@@ -53,9 +53,12 @@ Then the buyer:
 
     uv run python tools/buyer_publisher.py --room measure-1 --log /tmp/run.jsonl
 
-`--barge-in-at` takes 1-based turn numbers to interrupt: the clip is published
-once that turn's `tts_first_audio` appears in the log, so the interruption
-always lands inside the agent's speech rather than near it.
+`--barge-in-at` takes 1-based turn numbers to interrupt. The barge-in line is
+published once the agent's own AUDIO TRACK starts carrying that turn's reply,
+not when the event log says it did: hosted, the log arrives p50 6.3s and p90
+85.6s after the event, so a log-driven trigger fired the interruption into the
+FOLLOWING turn and one run asked for two barge-ins and got four. The track
+cannot lag the audio, because it is the audio.
 """
 
 from __future__ import annotations
@@ -261,6 +264,10 @@ class AgentQuiescence:
         # updates is the evidence for it.
         self.attribute_updates = 0
         self._busy_since = time.monotonic()
+        # When the agent's audio last STARTED, as opposed to when it last
+        # stopped. `_busy_since` cannot answer this: it moves forward on every
+        # loud frame, so by the time it is read the onset is gone.
+        self._speaking_since: float | None = None
 
     def observe(self, state: str | None) -> None:
         if state is None or state == self.state:
@@ -289,7 +296,10 @@ class AgentQuiescence:
         if any(
             sample > self.SPEECH_PEAK or sample < -self.SPEECH_PEAK for sample in data
         ):
-            self._busy_since = time.monotonic()
+            now = time.monotonic()
+            if self._speaking_since is None:
+                self._speaking_since = now
+            self._busy_since = now
 
     def quiet_for(self) -> float:
         """Seconds since the agent was last busy, or 0.0 while it still is."""
@@ -323,6 +333,39 @@ class AgentQuiescence:
         """
         for participant in room.remote_participants.values():
             self.observe(participant.attributes.get(self.ATTRIBUTE))
+
+    def arm_onset(self) -> None:
+        """Forget speech already heard, so the next onset is this turn's.
+
+        Called before a clip is published, at a point the pacing gate has
+        already proved quiet. Without it the first read would match the tail of
+        the previous reply and the barge-in would fire before this turn's
+        speech began - the same off-by-one-turn error, one layer down.
+        """
+        self._speaking_since = None
+
+    async def wait_until_speaking(self, *, timeout: float) -> bool:
+        """The agent's audio STARTING, in real time.
+
+        This is the barge-in trigger, and it reads the audio rather than the
+        event log for one measured reason: on a hosted worker the log arrives
+        p50 6.3s and p90 85.6s after the event it describes (measured over 162
+        records), so a barge-in fired 0.6s after a `tts_first_audio` that
+        arrived six seconds late lands on the FOLLOWING turn. One hosted run
+        asked for two interruptions and got four that way. The agent's own
+        track has no such lag - it is the audio being interrupted.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._speaking_since is not None:
+                return True
+            await asyncio.sleep(0.02)
+        print(
+            f"  ! the agent never started speaking within {timeout:.0f}s; "
+            "not interrupting",
+            flush=True,
+        )
+        return False
 
     async def wait_until_quiet(self, *, min_quiet: float, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
@@ -661,6 +704,8 @@ async def run(args: argparse.Namespace) -> int:
                 f"[{number}/{len(turns)}]{' BARGE-IN' if interrupting else ''} {text}",
                 flush=True,
             )
+            if interrupting:
+                quiescence.arm_onset()
             await mouth.say(frames)
 
             # Which agent turn this clip became. Read, never assumed: the
@@ -684,11 +729,13 @@ async def run(args: argparse.Namespace) -> int:
             print(f"    clip {number} is agent turn {agent_turn}", flush=True)
 
             if interrupting:
-                # Wait for THIS turn to be speaking before cutting in, so the
-                # interruption lands inside its speech window. Matching any
-                # `tts_first_audio` put the barge-in on the previous turn's
-                # reply and produced a second, unasked interruption.
-                if await tail.wait_for("tts_first_audio", turn=agent_turn, timeout=30):
+                # Cut in only once THIS turn's speech is actually audible. Read
+                # off the agent's own track rather than the event log: hosted,
+                # the log arrives p50 6.3s late, so a `tts_first_audio` wait
+                # fired the interruption into the FOLLOWING turn and one run
+                # asked for two barge-ins and got four. The track is the audio
+                # being interrupted, so it cannot lag it.
+                if await quiescence.wait_until_speaking(timeout=30):
                     await asyncio.sleep(args.barge_in_delay)
                     print("    interrupting", flush=True)
                     await mouth.say(barge)
@@ -744,7 +791,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="1-based turn numbers to interrupt, e.g. 3,6",
     )
-    parser.add_argument("--barge-in-delay", type=float, default=0.6)
+    parser.add_argument(
+        "--barge-in-delay",
+        type=float,
+        default=0.6,
+        help=(
+            "how long after the agent's audio STARTS to cut in. Measured from "
+            "the track, not the event log, so it means the same thing locally "
+            "and on a hosted worker"
+        ),
+    )
     parser.add_argument("--gap-seconds", type=float, default=1.0)
     parser.add_argument("--disclosure-seconds", type=float, default=8.0)
     parser.add_argument(
