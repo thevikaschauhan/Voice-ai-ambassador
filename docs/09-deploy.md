@@ -1,4 +1,4 @@
-# 07 - Deployment
+# 09 - Deployment
 
 ## The topology in one paragraph
 
@@ -65,7 +65,11 @@ Two of the web surface's features are same-host by construction, and putting `we
 
 **The live event stream.** The ambassador view's transcript, latency meter and guardrail decisions arrive over the event bridge, and the bridge is loopback-only on purpose: the agent binds nothing but localhost, the handshake is a 0600 file on a shared filesystem, and `handshake.ts` refuses any host that is not loopback so a rewritten handshake cannot point the token somewhere else. Two Railway services share neither a filesystem nor a loopback interface. The restriction is a security property, so the answer is not to relax it.
 
-The question this raises is a scoping one, and it is not mine to answer: **is the hosted stack what the meeting is demonstrated from, or a persistent environment that exists alongside a laptop demo?** If the demo is driven from a laptop, both features keep working there and the hosted `web` is a public read-only view that is honestly missing two panels. If the demo is driven from the hosted URL, then the bridge and text mode need a transport between services rather than files and subprocesses, and that is design work nobody has scoped. Until it is answered, neither build card should invent an answer.
+Both are tracked as **issue #63**, which is the citation to use from a build pull request rather than this heading.
+
+The question they raise is a scoping one, and it is not mine to answer: **is the hosted stack what the meeting is demonstrated from, or a persistent environment that exists alongside a laptop demo?** If the demo is driven from a laptop, both features keep working there and the hosted `web` is a public read-only view that is honestly missing two panels. If the demo is driven from the hosted URL, then the bridge and text mode need a transport between services rather than files and subprocesses, and that is design work nobody has scoped, touching a security property deliberately.
+
+The decision sits with the human as `task-railway-demo-source`. Until it is answered, neither build card should invent an answer: both build the current shape.
 
 ## Not deployed
 

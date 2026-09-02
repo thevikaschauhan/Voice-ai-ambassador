@@ -23,7 +23,7 @@ A head start already exists: the pure core (schemas, inventory loading with comp
 | Barge-in | Framework-provided; we add the chunk-level audit record |
 | Verbalisation + lexicon | Three languages, closed-set tables, native-verified |
 | Text-mode fallback | Same core as chat; the venue plan B |
-| Hosting | We host, on Railway. Media stays on LiveKit Cloud (ADR-005): Railway has no UDP ingress, so it cannot serve a media server. Topology in `docs/07-deploy.md` |
+| Hosting | We host, on Railway. Media stays on LiveKit Cloud (ADR-005): Railway has no UDP ingress, so it cannot serve a media server. Topology in `docs/09-deploy.md` |
 | `agent-worker` service | The LiveKit Agents worker (`adapter/agent.py`). Outbound only: it joins rooms and exposes no port, so it takes no public domain |
 | `web` service | The Next.js surface, with the viewer token minted in its own server route (`api/session/room`, `livekit-server-sdk`). Public Railway domain. No separate token service |
 | Deployment secrets | Railway service variables only; keys never enter the repo. The env contract is `agent/.env.example`, referenced rather than copied |
@@ -36,7 +36,7 @@ Booking = spoken read-back, no calendar. CRM write = console log behind an inter
 
 Remaining three languages - SIP/80015 - WhatsApp follow-up - durable event store + PII hashing - per-referenced-project allowed-set scoping - `compute_payment` tool - POC 2 - everything `PHASE-2:`.
 
-On hosting specifically: one Railway project with one environment, so no staging tier. No custom domain (the generated Railway domain is the demo URL), no autoscaling, no replica count above one, and no web gates in CI yet - that last one is a separate decision, noted in `gates.yml` itself. All of these are consequences of the two-service topology rather than separate choices; `docs/07-deploy.md` is where they are argued.
+On hosting specifically: one Railway project with one environment, so no staging tier. No custom domain (the generated Railway domain is the demo URL), no autoscaling, no replica count above one, and no web gates in CI yet - that last one is a separate decision, noted in `gates.yml` itself. All of these are consequences of the two-service topology rather than separate choices; `docs/09-deploy.md` is where they are argued.
 
 ## Third language: Hindi
 
