@@ -280,3 +280,90 @@ def test_the_state_attribute_still_tightens_the_gate_if_it_arrives():
     assert q.quiet_for() > 0.0
     q.observe("thinking")
     assert q.quiet_for() == 0.0
+
+
+def test_the_publisher_waits_for_a_subscriber_and_says_when_it_gives_up():
+    """`publish_track` returns when the SERVER has the track; the agent
+    subscribes afterwards, and frames pushed before that are dropped rather
+    than buffered. The first paced run lost its whole first clip that way, so
+    the flag exists and its timeout is generous enough to survive a slow join."""
+    defaults = vars(bp.build_parser().parse_args(["--room", "r", "--log", "l"]))
+    assert defaults["subscribe_timeout"] >= 15
+    source = Path(bp.__file__).read_text(encoding="utf-8")
+    # The wait is on the publication the framework hands back, not a sleep.
+    assert "publication.wait_for_subscription()" in source
+    assert "return 1" in source  # a run nobody can hear is a failure, not a warning
+
+
+def test_attribute_updates_are_counted_so_the_signal_can_be_reported_absent():
+    """Whether `lk.agent.state` reaches a remote participant at all is an open
+    question. A run reporting zero updates is the evidence."""
+    q = bp.AgentQuiescence()
+    assert q.attribute_updates == 0
+
+
+def test_the_measurement_does_not_start_until_the_agent_proves_it_heard_us():
+    """Subscription is not proof: a session that logged the agent subscribed
+    still lost its entire first clip, and the worker's own transcript sequence
+    began at clip two. So the harness offers a throwaway line and waits for the
+    agent's `user_turn` before the measurement begins."""
+
+    class FakeMouth:
+        def __init__(self) -> None:
+            self.said = 0
+
+        async def say(self, frames) -> None:  # noqa: ANN001
+            self.said += 1
+
+    async def scenario(tmp: Path, hear_on: int) -> tuple[bool, int]:
+        log = tmp / "run.jsonl"
+        log.write_text("", encoding="utf-8")
+        tail = bp.EventTail(log)
+        mouth = FakeMouth()
+        original = mouth.say
+
+        async def say_then_maybe_answer(frames) -> None:  # noqa: ANN001
+            await original(frames)
+            if mouth.said >= hear_on:
+                with log.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({"event": "user_turn", "turn": 1}) + "\n")
+
+        mouth.say = say_then_maybe_answer  # type: ignore[method-assign]
+        ok = await bp.prime(mouth, tail, [], timeout=3.0)  # type: ignore[arg-type]
+        return ok, mouth.said
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        heard, attempts = asyncio.run(scenario(tmp, hear_on=1))
+        assert heard is True
+        assert attempts == 1
+
+
+def test_priming_retries_and_then_gives_up_rather_than_measuring_deaf():
+    """A run the agent cannot hear measures nothing, so it must fail loudly
+    instead of producing figures nobody can trust."""
+
+    class DeafMouth:
+        def __init__(self) -> None:
+            self.said = 0
+
+        async def say(self, frames) -> None:  # noqa: ANN001
+            self.said += 1
+
+    import tempfile
+
+    async def scenario(tmp: Path) -> tuple[bool, int]:
+        log = tmp / "run.jsonl"
+        log.write_text("", encoding="utf-8")
+        mouth = DeafMouth()
+        ok = await bp.prime(
+            mouth, bp.EventTail(log), [], timeout=2.5  # type: ignore[arg-type]
+        )
+        return ok, mouth.said
+
+    with tempfile.TemporaryDirectory() as raw:
+        heard, attempts = asyncio.run(scenario(Path(raw)))
+        assert heard is False
+        assert attempts >= 1

@@ -103,6 +103,12 @@ BUYER_TURNS: tuple[str, ...] = (
 # an interruption, not a turn.
 BARGE_IN_LINE = "Wait, stop."
 
+# Spoken before the measurement starts, and thrown away. Subscription is not
+# enough to prove the agent can hear us - see `prime` - so the harness says
+# something disposable and waits for the agent's own `user_turn` to prove the
+# path works end to end.
+PRIMING_LINE = "Hello, can you hear me?"
+
 
 def _silence() -> rtc.AudioFrame:
     samples = SAMPLE_RATE * FRAME_MS // 1000
@@ -248,6 +254,10 @@ class AgentQuiescence:
     def __init__(self) -> None:
         self.state: str | None = None
         self.heard_audio = False
+        # Counted rather than assumed: whether `lk.agent.state` reaches a remote
+        # participant at all is an open question, and a run that reports zero
+        # updates is the evidence for it.
+        self.attribute_updates = 0
         self._busy_since = time.monotonic()
 
     def observe(self, state: str | None) -> None:
@@ -291,6 +301,7 @@ class AgentQuiescence:
         @room.on("participant_attributes_changed")
         def _changed(changed, participant) -> None:  # noqa: ANN001
             if self.ATTRIBUTE in changed:
+                self.attribute_updates += 1
                 self.observe(changed[self.ATTRIBUTE])
 
         @room.on("participant_connected")
@@ -322,6 +333,47 @@ class AgentQuiescence:
             flush=True,
         )
         return False
+
+
+async def prime(
+    mouth: "Mouth",
+    tail: "EventTail",
+    frames: list[rtc.AudioFrame],
+    *,
+    timeout: float,
+) -> bool:
+    """Prove the agent can hear us before the measurement starts.
+
+    SUBSCRIPTION IS NOT ENOUGH, measured: a session that logged
+    `agent subscribed to the buyer track` still lost its entire first clip -
+    the worker's own transcript sequence began at clip TWO, and the first
+    `user_turn` arrived 80 seconds later, when clip two was published. So
+    something between a subscribed track and the recogniser drops the first
+    utterance; the agent's log shows an input stream attached and then detached
+    with `source: SOURCE_UNKNOWN` against
+    `accepted_sources: ["SOURCE_MICROPHONE"]`, which is the shape of a
+    publication whose source resolves after the stream is first attached.
+
+    Whatever the mechanism, it is not fixable from out here - so the harness
+    stops guessing and asks. One throwaway line, and the measurement does not
+    begin until the agent's own `user_turn` proves the path works end to end.
+    The reply to it is discarded; the clips that follow are the measurement.
+    """
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        print(f"  priming (attempt {attempt})", flush=True)
+        await mouth.say(frames)
+        heard = await tail.wait_for(
+            lambda r: r.get("event") == "user_turn",
+            timeout=min(15.0, max(1.0, deadline - time.monotonic())),
+            label="the agent to hear the priming line",
+        )
+        if heard is not None:
+            print("  the agent heard us; starting the measurement", flush=True)
+            return True
+    return False
 
 
 class EventTail:
@@ -429,6 +481,7 @@ async def run(args: argparse.Namespace) -> int:
         tts = buyer_tts(http)
         clips = [await synthesise(tts, text) for text in turns]
         barge = await synthesise(tts, BARGE_IN_LINE)
+        primer = await synthesise(tts, PRIMING_LINE)
         await tts.aclose()
 
     tail = EventTail(Path(args.log))
@@ -451,11 +504,32 @@ async def run(args: argparse.Namespace) -> int:
 
     source = rtc.AudioSource(SAMPLE_RATE, CHANNELS)
     track = rtc.LocalAudioTrack.create_audio_track("buyer", source)
-    await room.local_participant.publish_track(
+    publication = await room.local_participant.publish_track(
         track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )
     mouth = Mouth(source)
     mouth.start()
+
+    # NOBODY IS LISTENING YET. `publish_track` returns as soon as the server has
+    # the track; the agent subscribes afterwards, and frames pushed before that
+    # are dropped rather than buffered for a late subscriber. The first paced run
+    # lost its whole first clip this way - the agent's first user turn arrived 70
+    # seconds later and matched clip TWO, so every clip after it landed one turn
+    # out of phase, inside a live reply, and all four turns registered an
+    # interruption where one was asked for. `wait_for_subscription` is the
+    # framework's own answer; the blind sleep this replaced only hid the race.
+    try:
+        await asyncio.wait_for(
+            publication.wait_for_subscription(), timeout=args.subscribe_timeout
+        )
+        print("  agent subscribed to the buyer track", flush=True)
+    except TimeoutError:
+        print(
+            f"  ! nobody subscribed to the buyer track in "
+            f"{args.subscribe_timeout:.0f}s - the agent will not hear this run",
+            flush=True,
+        )
+        return 1
 
     try:
         # The agent opens with the AI disclosure, which is uninterruptible by
@@ -470,6 +544,14 @@ async def run(args: argparse.Namespace) -> int:
             min_quiet=args.quiet_seconds, timeout=args.disclosure_seconds
         ):
             await asyncio.sleep(args.disclosure_seconds)
+
+        if not await prime(mouth, tail, primer, timeout=args.prime_timeout):
+            print(
+                "  ! the agent never heard the priming line - aborting rather "
+                "than measuring a run it cannot hear",
+                flush=True,
+            )
+            return 1
 
         barge_at = {int(n) for n in args.barge_in_at.split(",") if n.strip()}
         for number, (text, frames) in enumerate(zip(turns, clips), start=1):
@@ -511,6 +593,11 @@ async def run(args: argparse.Namespace) -> int:
         tail.poll()
         written = recorder.close()
         print(f"agent audio: {written or 'nothing recorded'}", flush=True)
+        print(
+            f"lk.agent.state seen: {quiescence.attribute_updates} update(s), "
+            f"final {quiescence.state!r}",
+            flush=True,
+        )
 
     print(f"\nran {len(turns)} turns; {len(tail.seen)} events on the stream", flush=True)
     return 0
@@ -540,6 +627,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--quiet-timeout", type=float, default=45.0)
+    parser.add_argument(
+        "--prime-timeout",
+        type=float,
+        default=60.0,
+        help=(
+            "how long to keep offering a throwaway line until the agent proves "
+            "it can hear the buyer track. Subscription alone does not prove it"
+        ),
+    )
+    parser.add_argument(
+        "--subscribe-timeout",
+        type=float,
+        default=30.0,
+        help=(
+            "how long to wait for the agent to subscribe to the buyer track "
+            "before giving up - a run it cannot hear measures nothing"
+        ),
+    )
     parser.add_argument(
         "--record-agent",
         default="",
