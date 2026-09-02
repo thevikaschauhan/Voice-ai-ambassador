@@ -32,6 +32,8 @@ from adapter.config import (
     load_settings,
     missing_credentials_error,
     parse_env_file,
+    undeclared_settings_error,
+    worker_refusal,
 )
 
 REAL_LOOKING_KEY = "sk-or-v1-0123456789abcdef0123456789abcdef"
@@ -539,3 +541,114 @@ def test_the_worker_failure_message_still_echoes_no_value(env_file):
     ):
         if value:
             assert value not in message
+
+
+# --- a worker must CHOOSE whether it can hear ------------------------------
+#
+# `STT_ENABLED` defaults to False, and with STT off `missing_for_voice` does not
+# ask for `DEEPGRAM_API_KEY`. So a hosted worker with all six secrets set
+# registered, passed every check the platform could see, and could not hear a
+# word. A deploy that looks healthy and is deaf is worse than one that refuses
+# to start. The default stays False - text mode is a real configuration - and
+# what is refused is not choosing.
+
+
+def test_a_worker_that_never_chose_is_refused(env_file):
+    settings = Settings(  # type: ignore[arg-type]
+        **{**load_settings(env_file).redacted(), "stt_enabled_explicit": False}
+    )
+    assert settings.undeclared_for_worker() == ["STT_ENABLED"]
+
+
+def test_choosing_either_answer_is_enough(tmp_path):
+    """Including the answer that runs deaf. The check asks for a decision, not
+    for a particular one."""
+    for value in ("true", "false"):
+        path = tmp_path / f".env-{value}"
+        path.write_text(f"STT_ENABLED={value}\n", encoding="utf-8")
+        assert load_settings(path).undeclared_for_worker() == []
+    path = tmp_path / ".env-off"
+    path.write_text("STT_ENABLED=false\n", encoding="utf-8")
+    settings = load_settings(path)
+    # Deliberately deaf, and it must survive the refusal this card adds.
+    assert settings.stt_enabled is False
+    assert settings.undeclared_for_worker() == []
+
+
+def test_every_accepted_spelling_counts_as_a_choice(tmp_path):
+    for value in ("1", "true", "yes", "on", "0", "false", "no", "off", "TRUE", "Off"):
+        path = tmp_path / f".env-{value}"
+        path.write_text(f"STT_ENABLED={value}\n", encoding="utf-8")
+        assert load_settings(path).undeclared_for_worker() == [], value
+
+
+def test_a_blank_variable_is_not_a_choice(tmp_path):
+    """What a platform dashboard produces when someone saves the row empty.
+    `_resolve_bool` returns the DEFAULT on an empty value, so a blank variable
+    is silently 'off' - indistinguishable from never setting it, and therefore
+    refused the same way."""
+    path = tmp_path / ".env"
+    path.write_text("STT_ENABLED=\n", encoding="utf-8")
+    settings = load_settings(path)
+    assert settings.stt_enabled is False
+    assert settings.undeclared_for_worker() == ["STT_ENABLED"]
+
+
+def test_a_typo_is_not_a_choice(tmp_path):
+    """`STT_ENABLED=ture` resolves to False and is exactly as deaf, and exactly
+    as accidental, as leaving it out. Accepting it would honour the letter of
+    "set it explicitly" and miss the point."""
+    path = tmp_path / ".env"
+    path.write_text("STT_ENABLED=ture\n", encoding="utf-8")
+    settings = load_settings(path)
+    assert settings.stt_enabled is False
+    assert settings.undeclared_for_worker() == ["STT_ENABLED"]
+
+
+def test_the_shipped_example_chooses(tmp_path):
+    """The file operators copy must not itself need this fix."""
+    assert load_settings(EXAMPLE_ENV).undeclared_for_worker() == []
+
+
+def test_the_refusal_names_both_answers_and_the_consequence():
+    message = undeclared_settings_error(["STT_ENABLED"])
+    assert "STT_ENABLED" in message
+    assert "STT_ENABLED=true" in message
+    assert "=false" in message
+    # Why it matters, so the refusal is not just an obstacle.
+    assert "hears nothing" in message
+    assert "agent/.env.example" in message
+
+
+def test_the_refusal_is_not_a_missing_credential():
+    """Two different failures. Nothing is missing here; a decision is - and
+    calling it a missing credential would send an operator hunting for a key."""
+    message = undeclared_settings_error(["STT_ENABLED"])
+    assert "missing credentials" not in message
+
+
+def test_a_clean_configuration_is_not_refused():
+    assert worker_refusal([], []) is None
+
+
+def test_both_causes_are_one_refusal_not_two():
+    """Printing the two complete messages back to back repeats the pointer to
+    where variables are set, which reads like two unrelated failures."""
+    message = worker_refusal(["FISH_API_KEY"], ["STT_ENABLED"])
+    assert message is not None
+    assert "FISH_API_KEY" in message
+    assert "STT_ENABLED" in message
+    assert message.count("Set them in agent/.env") == 1
+    # The closing pointer is last, not stranded in the middle.
+    assert message.splitlines()[-1].startswith("Set them in agent/.env")
+
+
+def test_one_cause_reads_exactly_like_the_single_message():
+    """So the composed path cannot drift from the message that is tested and
+    used on its own."""
+    assert worker_refusal(["FISH_API_KEY"], []) == missing_credentials_error(
+        ["FISH_API_KEY"]
+    )
+    assert worker_refusal([], ["STT_ENABLED"]) == undeclared_settings_error(
+        ["STT_ENABLED"]
+    )

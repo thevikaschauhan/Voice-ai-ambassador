@@ -197,6 +197,7 @@ def test_arabic_routes_to_the_day_zero_winner_when_it_is_set():
             stt_model_default="qwen/qwen3-asr-1.7b",
             stt_model_ar=ar,
             stt_enabled=False,
+            stt_enabled_explicit=True,
             deepgram_api_key="",
             deepgram_model="nova-3",
             fish_api_key="",

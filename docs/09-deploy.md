@@ -310,8 +310,14 @@ stderr, and exits 1. Measured in this image with an empty environment:
 
 ```
 missing credentials for the voice path: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENROUTER_API_KEY, FISH_API_KEY
+settings a worker must choose explicitly: STT_ENABLED
+  STT_ENABLED: set STT_ENABLED=true for the voice path (ADR-017), or =false to run deaf on purpose. It defaults to false, and with it off the recogniser's key is never asked for, so a worker starts happily and hears nothing.
 Set them in agent/.env (see agent/.env.example) or in the environment.
 ```
+
+Both kinds of problem are reported together, on purpose: a cycle here costs a
+rebuild and a deploy, so learning about the second after fixing the first costs
+a round trip for nothing.
 
 A non-zero exit is what `restartPolicyType: ON_FAILURE` in
 `.railway/railway.ts` is for, so the deploy crash-loops through its ten retries
@@ -356,11 +362,17 @@ wrong one.
 
 One limit on the positive case, so you do not read it as more than it says.
 `registered worker` proves the worker reached LiveKit; it does not prove the
-worker can hear. `STT_ENABLED` defaults to off, and with it off preflight does
-not ask for `DEEPGRAM_API_KEY` at all, which is why it is absent from the five
-names above. Getting the recogniser configured is the environment contract's
-business rather than this check's, but a registered worker is not on its own a
-worker that can take a call.
+worker can hear - a wrong Deepgram key or a provider outage still registers
+fine. What it now does rule out is being deaf by OMISSION. `STT_ENABLED`
+defaults to off, and with it off preflight does not ask for `DEEPGRAM_API_KEY`
+at all, which is why that name is absent from the credentials line above; a
+worker with all six secrets set therefore used to register, pass every check
+the platform could see, and hear nothing. So preflight requires the variable to
+be CHOSEN on the connecting subcommands - `true`, or `false` to run deaf on
+purpose - and refuses to start when it is unset, blank, or misspelled, since
+each of those is equally deaf and equally accidental. Measured in this image:
+all six secrets and no `STT_ENABLED` exits 1 naming it; the same six with
+`STT_ENABLED=false` reaches `registered worker` normally.
 
 ### `web`: the healthcheck proves the layout, not the configuration
 
