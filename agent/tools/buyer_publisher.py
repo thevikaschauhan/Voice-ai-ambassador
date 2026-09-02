@@ -103,6 +103,12 @@ BUYER_TURNS: tuple[str, ...] = (
 # an interruption, not a turn.
 BARGE_IN_LINE = "Wait, stop."
 
+# Spoken before the measurement starts, and thrown away. Subscription is not
+# enough to prove the agent can hear us - see `prime` - so the harness says
+# something disposable and waits for the agent's own `user_turn` to prove the
+# path works end to end.
+PRIMING_LINE = "Hello, can you hear me?"
+
 
 def _silence() -> rtc.AudioFrame:
     samples = SAMPLE_RATE * FRAME_MS // 1000
@@ -174,8 +180,9 @@ class AgentRecorder:
     just what Fish returned.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path | None, listener: AgentQuiescence | None = None) -> None:
         self._path = path
+        self._listener = listener
         self._writer: wave.Wave_write | None = None
         self._tasks: list[asyncio.Task[None]] = []
         self.frames = 0
@@ -191,6 +198,10 @@ class AgentRecorder:
     async def _drain(self, track) -> None:  # noqa: ANN001
         async for event in rtc.AudioStream(track):
             frame = event.frame
+            if self._listener is not None:
+                self._listener.observe_frame(frame)
+            if self._path is None:
+                continue
             if self._writer is None:
                 self._writer = wave.open(str(self._path), "wb")
                 self._writer.setnchannels(frame.num_channels)
@@ -203,11 +214,166 @@ class AgentRecorder:
         for task in self._tasks:
             task.cancel()
         if self._writer is None:
-            return None
+            return None if self._path is not None else "not requested"
         rate = self._writer.getframerate()
         channels = self._writer.getnchannels()
         self._writer.close()
         return f"{self._path} ({rate} Hz, {channels} channel, {self.frames} frames)"
+
+
+class AgentQuiescence:
+    """Whether the agent is still talking, read off the framework's own signal.
+
+    `room_io` publishes the session's state to the room as the participant
+    attribute `lk.agent.state` (`voice/room_io/room_io.py`, and the key is
+    `livekit.agents.types.ATTRIBUTE_AGENT_STATE`), so the harness does not have
+    to measure frame energy and guess - AGENTS.md's rule about not rebuilding
+    what the framework provides applies to the harness too.
+
+    WHY PACING NEEDED THIS. Waiting on `turn_complete` is not waiting for
+    silence. A barged-in turn's speech handle resolves the moment it is cut, so
+    `turn_complete` fires while the agent is already generating its reply to the
+    interruption - and the next clip landed on top of it. The 8-turn session
+    asked for barge-ins on turns 3 and 7 and got 3, 4, 7 and 8, with three turns
+    producing no sentence at all.
+
+    "listening" alone is not proof either: the framework pauses playout and
+    passes through "listening" during a false interruption before resuming
+    (`_interrupt_by_audio_activity`). So this requires the state to STAY out of
+    speaking/thinking for `min_quiet` seconds rather than trusting one sample.
+    """
+
+    # "initializing" counts as busy: the agent has not reached the call yet.
+    BUSY = frozenset({"speaking", "thinking", "initializing"})
+    ATTRIBUTE = "lk.agent.state"
+
+    # Peak sample above which a 20ms frame counts as speech rather than the
+    # silence a published-but-idle track carries. s16, so full scale is 32767.
+    SPEECH_PEAK = 500
+
+    def __init__(self) -> None:
+        self.state: str | None = None
+        self.heard_audio = False
+        # Counted rather than assumed: whether `lk.agent.state` reaches a remote
+        # participant at all is an open question, and a run that reports zero
+        # updates is the evidence for it.
+        self.attribute_updates = 0
+        self._busy_since = time.monotonic()
+
+    def observe(self, state: str | None) -> None:
+        if state is None or state == self.state:
+            return
+        self.state = state
+        if state in self.BUSY:
+            self._busy_since = time.monotonic()
+
+    def observe_frame(self, frame: rtc.AudioFrame) -> None:
+        """The agent's own audio, which is the signal that actually arrives.
+
+        `lk.agent.state` did not reach the harness in two live runs - it stayed
+        `None` through both seeding and attribute events - and the framework's
+        `_on_agent_state_changed` cancels its previous `set_attributes` task on
+        every state change, so under rapid churn the publish may never land.
+        Rather than trust a signal that did not show up, the gate is driven by
+        the audio itself: while frames above the noise floor are arriving, the
+        agent is talking. The attribute is still read and still counts as busy
+        when it says so, so if it starts arriving it only tightens the gate.
+        """
+        self.heard_audio = True
+        # Via bytes: rtc.AudioFrame.data is already a typed memoryview, and
+        # memoryview cannot cast between two non-byte formats. A 20ms frame is
+        # under a kilobyte, so the copy is free.
+        data = memoryview(bytes(frame.data)).cast("h")
+        if any(sample > self.SPEECH_PEAK or sample < -self.SPEECH_PEAK for sample in data):
+            self._busy_since = time.monotonic()
+
+    def quiet_for(self) -> float:
+        """Seconds since the agent was last busy, or 0.0 while it still is."""
+        if self.state is not None and self.state in self.BUSY:
+            return 0.0
+        if self.state is None and not self.heard_audio:
+            # Nothing has been heard and nothing has been said: unknown, which
+            # must not read as ready.
+            return 0.0
+        return time.monotonic() - self._busy_since
+
+    def watch(self, room: rtc.Room) -> None:
+        @room.on("participant_attributes_changed")
+        def _changed(changed, participant) -> None:  # noqa: ANN001
+            if self.ATTRIBUTE in changed:
+                self.attribute_updates += 1
+                self.observe(changed[self.ATTRIBUTE])
+
+        @room.on("participant_connected")
+        def _connected(participant) -> None:  # noqa: ANN001
+            self.observe(participant.attributes.get(self.ATTRIBUTE))
+
+    def seed(self, room: rtc.Room) -> None:
+        """Read the state off whoever is already here.
+
+        The worker joins the room BEFORE the harness does, so
+        `participant_connected` never fires for it and the first sample would
+        otherwise have to wait for the agent's next state CHANGE. The first run
+        with this gate sat at `state: None` through two timeouts for exactly
+        that reason.
+        """
+        for participant in room.remote_participants.values():
+            self.observe(participant.attributes.get(self.ATTRIBUTE))
+
+    async def wait_until_quiet(self, *, min_quiet: float, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.quiet_for() >= min_quiet:
+                return True
+            await asyncio.sleep(0.05)
+        print(
+            f"  ! agent still busy (state={self.state}, "
+            f"audio={'yes' if self.heard_audio else 'none'}) after {timeout:.0f}s; "
+            "publishing anyway",
+            flush=True,
+        )
+        return False
+
+
+async def prime(
+    mouth: "Mouth",
+    tail: "EventTail",
+    frames: list[rtc.AudioFrame],
+    *,
+    timeout: float,
+) -> bool:
+    """Prove the agent can hear us before the measurement starts.
+
+    SUBSCRIPTION IS NOT ENOUGH, measured: a session that logged
+    `agent subscribed to the buyer track` still lost its entire first clip -
+    the worker's own transcript sequence began at clip TWO, and the first
+    `user_turn` arrived 80 seconds later, when clip two was published. So
+    something between a subscribed track and the recogniser drops the first
+    utterance; the agent's log shows an input stream attached and then detached
+    with `source: SOURCE_UNKNOWN` against
+    `accepted_sources: ["SOURCE_MICROPHONE"]`, which is the shape of a
+    publication whose source resolves after the stream is first attached.
+
+    Whatever the mechanism, it is not fixable from out here - so the harness
+    stops guessing and asks. One throwaway line, and the measurement does not
+    begin until the agent's own `user_turn` proves the path works end to end.
+    The reply to it is discarded; the clips that follow are the measurement.
+    """
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        print(f"  priming (attempt {attempt})", flush=True)
+        await mouth.say(frames)
+        heard = await tail.wait_for(
+            lambda r: r.get("event") == "user_turn",
+            timeout=min(15.0, max(1.0, deadline - time.monotonic())),
+            label="the agent to hear the priming line",
+        )
+        if heard is not None:
+            print("  the agent heard us; starting the measurement", flush=True)
+            return True
+    return False
 
 
 class EventTail:
@@ -315,25 +481,55 @@ async def run(args: argparse.Namespace) -> int:
         tts = buyer_tts(http)
         clips = [await synthesise(tts, text) for text in turns]
         barge = await synthesise(tts, BARGE_IN_LINE)
+        primer = await synthesise(tts, PRIMING_LINE)
         await tts.aclose()
 
     tail = EventTail(Path(args.log))
     room = rtc.Room()
-    recorder = AgentRecorder(Path(args.record_agent)) if args.record_agent else None
-    if recorder is not None:
-        # Registered before connect, or the agent's track can be subscribed
-        # before the handler exists and the recording starts mid-sentence.
-        recorder.watch(room)
+    quiescence = AgentQuiescence()
+    quiescence.watch(room)
+    # One subscription, two jobs: the WAV when it was asked for, and the audio
+    # the pacing gate runs on either way. Registered before connect, or the
+    # agent's track can be subscribed before the handler exists.
+    recorder = AgentRecorder(
+        Path(args.record_agent) if args.record_agent else None, quiescence
+    )
+    recorder.watch(room)
     await room.connect(url, token)
-    print(f"joined {args.room} as synthetic-buyer", flush=True)
+    quiescence.seed(room)
+    print(
+        f"joined {args.room} as synthetic-buyer; agent state {quiescence.state!r}",
+        flush=True,
+    )
 
     source = rtc.AudioSource(SAMPLE_RATE, CHANNELS)
     track = rtc.LocalAudioTrack.create_audio_track("buyer", source)
-    await room.local_participant.publish_track(
+    publication = await room.local_participant.publish_track(
         track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )
     mouth = Mouth(source)
     mouth.start()
+
+    # NOBODY IS LISTENING YET. `publish_track` returns as soon as the server has
+    # the track; the agent subscribes afterwards, and frames pushed before that
+    # are dropped rather than buffered for a late subscriber. The first paced run
+    # lost its whole first clip this way - the agent's first user turn arrived 70
+    # seconds later and matched clip TWO, so every clip after it landed one turn
+    # out of phase, inside a live reply, and all four turns registered an
+    # interruption where one was asked for. `wait_for_subscription` is the
+    # framework's own answer; the blind sleep this replaced only hid the race.
+    try:
+        await asyncio.wait_for(
+            publication.wait_for_subscription(), timeout=args.subscribe_timeout
+        )
+        print("  agent subscribed to the buyer track", flush=True)
+    except TimeoutError:
+        print(
+            f"  ! nobody subscribed to the buyer track in "
+            f"{args.subscribe_timeout:.0f}s - the agent will not hear this run",
+            flush=True,
+        )
+        return 1
 
     try:
         # The agent opens with the AI disclosure, which is uninterruptible by
@@ -342,7 +538,20 @@ async def run(args: argparse.Namespace) -> int:
             lambda r: r.get("event") == "disclosure", timeout=45, label="the disclosure"
         ):
             return 1
-        await asyncio.sleep(args.disclosure_seconds)
+        # The disclosure is uninterruptible by design (docs/04-), so wait for
+        # it to finish rather than sleeping a guessed number of seconds.
+        if not await quiescence.wait_until_quiet(
+            min_quiet=args.quiet_seconds, timeout=args.disclosure_seconds
+        ):
+            await asyncio.sleep(args.disclosure_seconds)
+
+        if not await prime(mouth, tail, primer, timeout=args.prime_timeout):
+            print(
+                "  ! the agent never heard the priming line - aborting rather "
+                "than measuring a run it cannot hear",
+                flush=True,
+            )
+            return 1
 
         barge_at = {int(n) for n in args.barge_in_at.split(",") if n.strip()}
         for number, (text, frames) in enumerate(zip(turns, clips), start=1):
@@ -371,20 +580,30 @@ async def run(args: argparse.Namespace) -> int:
                 timeout=60,
                 label=f"turn {number} completing",
             )
+            # The turn is accounted for, but the agent may still be talking -
+            # after a barge-in it is replying to the interruption. Publishing
+            # now is what turned two requested barge-ins into four.
+            await quiescence.wait_until_quiet(
+                min_quiet=args.quiet_seconds, timeout=args.quiet_timeout
+            )
             await asyncio.sleep(args.gap_seconds)
     finally:
         await mouth.aclose()
         await room.disconnect()
         tail.poll()
-        if recorder is not None:
-            written = recorder.close()
-            print(f"agent audio: {written or 'nothing recorded'}", flush=True)
+        written = recorder.close()
+        print(f"agent audio: {written or 'nothing recorded'}", flush=True)
+        print(
+            f"lk.agent.state seen: {quiescence.attribute_updates} update(s), "
+            f"final {quiescence.state!r}",
+            flush=True,
+        )
 
     print(f"\nran {len(turns)} turns; {len(tail.seen)} events on the stream", flush=True)
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--room", required=True)
     parser.add_argument("--log", required=True, help="the agent's AMBASSADOR_EVENT_LOG")
@@ -398,11 +617,44 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gap-seconds", type=float, default=1.0)
     parser.add_argument("--disclosure-seconds", type=float, default=8.0)
     parser.add_argument(
+        "--quiet-seconds",
+        type=float,
+        default=1.0,
+        help=(
+            "how long the agent must stay out of speaking/thinking before the "
+            "next clip. Below ~0.7s a false interruption's pause through "
+            "'listening' can read as silence"
+        ),
+    )
+    parser.add_argument("--quiet-timeout", type=float, default=45.0)
+    parser.add_argument(
+        "--prime-timeout",
+        type=float,
+        default=60.0,
+        help=(
+            "how long to keep offering a throwaway line until the agent proves "
+            "it can hear the buyer track. Subscription alone does not prove it"
+        ),
+    )
+    parser.add_argument(
+        "--subscribe-timeout",
+        type=float,
+        default=30.0,
+        help=(
+            "how long to wait for the agent to subscribe to the buyer track "
+            "before giving up - a run it cannot hear measures nothing"
+        ),
+    )
+    parser.add_argument(
         "--record-agent",
         default="",
         help="write the agent's own audio to this WAV, for #41's ear check",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     return asyncio.run(run(args))
 
 
