@@ -2849,3 +2849,144 @@ async def test_two_buyer_turns_do_not_collapse_into_one():
     assert [r.turn_index for r in log.turns] == [1, 2]
     await log.aclose()
     assert [ln["event"] for ln in json_lines(buf)].count("user_turn") == 2
+
+
+# --- an invalidated preemptive generation leaves nothing behind ------------
+#
+# The residual #52 flagged and did not fix. `preemptive_generation` starts the
+# model on a partial transcript; if the final transcript turns out not to be
+# equivalent, `AgentActivity` cancels that speech handle and generates again
+# (agent_activity.py: `preemptive.speech_handle._cancel()` then
+# `self._generate_reply(...)`). The buyer never hears the first generation - but
+# its guardrail decisions and spoken chunks were already recorded on the tracker
+# the final transcript is then adopted onto, so the audit claimed sentences that
+# were never played.
+#
+# WHAT THE TEST STANDS IN FOR. The framework's equivalence check cannot be
+# forced from outside - no `preemptive generation invalidated` warning fired in
+# the whole 8-turn live session - so the test drives the OBSERVABLE of it
+# instead: `_generate_reply` emits `speech_created` for the preemptive handle
+# (agent_activity.py:1550, reached from :2321) and emits it AGAIN for the
+# replacement (:2574). On the happy path the framework reuses
+# `preemptive.speech_handle` and no second event fires. So a second speech
+# handle inside one buyer turn IS invalidation, and that is the seam the adapter
+# can see.
+
+
+async def test_an_invalidated_preemptive_generation_leaves_no_records_behind():
+    agent, log, buf, _ = make_agent(
+        [
+            HealthyStream([f"A studio is AED {GROUNDED}. "]),  # discarded
+            HealthyStream([f"Handover is Q4 {ALLOWED_YEAR}. "]),  # what plays
+        ]
+    )
+    ctx = user_ctx("What does a studio")
+
+    # The preemptive generation: llm_node runs on the partial, and the framework
+    # announces its speech handle.
+    await run_llm_node(agent, ctx)
+    discarded = SpeechHandle.create()
+    agent.note_speech_handle(discarded)
+    assert agent.tracker is not None
+    assert agent.tracker.generated_sentences  # the discarded reply is recorded
+
+    # The final transcript arrives and is adopted onto the same turn (#52).
+    await agent.on_user_turn_completed(
+        ctx, lk_llm.ChatMessage(role="user", content=["When is handover?"])
+    )
+
+    # The framework finds them not equivalent: it cancels that handle and
+    # generates again, which announces a second one.
+    discarded._cancel()
+    replacement = SpeechHandle.create()
+    agent.note_speech_handle(replacement)
+    await run_llm_node(agent, ctx)
+
+    agent.finish_turn(ctx)
+    replacement._mark_done()
+    await settle()
+
+    assert len(log.turns) == 1
+    record = log.turns[0]
+    # Only the generation the buyer actually heard.
+    assert [x.strip() for x in record.generated_sentences] == [
+        f"Handover is Q4 {ALLOWED_YEAR}."
+    ]
+    assert len(record.spoken_chunks) == 1
+    assert GROUNDED not in " ".join(c.text for c in record.spoken_chunks)
+
+    await log.aclose()
+    emitted = [ln["event"] for ln in json_lines(buf)]
+    # The discarded sentences stay on the stream - they were inspected, and the
+    # claim that every sentence is inspected rests on that - but the stream says
+    # they were dropped, so a consumer counting spoken sentences is not misled.
+    assert "generation_discarded" in emitted
+    assert emitted.count("turn_complete") == 1
+
+
+async def test_the_discarded_generations_guardrail_violations_go_too():
+    """A blocked sentence from a generation nobody heard must not be counted
+    against the turn: `violations` is the number the meeting reads."""
+    agent, log, _, _ = make_agent(
+        [
+            HealthyStream([f"Sapphire Bay is AED {FABRICATED}. "]),  # blocked
+            HealthyStream(["Sapphire Bay is not in my list. "]),  # discarded retry
+            HealthyStream([f"Handover is Q4 {ALLOWED_YEAR}. "]),  # what plays
+        ]
+    )
+    ctx = user_ctx("What does Sapphire Bay")
+
+    await run_llm_node(agent, ctx)
+    discarded = SpeechHandle.create()
+    agent.note_speech_handle(discarded)
+    assert agent.tracker is not None
+    assert agent.tracker.violations  # the discarded generation was blocked
+
+    await agent.on_user_turn_completed(
+        ctx, lk_llm.ChatMessage(role="user", content=["When is handover?"])
+    )
+    discarded._cancel()
+    replacement = SpeechHandle.create()
+    agent.note_speech_handle(replacement)
+    await run_llm_node(agent, ctx)
+    agent.finish_turn(ctx)
+    replacement._mark_done()
+    await settle()
+
+    record = log.turns[0]
+    assert record.guardrail_decisions == []
+    assert [x.strip() for x in record.generated_sentences] == [
+        f"Handover is Q4 {ALLOWED_YEAR}."
+    ]
+
+
+async def test_a_turn_whose_preemptive_generation_survived_drops_nothing():
+    """The happy path, which is the common one: the framework reuses the
+    preemptive speech handle, so no second one is announced and there is nothing
+    to discard. A fix that dropped records here would erase every normal turn."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    await preemptive_turn(agent, partial="What does a studio", final="What does it cost?")
+
+    assert len(log.turns) == 1
+    assert [x.strip() for x in log.turns[0].generated_sentences] == [
+        f"A studio is AED {GROUNDED}."
+    ]
+    await log.aclose()
+    assert "generation_discarded" not in [ln["event"] for ln in json_lines(buf)]
+
+
+async def test_the_opening_disclosure_is_not_mistaken_for_a_replacement():
+    """`on_enter` speaks the disclosure through `session.say`, which announces
+    its own speech handle before any turn exists. Nothing to discard, and no
+    tracker to discard it from."""
+    agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
+
+    agent.note_speech_handle(SpeechHandle.create())  # the disclosure
+    await preemptive_turn(agent, partial="What does a studio", final="What does it cost?")
+
+    assert [x.strip() for x in log.turns[0].generated_sentences] == [
+        f"A studio is AED {GROUNDED}."
+    ]
+    await log.aclose()
+    assert "generation_discarded" not in [ln["event"] for ln in json_lines(buf)]

@@ -328,6 +328,10 @@ class AmbassadorAgent(Agent):
         self._turn_index = 0
         self._tracker: TurnTracker | None = None
         self._speech_handle: SpeechHandle | None = None
+        # The turn the stored handle was announced for, so a handle left over
+        # from the disclosure - or from a turn that has since sealed - is not
+        # mistaken for this turn's generation being replaced.
+        self._speech_handle_turn: int | None = None
         self._pending: _PendingTurn | None = None
         # Set once teardown has begun, so the barge-in hook does not open a Fish
         # socket for a call that is already over (see `_reprewarm_tts`).
@@ -557,8 +561,31 @@ class AmbassadorAgent(Agent):
         the "listening" transition: `finish_turn` explains why those are too
         early. One handle spans a tool-using turn's two generations, so this is
         still one handle per buyer utterance.
+
+        A SECOND HANDLE INSIDE ONE TURN IS AN INVALIDATED PREEMPTIVE
+        GENERATION. The framework announces a handle for the generation it
+        starts on the partial transcript; if the final transcript is not
+        equivalent it cancels that one and calls `_generate_reply` again, which
+        announces another (agent_activity.py:2321 and :2574, both reaching the
+        `speech_created` emit at :1550). On the happy path it reuses the
+        preemptive handle and nothing is announced twice. So this is the only
+        seam where the adapter can see that a recorded generation was thrown
+        away - the equivalence check itself is private - and it is where the
+        discarded records come off the turn.
         """
+        previous, previous_turn = self._speech_handle, self._speech_handle_turn
+        tracker = self._tracker
         self._speech_handle = handle
+        self._speech_handle_turn = None if tracker is None else tracker.turn_index
+        if tracker is None or previous is None or previous is handle:
+            return
+        if previous_turn != tracker.turn_index:
+            # The opening disclosure announces a handle before any turn exists,
+            # and it is still stored when the first turn's generation announces
+            # its own. That is not a replacement, and discarding on it would
+            # erase the first reply of every call.
+            return
+        tracker.discard_generation()
 
     # -- ADR-011: the deterministic confirmation policies ------------------
     #
@@ -1188,6 +1215,7 @@ class AmbassadorAgent(Agent):
             return
         self._tracker = None
         handle, self._speech_handle = self._speech_handle, None
+        self._speech_handle_turn = None
         pending = _PendingTurn(tracker=tracker, handle=handle, chat_ctx=chat_ctx)
         self._pending = pending
         if handle is None or handle.done():
@@ -1260,6 +1288,7 @@ class AmbassadorAgent(Agent):
         # still worth keeping, and it is incomplete by construction.
         self._tracker = None
         handle, self._speech_handle = self._speech_handle, None
+        self._speech_handle_turn = None
         self._seal(
             _PendingTurn(tracker=tracker, handle=handle, chat_ctx=None),
             audit_incomplete=True,
