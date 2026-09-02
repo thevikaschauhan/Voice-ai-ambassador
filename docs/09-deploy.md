@@ -239,6 +239,38 @@ counted before the room is created, and two visitors arriving in the same
 instant can both pass the check: an accepted race whose cost is one extra room,
 against a lock this service has nowhere to keep.
 
+**What the visitor looks at during a call is an orb, not a control panel.** The
+page's job while a call is live is to make an audio conversation legible, and a
+form with a Mute button does not do that: a visitor with nothing to look at
+cannot tell a thinking pause from a broken demo. So once the call starts the
+surface is a dark disc with a coloured corona, and the corona carries the state
+- breathing slowly while it listens, blooming with the ambassador's own voice
+while she speaks, a cooler and tighter figure while the visitor speaks, and a
+slow drift while the turn is being thought about. The transcript sits under it
+as subtitles rather than a log: the current utterance large and centred, the
+line before it fading above.
+
+The level that drives the bloom is measured with a Web Audio `AnalyserNode` on
+the attached tracks rather than read from `Participant.audioLevel`. Two reasons,
+and the second is the one that matters. `audioLevel` updates on the order of
+once a second, which is a meter reading rather than something speech can drive.
+And `room-signals.ts` already established the rule for this repository: one
+number, both readings. The server's speaker detection and a local analyser
+disagree, and a corona that blooms while the label says silent - or the reverse
+- is worse than either.
+
+**The ambassador has a name, and it comes from data.** `data/ambassadors.yaml`
+maps a language to a name, English **Jane**, and the page reads it at request
+time through the same repo-root read that serves the inventory. An empty or
+missing name falls back to "Binghatti's AI ambassador" rather than to a blank
+label - the same posture as every other absent value on this surface. The name
+labels the orb and prefixes her subtitle lines, so a visitor knows who is
+speaking without being told out loud.
+
+**`prefers-reduced-motion` is answered, not ignored.** The disc keeps its
+corona and loses its movement: state is carried by colour and by the label
+underneath, so the page says the same things without animating them.
+
 **How a call ends is read from `DisconnectReason`, not inferred.** The agent
 finishing politely and the network dying look identical inside
 `ConnectionState`, and naming the wrong one is a lie in either direction: "the
