@@ -84,6 +84,24 @@ def test_the_buyer_utterance_never_reaches_the_emitted_stream():
     assert "Mumbai" not in buf.getvalue()
 
 
+def test_the_session_start_contract_stays_clear_on_the_emitted_stream():
+    log, buf = make_log(verbose=False)
+    fields = {
+        "config": {"openrouter_api_key": "<set>"},
+        "model": "qwen/qwen3.7-flash",
+        "language": "en",
+        "prompt_mode": "ambassador",
+        "guardrail_mode": "enforce",
+        "inventory_version": "0123456789ab",
+    }
+
+    record = log.emit("session_start", **fields)
+    log.close()
+
+    assert {key: record[key] for key in fields} == fields
+    assert {key: lines(buf)[0][key] for key in fields} == fields
+
+
 def test_the_in_memory_turn_record_keeps_the_utterance_the_stream_dropped():
     """The audit and the ambassador view are built on the full text. Redacting
     the stream must not cost them anything."""

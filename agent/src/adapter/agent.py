@@ -83,6 +83,7 @@ from ambassador.projects import (
 from ambassador.recognition import RecognitionMonitor, load_noise_words
 from ambassador.schemas import Language
 from ambassador.verbalise import load_spoken_forms
+from evals.runner import Harness
 
 from .brief import BriefExtractor
 from .config import (
@@ -1671,6 +1672,23 @@ def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load()
 
 
+def _session_start_fields(settings: Settings) -> dict[str, object]:
+    """The reader-facing session contract, beside the full audit config.
+
+    Text mode owns the existing contract, including the prompt fingerprint.
+    Calling the same source here keeps the two transports from inventing
+    different meanings for ``inventory_version``.
+    """
+    return {
+        "config": settings.redacted(),
+        "model": settings.llm_model,
+        "language": settings.language,
+        "prompt_mode": settings.prompt_mode,
+        "guardrail_mode": settings.guardrail_mode,
+        "inventory_version": Harness.load().prompt_fingerprint(settings.language),
+    }
+
+
 async def entrypoint(ctx: JobContext) -> None:
     settings = load_settings()
     log = EventLog(session_id=utils.shortuuid("sess_"))
@@ -1698,7 +1716,7 @@ async def entrypoint(ctx: JobContext) -> None:
         await bridge.start()
         log.emit("events_bridge", host="127.0.0.1", port=bridge.port)
 
-    log.emit("session_start", config=settings.redacted())
+    log.emit("session_start", **_session_start_fields(settings))
     # After session_start, because it explains a value that event already
     # carried. `reason` is empty when the metadata was read successfully.
     log.emit(
