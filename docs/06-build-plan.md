@@ -36,7 +36,7 @@ Booking = spoken read-back, no calendar. CRM write = console log behind an inter
 
 Remaining three languages - SIP/80015 - WhatsApp follow-up - durable event store + PII hashing - per-referenced-project allowed-set scoping - `compute_payment` tool - POC 2 - everything `PHASE-2:`.
 
-On hosting specifically: one Railway project with one environment, so no staging tier. No custom domain (the generated Railway domain is the demo URL), no autoscaling, no replica count above one, and no web gates in CI yet - that last one is a separate decision, noted in `gates.yml` itself. All of these are consequences of the two-service topology rather than separate choices; `docs/09-deploy.md` is where they are argued.
+On hosting specifically: one Railway project with one environment, so no staging tier. No custom domain (the generated Railway domain is the demo URL), no autoscaling, and no replica count above one. The web gates are no longer on that list: `npm test`, `npm run typecheck`, `npm run lint` and `npm run build` run as a third job in `gates.yml`. All of these are consequences of the two-service topology rather than separate choices; `docs/09-deploy.md` is where they are argued.
 
 ## Third language: Hindi
 

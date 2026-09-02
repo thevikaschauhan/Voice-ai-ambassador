@@ -136,14 +136,19 @@ Both images should mirror `.github/workflows/gates.yml` rather than inventing th
 
 For `agent-worker` that means uv 0.10.7, Python 3.14, and `uv sync --frozen`. The `--frozen` is not a style preference: `agent/pyproject.toml` sets `exclude-newer = "5 days"`, which is a *moving* window, so an unfrozen build resolves a different dependency set depending on the day it runs. A deployment that cannot be reproduced next week is not a deployment, it is a snapshot.
 
-For `web` there was nothing to mirror: the four web gates are not in
-`gates.yml`, so no CI job pins a Node version and the image had to choose one.
-It pins Node 24, the active LTS, and installs with `npm ci` from
-`package-lock.json` so the runtime runs what the lockfile pinned rather than
-what the registry offers today. `--ignore-scripts` is safe in this tree because
-the only package with a meaningful install script is `sharp`, for `next/image`,
-and this app has no `next/image`. When the web gates do land in CI, the Node
-version belongs in both places or in neither.
+For `web` it means Node 24 and `npm ci` from `package-lock.json`, in the image
+and in CI both. When the image was written there was nothing to mirror - the
+four web gates were not in `gates.yml`, so no job pinned a Node version and the
+image had to choose one. They are a third job in `gates.yml` now, and it pins
+the same major the image does: both pin the major and float the patch, so they
+move together rather than drifting apart one patch at a time. The rule that got
+written down when only one side existed still holds - the Node version belongs
+in both places or in neither.
+
+`--ignore-scripts` is on in both, for the same reason: the only package in this
+tree with a meaningful install script is `sharp`, for `next/image`, and this app
+has no `next/image`. If an `<Image>` ever lands, both sides drop the flag
+together and `sharp` gets pinned explicitly rather than half-installed.
 ## Verifying a deploy
 
 You have pasted the six secrets and Railway has redeployed. This section is how
@@ -372,7 +377,7 @@ The decision sits with the human as `task-railway-demo-source`. Until it is answ
 
 ## Not deployed
 
-One project, one environment, so there is no staging tier. No custom domain: the generated Railway domain is the demo URL. No autoscaling and no replica count above one; a single concurrent call is what the demo needs and a second worker replica would race for the same job. No database, which is not a hosting decision at all, just the existing one (in-memory session state, `STUB:` on the CRM write). Web gates in CI are still absent and still a separate decision, noted in `gates.yml` itself.
+One project, one environment, so there is no staging tier. No custom domain: the generated Railway domain is the demo URL. No autoscaling and no replica count above one; a single concurrent call is what the demo needs and a second worker replica would race for the same job. No database, which is not a hosting decision at all, just the existing one (in-memory session state, `STUB:` on the CRM write). Web gates in CI are no longer absent: `npm test`, `npm run typecheck`, `npm run lint` and `npm run build` run as a third job in `gates.yml`, on the same Node major the image pins.
 
 ## Where the rest lives
 
