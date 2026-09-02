@@ -125,6 +125,12 @@ Ours is only the audit consequence: the `TurnRecord` marks the interrupted chunk
 
 The framework's default false-interruption handling (pause playback, two-second grace, resume if the "interruption" was a cough) is deliberately kept, and the audit adapts to it rather than the reverse: the turn seals when the speech handle resolves, not when the agent state changes - so a resumed false interruption audits `completed: true`, a confirmed interruption audits `completed: false`, and sealing is asynchronous relative to `agent_state_changed`. A session driver that tears down mid-speech must close the session (or call the agent's finalise hook) or the last turn seals with `audit_incomplete: true`.
 
+## Ending the call
+
+A call has an authored ending, not just an absence. The buyer's closing line is detected deterministically in the core (`ambassador/farewell.py`, phrase tables per language in `data/farewells.yaml`) rather than by asking the model, because the two failure directions are not symmetric: a false negative leaves the call exactly as it behaves today, while a false positive hangs up on a live buyer. So the match is deliberately conservative - a farewell has to be what the utterance IS, not a word inside a longer question, or "before we say goodbye, what about the payment plan" would end the call on the question it was asking.
+
+The close is a sequence and the order is the whole of it. The farewell is authored copy in the call's language, spoken through the same guardrail pipeline as any other speech, and the job is not shut down until that speech has PLAYED OUT - a close that races the audio is a hang-up, not a goodbye. The farewell is interruptible, and an interrupted one CANCELS the close: a buyer who talks over the goodbye is not finished, and the alternative is hanging up on someone mid-sentence. `call_ended` carries the reason and is emitted before the shutdown callback seals the audit, so the seal is the last event of the session rather than a race with it. Three reasons, and only the first two speak: `buyer_farewell`, `duration_cap` (the same path, from the cap timer) and `buyer_left`, which is a buyer who simply disconnected and has nobody left to address.
+
 ## Levels
 
 The three shipping voices are not level-matched, and two of them are community
