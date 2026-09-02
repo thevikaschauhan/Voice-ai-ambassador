@@ -3,6 +3,6 @@
   "private": true,
   "description": "Root package for the Railway IaC engine only. `railway config plan` and `railway config apply` evaluate .railway/railway.ts with this SDK, and the CLI refuses to run without it (measured: \"The Railway TypeScript SDK is not installed\"). It is not the web app - that has its own package.json in web/ - and nothing in either image installs from this file.",
   "dependencies": {
-    "railway": "^3.11.0"
+    "railway": "3.11.0"
   }
 }

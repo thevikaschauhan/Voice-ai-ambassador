@@ -141,6 +141,17 @@ describes was exercised in the image before this sentence changed.
 The three LiveKit variables carry the same names the agent uses, so they are the
 `agent/.env.example` entries by reference and are not re-listed with values.
 
+**This table is also the whole list, and it did not start that way.** The
+service was provisioned with the agent's entire environment, so a public-facing
+Node container held `DEEPGRAM_API_KEY` and `OPENROUTER_API_KEY` - two metered
+provider credentials with no code path in `web` that can reach them - along
+with seven model and mode values it never reads. Nine names were removed from
+the service, and `.railway/railway.ts` lists only what remains, because a
+credential that cannot be reached from a container cannot leak from one. The
+`LIVEKIT_ROOM` and `AMBASSADOR_*` rows above are absent from that file for a
+different reason: they are meant to stay unset, and naming them in the config
+would be the first step towards someone setting them.
+
 **There are no `NEXT_PUBLIC_` variables, and that absence is the security
 property rather than an omission.** Nothing the browser needs is a secret: it
 receives a signalling URL, a room name and a short-lived token minted in the
@@ -293,10 +304,14 @@ pool and no buyer can reach it, whatever the dashboard says.
 
 Two details will trip you up if you go looking for the wrong shape:
 
-- **The production log is JSON.** `setup_logging` installs a `JsonFormatter`
-  whenever devmode is off, and the container's `CMD` runs the `start`
-  subcommand, so `id` is a field in a JSON object and not the `id=...` suffix
-  you get in a local dev run. Grep for `registered worker`, not for `id=`.
+- **The record is JSON, but what you see depends on the flag.**
+  `setup_logging` installs a `JsonFormatter` whenever devmode is off, and the
+  container's `CMD` runs the `start` subcommand, so the emitted record is a JSON
+  object with `id` as a field rather than the `id=...` suffix a local dev run
+  prints. `railway logs -d --json` shows you that. Plain `railway logs -d`
+  flattens it back to `key="value"` text, so `id="AW_..."` does appear there
+  (#74). Either way, grep for `registered worker`: it is the one token that is
+  present in every rendering, and it is the thing you actually need to find.
 - **`railway logs` defaults to the most recent *successful* deployment**, or the
   latest one if none has succeeded. A crash-loop is not a successful deployment,
   so on a service that deployed cleanly last week the default view shows you
@@ -319,9 +334,14 @@ Both kinds of problem are reported together, on purpose: a cycle here costs a
 rebuild and a deploy, so learning about the second after fixing the first costs
 a round trip for nothing.
 
-A non-zero exit is what `restartPolicyType: ON_FAILURE` in
-`.railway/railway.ts` is for, so the deploy crash-loops through its ten retries
-and ends up **failed** on the dashboard, with the variable names in the log.
+A non-zero exit is what the restart policy is for, so the deploy crash-loops
+through its ten retries and ends up **failed** on the dashboard, with the
+variable names in the log. That policy is on-failure with ten restarts, and it
+is Railway's own default rather than something this repository sets:
+`.railway/railway.ts` deliberately does not declare it, because the platform
+does not store a setting equal to its default and a declared default shows as a
+pending change on every plan forever. The file says so in a comment where the
+setting would have been.
 
 That was not true before #66, and the old behaviour is worth keeping in mind
 because it is still the shape of the failure below: the framework's own path
@@ -474,12 +494,22 @@ Anything beyond this is a live call, which is `task-railway-live-smoke` and
 against.** Steps 2, 3 and 4 were run against a production `web` build from this
 tree: the 200 on `/` with no variables set, the `is not configured`, `invalid
 API key` and `bridge not configured` reasons, and the misleading pinned-room 200
-are all observed responses rather than readings of the source. Two lines here
-could not be provoked and are marked as such: the `no LiveKit room is open`
-pass needs valid credentials and an empty project, and is instead the documented
-behaviour of `lib/livekit/room.ts` asserted in `web/tests/room-grant.test.ts`;
-the `rejected the API key and secret` wording is read from that same route's
-error handling.
+are all observed responses rather than readings of the source.
+
+**The pass in step 3 is no longer an inference.** It was written from
+`lib/livekit/room.ts` and the assertion in `web/tests/room-grant.test.ts`,
+because provoking it needs valid credentials and a project with no room open. It
+has since been observed on the hosted deployment: `GET /api/session/room`
+answered 503 `no LiveKit room is open; the agent is not in a call` against
+deployment 53a92ef7. That is worth more than a green tick, and worth more than
+the wording suggests. The string is only reachable *after* `listRooms()`
+returned, so it does not merely mean the three variables are set - it means
+LiveKit accepted the key and the secret. It is the one response in this section
+that proves the secrets are correct rather than present.
+
+One line here still could not be provoked and is marked as such: the `rejected
+the API key and secret` wording is read from that route's error handling, since
+producing it needs a well-formed key and secret that do not match each other.
 
 On the worker side, both failure shapes were run in the image built from the
 root `Dockerfile` at this commit: the empty-environment exit 1 with its five
@@ -497,7 +527,8 @@ One boundary on the whole section: none of it has been run on Railway. Every
 response and exit code above came from the two images built out of this tree,
 and the platform's half - that a non-zero exit crash-loops and ends as a failed
 deploy, and what `railway logs` shows by default - is the documented behaviour
-of the policy in `.railway/railway.ts` and of the CLI's own `--help`.
+of the restart policy (`docs/deployments/restart-policy`: "The default is `On
+Failure` with a maximum of 10 restarts") and of the CLI's own `--help`.
 Confirming it on the real service is `task-railway-live-smoke`.
 
 ## The hosted stack is a client-facing demo source
