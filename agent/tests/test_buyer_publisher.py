@@ -98,9 +98,7 @@ def test_waiting_for_an_event_that_never_arrives_times_out_and_says_so(tmp_path)
     tail = bp.EventTail(log)
 
     found = asyncio.run(
-        tail.wait_for(
-            lambda r: r.get("event") == "turn_complete", timeout=0.2, label="a turn"
-        )
+        tail.wait_for("turn_complete", turn=None, timeout=0.2, label="a turn")
     )
     assert found is None
 
@@ -116,9 +114,7 @@ def test_waiting_finds_an_event_appended_after_the_wait_began(tmp_path):
             with log.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps({"event": "disclosure"}) + "\n")
 
-        waiter = tail.wait_for(
-            lambda r: r.get("event") == "disclosure", timeout=3, label="disclosure"
-        )
+        waiter = tail.wait_for("disclosure", turn=None, timeout=3)
         found, _ = await asyncio.gather(waiter, append())
         return found
 
@@ -315,7 +311,7 @@ def test_the_measurement_does_not_start_until_the_agent_proves_it_heard_us():
         async def say(self, frames) -> None:  # noqa: ANN001
             self.said += 1
 
-    async def scenario(tmp: Path, hear_on: int) -> tuple[bool, int]:
+    async def scenario(tmp: Path, hear_on: int) -> tuple[int | None, int]:
         log = tmp / "run.jsonl"
         log.write_text("", encoding="utf-8")
         tail = bp.EventTail(log)
@@ -329,15 +325,17 @@ def test_the_measurement_does_not_start_until_the_agent_proves_it_heard_us():
                     handle.write(json.dumps({"event": "user_turn", "turn": 1}) + "\n")
 
         mouth.say = say_then_maybe_answer  # type: ignore[method-assign]
-        ok = await bp.prime(mouth, tail, [], timeout=3.0)  # type: ignore[arg-type]
-        return ok, mouth.said
+        turn = await bp.prime(mouth, tail, [], timeout=3.0)  # type: ignore[arg-type]
+        return turn, mouth.said
 
     import tempfile
 
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
-        heard, attempts = asyncio.run(scenario(tmp, hear_on=1))
-        assert heard is True
+        turn, attempts = asyncio.run(scenario(tmp, hear_on=1))
+        # The index it discovered, not a bare True: clip N is not turn N once
+        # the priming line has taken an index of its own.
+        assert turn == 1
         assert attempts == 1
 
 
@@ -354,16 +352,75 @@ def test_priming_retries_and_then_gives_up_rather_than_measuring_deaf():
 
     import tempfile
 
-    async def scenario(tmp: Path) -> tuple[bool, int]:
+    async def scenario(tmp: Path) -> tuple[int | None, int]:
         log = tmp / "run.jsonl"
         log.write_text("", encoding="utf-8")
         mouth = DeafMouth()
-        ok = await bp.prime(
+        turn = await bp.prime(
             mouth, bp.EventTail(log), [], timeout=2.5  # type: ignore[arg-type]
         )
-        return ok, mouth.said
+        return turn, mouth.said
 
     with tempfile.TemporaryDirectory() as raw:
-        heard, attempts = asyncio.run(scenario(Path(raw)))
-        assert heard is False
+        turn, attempts = asyncio.run(scenario(Path(raw)))
+        assert turn is None
         assert attempts >= 1
+
+
+# --- turn-scoped waiting is the default shape, not a patch ----------------
+#
+# The barge-in trigger waited for "a `tts_first_audio`" and matched the
+# PREVIOUS turn's, so the interruption landed on the wrong reply and one
+# requested barge-in became two. The adapter had the same shape the day before
+# (a speech handle left over from the disclosure reading as a replacement for
+# turn 1's). Twice in two days, so the convention is enforced in the signature.
+
+
+def test_another_turns_event_of_the_same_name_is_not_a_match(tmp_path):
+    """The regression, exactly. Scoped to turn 3, a turn-2 event must not
+    satisfy the wait."""
+    log = tmp_path / "run.jsonl"
+    log.write_text(
+        json.dumps({"event": "tts_first_audio", "turn": 2}) + "\n", encoding="utf-8"
+    )
+    tail = bp.EventTail(log)
+
+    assert (
+        asyncio.run(tail.wait_for("tts_first_audio", turn=3, timeout=0.2)) is None
+    )
+    # And the same event IS a match for the turn it belongs to.
+    log.write_text(
+        json.dumps({"event": "tts_first_audio", "turn": 3}) + "\n", encoding="utf-8"
+    )
+    found = asyncio.run(bp.EventTail(log).wait_for("tts_first_audio", turn=3, timeout=1))
+    assert found is not None
+    assert found["turn"] == 3
+
+
+def test_the_turn_cannot_be_left_out(tmp_path):
+    """No default, deliberately: an unscoped match has to be typed as
+    `turn=None` rather than reached by omission. This is the convention
+    delivered as code."""
+    tail = bp.EventTail(tmp_path / "run.jsonl")
+    with pytest.raises(TypeError):
+        asyncio.run(tail.wait_for("turn_complete", timeout=0.1))  # type: ignore[call-arg]
+
+
+def test_the_raw_predicate_form_still_exists_under_its_own_name(tmp_path):
+    """Genuine exceptions keep a route, named so that taking it is visible."""
+    log = tmp_path / "run.jsonl"
+    log.write_text(json.dumps({"event": "brief", "extra": 1}) + "\n", encoding="utf-8")
+    found = asyncio.run(
+        bp.EventTail(log).wait_while(
+            lambda r: "extra" in r, timeout=1, label="anything with extra"
+        )
+    )
+    assert found is not None
+
+
+def test_the_wrong_turn_never_leaks_into_the_label(tmp_path, capsys):
+    """The timeout message names the turn it wanted, so a phase shift is
+    readable in the run output rather than inferred afterwards."""
+    tail = bp.EventTail(tmp_path / "run.jsonl")
+    asyncio.run(tail.wait_for("turn_complete", turn=7, timeout=0.15))
+    assert "turn_complete on turn 7" in capsys.readouterr().out

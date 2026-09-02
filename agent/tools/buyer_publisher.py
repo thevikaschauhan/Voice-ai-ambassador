@@ -341,7 +341,7 @@ async def prime(
     frames: list[rtc.AudioFrame],
     *,
     timeout: float,
-) -> bool:
+) -> int | None:
     """Prove the agent can hear us before the measurement starts.
 
     SUBSCRIPTION IS NOT ENOUGH, measured: a session that logged
@@ -358,6 +358,8 @@ async def prime(
     stops guessing and asks. One throwaway line, and the measurement does not
     begin until the agent's own `user_turn` proves the path works end to end.
     The reply to it is discarded; the clips that follow are the measurement.
+    Returns the agent turn index the priming line became, so the caller can
+    count forward from a real number instead of assuming clip 1 is turn 1.
     """
     deadline = time.monotonic() + timeout
     attempt = 0
@@ -366,14 +368,17 @@ async def prime(
         print(f"  priming (attempt {attempt})", flush=True)
         await mouth.say(frames)
         heard = await tail.wait_for(
-            lambda r: r.get("event") == "user_turn",
+            "user_turn",
+            # The index is what is being discovered - there is no turn to scope
+            # to yet, which is why this one is explicitly unscoped.
+            turn=None,
             timeout=min(15.0, max(1.0, deadline - time.monotonic())),
             label="the agent to hear the priming line",
         )
         if heard is not None:
             print("  the agent heard us; starting the measurement", flush=True)
-            return True
-    return False
+            return heard.get("turn")
+    return None
 
 
 class EventTail:
@@ -404,7 +409,47 @@ class EventTail:
             self.seen.append(record)
         return new
 
-    async def wait_for(self, predicate, *, timeout: float, label: str) -> dict | None:
+    async def wait_for(
+        self,
+        event: str,
+        *,
+        turn: int | None,
+        timeout: float,
+        label: str | None = None,
+    ) -> dict | None:
+        """Wait for one named event, ON ONE TURN.
+
+        `turn` is a required keyword with no default, deliberately. Matching an
+        event without asking which turn it belongs to is the shape that cost
+        this harness a run: the barge-in trigger waited for "a
+        `tts_first_audio`" and matched the PREVIOUS turn's, so the interruption
+        landed on the wrong reply and one requested barge-in became two. The
+        adapter had the same bug the day before, where a speech handle left over
+        from the disclosure read as a replacement for turn 1's. Twice in two
+        days is a convention, so it is enforced here as a signature rather than
+        written down as a rule.
+
+        `turn=None` still means "any turn" and is a legitimate answer - the
+        disclosure precedes every turn, and the priming line's turn index is
+        the thing being discovered - but it has to be said out loud.
+        """
+        if turn is None:
+            described = label or event
+        else:
+            described = label or f"{event} on turn {turn}"
+        return await self.wait_while(
+            lambda record: record.get("event") == event
+            and (turn is None or record.get("turn") == turn),
+            timeout=timeout,
+            label=described,
+        )
+
+    async def wait_while(self, predicate, *, timeout: float, label: str) -> dict | None:
+        """The raw form, for a condition that is not one event on one turn.
+
+        Prefer `wait_for`. This exists for the genuine exceptions and is named
+        so that reaching for it is a visible decision.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             for record in self.poll():
@@ -535,7 +580,11 @@ async def run(args: argparse.Namespace) -> int:
         # The agent opens with the AI disclosure, which is uninterruptible by
         # design (docs/04-). Talking over it would measure nothing.
         if not await tail.wait_for(
-            lambda r: r.get("event") == "disclosure", timeout=45, label="the disclosure"
+            "disclosure",
+            # The disclosure precedes every turn, so there is nothing to scope.
+            turn=None,
+            timeout=45,
+            label="the disclosure",
         ):
             return 1
         # The disclosure is uninterruptible by design (docs/04-), so wait for
@@ -545,13 +594,24 @@ async def run(args: argparse.Namespace) -> int:
         ):
             await asyncio.sleep(args.disclosure_seconds)
 
-        if not await prime(mouth, tail, primer, timeout=args.prime_timeout):
+        primed_turn = await prime(mouth, tail, primer, timeout=args.prime_timeout)
+        if primed_turn is None:
             print(
                 "  ! the agent never heard the priming line - aborting rather "
                 "than measuring a run it cannot hear",
                 flush=True,
             )
             return 1
+        # The priming line is a real turn and the agent is replying to it. The
+        # first clip was published straight over that reply and interrupted it,
+        # which is half of why one requested barge-in became two: the handshake
+        # proves audibility, it does not end the turn it created.
+        await tail.wait_for(
+            "turn_complete", turn=primed_turn, timeout=60, label="the priming turn"
+        )
+        await quiescence.wait_until_quiet(
+            min_quiet=args.quiet_seconds, timeout=args.quiet_timeout
+        )
 
         barge_at = {int(n) for n in args.barge_in_at.split(",") if n.strip()}
         for number, (text, frames) in enumerate(zip(turns, clips), start=1):
@@ -562,24 +622,54 @@ async def run(args: argparse.Namespace) -> int:
             )
             await mouth.say(frames)
 
+            # Which agent turn this clip became. Read, never assumed: the
+            # priming line takes one index and a lost clip takes none, so clip
+            # N is not turn N and every later wait has to be scoped to the real
+            # number.
+            opened = await tail.wait_for(
+                "user_turn",
+                turn=None,
+                timeout=45,
+                label=f"the agent to hear clip {number}",
+            )
+            if opened is None:
+                print(
+                    f"  ! clip {number} was never heard - the rest of this run "
+                    "would be a turn out of phase, so stopping here",
+                    flush=True,
+                )
+                return 1
+            agent_turn = opened.get("turn")
+            print(f"    clip {number} is agent turn {agent_turn}", flush=True)
+
             if interrupting:
-                # Wait for the agent to actually be speaking before cutting in,
-                # so the interruption lands inside the speech window rather
-                # than in the gap before it.
+                # Wait for THIS turn to be speaking before cutting in, so the
+                # interruption lands inside its speech window. Matching any
+                # `tts_first_audio` put the barge-in on the previous turn's
+                # reply and produced a second, unasked interruption.
                 if await tail.wait_for(
-                    lambda r: r.get("event") == "tts_first_audio",
-                    timeout=30,
-                    label=f"turn {number} first audio",
+                    "tts_first_audio", turn=agent_turn, timeout=30
                 ):
                     await asyncio.sleep(args.barge_in_delay)
                     print("    interrupting", flush=True)
                     await mouth.say(barge)
+                    # The interruption is itself a buyer utterance and becomes
+                    # its own turn. Consume it, or the next clip's lookup would
+                    # read this one's index as its own.
+                    barged = await tail.wait_for(
+                        "user_turn",
+                        turn=None,
+                        timeout=45,
+                        label="the barge-in to register",
+                    )
+                    if barged is not None:
+                        await tail.wait_for(
+                            "turn_complete",
+                            turn=barged.get("turn"),
+                            timeout=60,
+                        )
 
-            await tail.wait_for(
-                lambda r: r.get("event") == "turn_complete",
-                timeout=60,
-                label=f"turn {number} completing",
-            )
+            await tail.wait_for("turn_complete", turn=agent_turn, timeout=60)
             # The turn is accounted for, but the agent may still be talking -
             # after a barge-in it is replying to the interruption. Publishing
             # now is what turned two requested barge-ins into four.
