@@ -233,8 +233,8 @@ The latency line is the point: streaming charges only the tail, which is what th
 
 | Component | Where | Note |
 |---|---|---|
-| Next.js demo UI | Vercel | UI only; no provider calls |
-| Python agent worker | Railway | Long-lived process; connects out to LiveKit Cloud, so no inbound routing needed |
+| Next.js demo surface | Railway | No provider calls. It publishes a microphone into the room on the hosted talk path, which moves no credential: recognition, synthesis and inference stay in the worker (`docs/09-deploy.md`) |
+| Python agent worker | Railway | Long-lived process; connects out to LiveKit Cloud, so no inbound routing needed. One worker serves all three languages, reading each call's language from room metadata |
 | Transport | LiveKit Cloud | WebRTC; handles venue-network jitter; SIP later |
 | STT / TTS / LLM | Vendor APIs from the agent worker | Keys in Railway env only |
 
