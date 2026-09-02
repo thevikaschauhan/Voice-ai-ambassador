@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           # Pinned rather than floating: a CI that silently changes its resolver
           # or its interpreter is not a gate, it is a coin toss. 3.14 is what the
@@ -129,7 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.10.7"
           python-version: "3.14"
