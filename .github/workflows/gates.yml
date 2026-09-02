@@ -1,0 +1,147 @@
+# The definition of done in AGENTS.md is a four-gate checklist that until now was
+# run by hand, per session, and reported by whoever ran it. This runs the same
+# four on every pull request and on main, so the claim is checkable by anyone.
+#
+# The gates, in AGENTS.md's own order:
+#   1. `uv run pytest`                         the full suite
+#   2. `uv sync --no-group voice` then pytest  the core alone still runs (ADR-002)
+#   3. `ruff check`
+#   4. `uv run eval`                           offline: no key, no network, no spend
+#   5. 100% branch coverage on guardrail and derivation code
+#
+# Gate 2 lives in its own job on purpose. It removes the voice group from the
+# environment, so running it beside the others would leave whichever gate came
+# next measuring a half-installed tree.
+#
+# Web (`npm test`, `typecheck`, `lint`, `build`) is NOT here yet. It is four more
+# gates in the same checklist and belongs in this file, but it is a separate
+# decision from bootstrapping the agent side.
+
+name: gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent:
+    name: agent gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          # Pinned rather than floating: a CI that silently changes its resolver
+          # or its interpreter is not a gate, it is a coin toss. 3.14 is what the
+          # fleet runs locally. pyproject says `requires-python = ">=3.12"` and
+          # nothing verifies that floor today - a 3.12 job would.
+          version: "0.10.7"
+          python-version: "3.14"
+          working-directory: agent
+
+      # --frozen installs exactly what uv.lock pins and refuses to re-resolve.
+      # It matters more than usual here: pyproject sets `exclude-newer = "5 days"`,
+      # a moving window, so an unfrozen CI would resolve a different dependency
+      # set depending on the day it ran.
+      - name: Install (full, including the voice group)
+        working-directory: agent
+        run: uv sync --frozen
+
+      - name: Gate 3 - ruff check
+        run: uvx ruff@0.15.14 check agent
+
+      - name: Gate 1 - full test suite
+        working-directory: agent
+        run: uv run --no-sync pytest -q
+
+      # Offline by default (see the [project.scripts] note in pyproject): it
+      # replays recorded replies, calls no provider and spends nothing, so it is
+      # safe on every pull request including from a fork. It rewrites
+      # docs/eval-report.md as a side effect; that is discarded with the runner.
+      - name: Gate 4 - eval suite, offline
+        working-directory: agent
+        run: uv run --no-sync eval
+
+      # AGENTS.md's fifth gate, enforced rather than asserted. The requirement is
+      # not new - "guardrail and derivation code requires 100% branch coverage"
+      # has been in the definition of done all along - but it was checked per
+      # session against an ephemeral overlay, so nobody could see it and nothing
+      # stopped it slipping. --cov-fail-under=100 is what makes it a rule.
+      #
+      # AGENTS.md:69 names "guardrail and derivation code" and never defines it.
+      # This is the set, and the gate is only as meaningful as the list:
+      #   ambassador.guardrails   the validators and the typed ordering pipeline
+      #   ambassador.figures      the numeric guardrail's extraction and
+      #                           classification engine - the regex the whole
+      #                           claim rests on lives here, not in guardrails/
+      #   ambassador.inventory    the derived figures, invariant 2's "the model
+      #                           never does arithmetic" in code
+      # Widening it (budget.py, confirmation.py, verbalise.py) is a deliberate
+      # decision, not an oversight: those are deterministic policy rather than
+      # guardrail or derivation, and adding one here without its tests turns
+      # every pull request red.
+      #
+      # The suite runs twice - once as gate 1, once here - so a plain test
+      # failure and a coverage shortfall are different red steps rather than one
+      # ambiguous one. It costs about seven seconds.
+      - name: Gate 5 - guardrail and derivation branch coverage is 100%
+        working-directory: agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Written outside the checkout so a coverage run never dirties the tree.
+          report="$RUNNER_TEMP/coverage.txt"
+          export COVERAGE_FILE="$RUNNER_TEMP/.coverage"
+          # The status is captured rather than allowed to abort the step, because
+          # the table is most worth reading on the run where the gate FAILS.
+          status=0
+          uv run --no-sync --with pytest-cov==7.0.0 pytest -q \
+            --cov=ambassador.guardrails \
+            --cov=ambassador.figures \
+            --cov=ambassador.inventory \
+            --cov-branch \
+            --cov-report=term-missing \
+            --cov-fail-under=100 \
+            | tee "$report" || status=$?
+          {
+            echo '### Branch coverage: guardrail and derivation modules'
+            echo
+            echo 'AGENTS.md requires 100% here, and this step enforces it.'
+            echo
+            echo '```'
+            sed -n '/^Name /,/^TOTAL/p' "$report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+  core-only:
+    name: gate 2 - core-only install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: "0.10.7"
+          python-version: "3.14"
+          working-directory: agent
+
+      # ADR-002: the core must stay runnable and testable with no voice stack
+      # installed. The adapter tests skip themselves rather than fail, so the
+      # signal to watch is the skip count moving, not just the pass count.
+      - name: Install the core alone
+        working-directory: agent
+        run: uv sync --frozen --no-group voice
+
+      - name: Core-only test suite
+        working-directory: agent
+        run: uv run --no-sync pytest -q
