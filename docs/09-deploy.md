@@ -49,13 +49,97 @@ One gap a deployer will hit, recorded rather than smoothed over. `agent/.env.exa
 | `AMBASSADOR_AGENT_DIR` | `web/src/lib/textmode/process.ts` | Path to the agent checkout, for text mode |
 | `AMBASSADOR_BRIDGE_HANDSHAKE` | `web/src/lib/bridge/handshake.ts` | Path to the event bridge's handshake file |
 
-The last two are same-host paths, and the section below is about what that means. Writing the web contract down is `task-railway-web-service`; this table is the current state, not the destination.
+The last two are same-host paths, and the section below is about what that means. Writing the web contract down is `task-railway-web-service`; this table is the current state, and the section below is the destination.
+
+## The `web` service contract
+
+The table above is the inventory; this is the destination. Every value here is
+verified against a running container, not read off the source.
+
+| Variable | Railway value | If absent |
+|---|---|---|
+| `LIVEKIT_URL` | service variable | `api/session/room` answers 503 with a reason; the surface keeps its "no audio track" label |
+| `LIVEKIT_API_KEY` | service variable | same |
+| `LIVEKIT_API_SECRET` | service variable | same |
+| `LIVEKIT_ROOM` | unset | the server picks a room name, which is the intended behaviour |
+| `AMBASSADOR_AGENT_DIR` | **unset** | text mode serves the replay core (issue #63) |
+| `AMBASSADOR_BRIDGE_HANDSHAKE` | **unset** | `api/session/stream` answers 503 `{"live":false,"reason":"bridge not configured"}` (issue #63) |
+| `PORT` | injected by Railway | falls back to 3000, set in the image |
+| `NODE_ENV` | `production`, set in the image | the npm scripts pin it anyway, and that pin is load-bearing |
+
+The three LiveKit variables carry the same names the agent uses, so they are the
+`agent/.env.example` entries by reference and are not re-listed with values.
+
+**There are no `NEXT_PUBLIC_` variables, and that absence is the security
+property rather than an omission.** Nothing the browser needs is a secret: it
+receives a signalling URL, a room name and a ten-minute listen-only token minted
+in the server route. A `NEXT_PUBLIC_` variable is compiled into the client
+bundle, so introducing one to "make the URL available" would be the first step
+of putting credentials in a page.
+
+The last two variables must be left unset deliberately, not merely left blank by
+oversight. Both are same-host paths (issue #63): setting `AMBASSADOR_AGENT_DIR`
+in this container points at a directory with no Python, no uv and no `agent/`,
+and `AMBASSADOR_BRIDGE_HANDSHAKE` would point at a file the other container
+writes. Unset is the state each reader already treats as "off", so the surface
+degrades to exactly what it can honestly show.
+
+### The layout is part of the contract
+
+`web/src/lib/inventory.ts` and `web/src/lib/readiness.ts` read
+`join(process.cwd(), '..', 'data', ...)` at request time, and `next.config.ts`
+sets `outputFileTracingRoot` to the repo root for the same reason. So the
+container runs with cwd `/srv/web` and the data beside it at `/srv/data`. That
+relative path is why this service is built from a Dockerfile with the **repo
+root** as its build context rather than by Railway's own builder pointed at
+`web/`: a `web/`-rooted build compiles cleanly and then answers 500 to every
+page that needs a price, with `ENOENT: no such file or directory, open
+'/data/inventory.json'`. That was reproduced before choosing, because a green
+build that fails on stage is the worst available failure shape.
+
+Two consequences for provisioning, both easy to get wrong:
+
+- **Root Directory must stay unset.** Railway pulls only the files under a
+  service's root directory, so setting it to `/web` removes `data/` from the
+  build context and produces exactly the broken image above.
+- **The service's config file is `/web/railway.json`**, set per service as an
+  absolute path. Railway's config file does not follow Root Directory, and a
+  root `railway.json` cannot describe two different services.
+
+`railway.json` deliberately sets no `startCommand`: the image's `CMD` is
+`npm run start`, so the start path is defined once, in the file that also pins
+`NODE_ENV`. `healthcheckPath` is `/` rather than a dedicated endpoint because
+`/` is the page that reads `../data`, so a mislayered image fails its health
+check instead of serving broken prices. `watchPatterns` covers `web/**` and
+`data/**`: an inventory edit is a deploy for this service.
+
+### The trap in `next start`
+
+`next start` loads `next.config.ts`, and a TypeScript config needs a TypeScript
+compiler to read. With production-only dependencies installed, Next does not
+fail with a missing module - it tries to **install TypeScript at boot, with
+yarn, over the network, into the running container**, and the version it reaches
+for is not the one this repo pins. It needs egress at start-up, it writes into
+the image at runtime, and as a non-root user it simply fails. The image
+therefore ships the pinned `typescript` from the same lockfile the build used.
+Renaming the config to `.mjs` would also close it, and is deliberately not done:
+it would trade a real `NextConfig` type for a JSDoc comment on a file that
+several cards read.
 
 ## Build reproducibility
 
 Both images should mirror `.github/workflows/gates.yml` rather than inventing their own toolchain, so that a green pull request means something about the thing that gets deployed.
 
 For `agent-worker` that means uv 0.10.7, Python 3.14, and `uv sync --frozen`. The `--frozen` is not a style preference: `agent/pyproject.toml` sets `exclude-newer = "5 days"`, which is a *moving* window, so an unfrozen build resolves a different dependency set depending on the day it runs. A deployment that cannot be reproduced next week is not a deployment, it is a snapshot.
+
+For `web` there was nothing to mirror: the four web gates are not in
+`gates.yml`, so no CI job pins a Node version and the image had to choose one.
+It pins Node 24, the active LTS, and installs with `npm ci` from
+`package-lock.json` so the runtime runs what the lockfile pinned rather than
+what the registry offers today. `--ignore-scripts` is safe in this tree because
+the only package with a meaningful install script is `sharp`, for `next/image`,
+and this app has no `next/image`. When the web gates do land in CI, the Node
+version belongs in both places or in neither.
 
 ## Open: what the two-service split breaks
 
