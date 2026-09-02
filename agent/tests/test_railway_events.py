@@ -54,8 +54,12 @@ def test_key_order_does_not_defeat_the_dedupe():
     key order between deliveries of the same line, so comparing serialised text
     without sorting let every replayed copy through - 5170 lines for 125
     events, and a second turn 1 that put every later clip out of phase."""
-    first = json.dumps({"event": "user_turn", "turn": 1, "ts": "2026-09-02T13:00:00+00:00"})
-    same_reordered = json.dumps({"ts": "2026-09-02T13:00:00+00:00", "turn": 1, "event": "user_turn"})
+    first = json.dumps(
+        {"event": "user_turn", "turn": 1, "ts": "2026-09-02T13:00:00+00:00"}
+    )
+    same_reordered = json.dumps(
+        {"ts": "2026-09-02T13:00:00+00:00", "turn": 1, "event": "user_turn"}
+    )
     assert first != same_reordered
     records = list(railway_events.stream(iter([first, same_reordered])))
     assert len(records) == 1
@@ -64,8 +68,12 @@ def test_key_order_does_not_defeat_the_dedupe():
 def test_a_reconnects_replay_of_an_older_session_is_cut_off():
     """The CLI's stream drops and replays on reconnect. Without a cutoff on the
     agent's own ts, a previous session's turn numbers arrive as this run's."""
-    old = json.dumps({"event": "user_turn", "turn": 1, "ts": "2026-09-02T13:00:00+00:00"})
-    new = json.dumps({"event": "user_turn", "turn": 1, "ts": "2026-09-02T14:00:00+00:00"})
+    old = json.dumps(
+        {"event": "user_turn", "turn": 1, "ts": "2026-09-02T13:00:00+00:00"}
+    )
+    new = json.dumps(
+        {"event": "user_turn", "turn": 1, "ts": "2026-09-02T14:00:00+00:00"}
+    )
     kept = list(railway_events.stream(iter([old, new]), since="2026-09-02T13:30:00"))
     assert [r["ts"] for r in kept] == ["2026-09-02T14:00:00+00:00"]
 
@@ -73,5 +81,7 @@ def test_a_reconnects_replay_of_an_older_session_is_cut_off():
 def test_framework_log_lines_are_not_events():
     """The stream carries the framework's own structured logs too, and they are
     not turns."""
-    framework = json.dumps({"level": "info", "message": "registered worker", "id": "AW_x"})
+    framework = json.dumps(
+        {"level": "info", "message": "registered worker", "id": "AW_x"}
+    )
     assert railway_events.translate(framework) is None

@@ -357,7 +357,10 @@ def test_priming_retries_and_then_gives_up_rather_than_measuring_deaf():
         log.write_text("", encoding="utf-8")
         mouth = DeafMouth()
         turn = await bp.prime(
-            mouth, bp.EventTail(log), [], timeout=2.5  # type: ignore[arg-type]
+            mouth,
+            bp.EventTail(log),
+            [],
+            timeout=2.5,  # type: ignore[arg-type]
         )
         return turn, mouth.said
 
@@ -385,14 +388,14 @@ def test_another_turns_event_of_the_same_name_is_not_a_match(tmp_path):
     )
     tail = bp.EventTail(log)
 
-    assert (
-        asyncio.run(tail.wait_for("tts_first_audio", turn=3, timeout=0.2)) is None
-    )
+    assert asyncio.run(tail.wait_for("tts_first_audio", turn=3, timeout=0.2)) is None
     # And the same event IS a match for the turn it belongs to.
     log.write_text(
         json.dumps({"event": "tts_first_audio", "turn": 3}) + "\n", encoding="utf-8"
     )
-    found = asyncio.run(bp.EventTail(log).wait_for("tts_first_audio", turn=3, timeout=1))
+    found = asyncio.run(
+        bp.EventTail(log).wait_for("tts_first_audio", turn=3, timeout=1)
+    )
     assert found is not None
     assert found["turn"] == 3
 

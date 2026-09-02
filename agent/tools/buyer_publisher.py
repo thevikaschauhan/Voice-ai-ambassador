@@ -180,7 +180,9 @@ class AgentRecorder:
     just what Fish returned.
     """
 
-    def __init__(self, path: Path | None, listener: AgentQuiescence | None = None) -> None:
+    def __init__(
+        self, path: Path | None, listener: AgentQuiescence | None = None
+    ) -> None:
         self._path = path
         self._listener = listener
         self._writer: wave.Wave_write | None = None
@@ -284,7 +286,9 @@ class AgentQuiescence:
         # memoryview cannot cast between two non-byte formats. A 20ms frame is
         # under a kilobyte, so the copy is free.
         data = memoryview(bytes(frame.data)).cast("h")
-        if any(sample > self.SPEECH_PEAK or sample < -self.SPEECH_PEAK for sample in data):
+        if any(
+            sample > self.SPEECH_PEAK or sample < -self.SPEECH_PEAK for sample in data
+        ):
             self._busy_since = time.monotonic()
 
     def quiet_for(self) -> float:
@@ -684,9 +688,7 @@ async def run(args: argparse.Namespace) -> int:
                 # interruption lands inside its speech window. Matching any
                 # `tts_first_audio` put the barge-in on the previous turn's
                 # reply and produced a second, unasked interruption.
-                if await tail.wait_for(
-                    "tts_first_audio", turn=agent_turn, timeout=30
-                ):
+                if await tail.wait_for("tts_first_audio", turn=agent_turn, timeout=30):
                     await asyncio.sleep(args.barge_in_delay)
                     print("    interrupting", flush=True)
                     await mouth.say(barge)
@@ -726,7 +728,9 @@ async def run(args: argparse.Namespace) -> int:
             flush=True,
         )
 
-    print(f"\nran {len(turns)} turns; {len(tail.seen)} events on the stream", flush=True)
+    print(
+        f"\nran {len(turns)} turns; {len(tail.seen)} events on the stream", flush=True
+    )
     return 0
 
 
