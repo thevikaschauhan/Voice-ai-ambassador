@@ -262,6 +262,36 @@ class Settings:
             required["DEEPGRAM_API_KEY"] = self.deepgram_api_key
         return [name for name, value in required.items() if not value]
 
+    def missing_for_transport(self) -> list[str]:
+        """What the worker needs to reach LiveKit at all, by name only.
+
+        Separate from `missing_for_voice` because they answer different
+        questions and one invocation can need only the first. Console mode dials
+        nothing - it runs a mock job in a `console-room`, verified - so demanding
+        transport credentials there would refuse to start the venue plan B
+        (docs/06- text-mode fallback) over keys it never uses.
+
+        The framework checks these too, and cannot be relied on for it: with none
+        of them set it logs "worker failed", drains, and exits ZERO, so a
+        restart-on-failure policy never trips and a misconfigured deploy stops
+        quietly (measured at the #64 gate).
+        """
+        required = {
+            "LIVEKIT_URL": self.livekit_url,
+            "LIVEKIT_API_KEY": self.livekit_api_key,
+            "LIVEKIT_API_SECRET": self.livekit_api_secret,
+        }
+        return [name for name, value in required.items() if not value]
+
+    def missing_for_worker(self) -> list[str]:
+        """Everything a worker process must have before it registers.
+
+        Transport first, because a worker with no LiveKit credentials has
+        nothing to register with; then the provider keys, because a worker that
+        registers without them takes a call it cannot answer.
+        """
+        return self.missing_for_transport() + self.missing_for_voice()
+
 
 # Remedies named per credential, because "missing DEEPGRAM_API_KEY" on a
 # checkout that worked yesterday is a question, not an answer. Keyed by variable

@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from livekit import rtc
 from livekit.agents import (
@@ -1455,5 +1456,52 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.start(agent=agent, room=ctx.room)
 
 
+# The subcommands that dial LiveKit. `console` is deliberately absent: it runs a
+# mock job in a `console-room` and never connects, verified by running it with no
+# transport credentials at all, so demanding them would refuse to start the venue
+# plan B over keys it does not use. `download-files` is absent for the same
+# reason - it runs in an image build, where no credential exists yet.
+_CONNECTING_COMMANDS: Final = frozenset({"start", "dev", "connect"})
+
+
+def preflight(argv: list[str] | None = None) -> list[str]:
+    """Credentials this invocation cannot start without, by name, or empty.
+
+    Runs BEFORE `cli.run_app`, which is the only anchor that precedes the
+    framework's own argument check - and that check cannot be relied on: with no
+    transport credentials the framework logs "worker failed", drains, and exits
+    ZERO, so a restart-on-failure policy never trips and a misconfigured deploy
+    stops quietly on the dashboard (measured at the #64 gate).
+
+    `docs/09-deploy.md` says startup "says which one during preflight rather than
+    failing on the first sentence of a call". That was true of LiveKit
+    credentials only by accident and not true of the provider keys at all:
+    `missing_for_voice()` ran inside `entrypoint`, which only runs once a job is
+    dispatched, so a worker missing FISH_API_KEY registered, looked healthy, and
+    failed on the first buyer. This is the sentence made true.
+
+    Only the connecting subcommands are checked. A console session still gets the
+    provider-key check from `entrypoint`, which its mock job dispatches
+    immediately, so nothing there becomes later or quieter.
+    """
+    arguments = sys.argv[1:] if argv is None else argv
+    # Any argument matching a connecting command, not "the first non-flag one":
+    # a global option takes its value in that position, so `--log-level debug
+    # start` would have read the invocation as `debug` and skipped the check -
+    # which its own test caught. The loose match can only misfire on a flag
+    # VALUE literally spelled `start`, `dev` or `connect`, and it errs towards
+    # checking credentials, which is the direction that fails safe.
+    if not _CONNECTING_COMMANDS.intersection(arguments):
+        return []
+    return load_settings().missing_for_worker()
+
+
 if __name__ == "__main__":
+    _missing = preflight()
+    if _missing:
+        # stderr and a non-zero exit, so the platform sees a failed start rather
+        # than a clean one. Names only, never values: the message is printed by
+        # whatever supervisor restarted the process.
+        print(missing_credentials_error(_missing), file=sys.stderr)
+        raise SystemExit(1)
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
