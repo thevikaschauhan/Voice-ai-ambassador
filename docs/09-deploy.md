@@ -29,7 +29,9 @@ Startup is fail-fast by design, and it is enforced before the framework starts r
 
 Both halves of that had to be built, and the reasons are worth keeping. `missing_for_voice()` alone ran inside `entrypoint`, which only runs once a job is dispatched, so a worker with LiveKit credentials and no `FISH_API_KEY` registered, passed every check the platform could see, and failed on the first buyer. And the framework's own transport check cannot be relied on for the rest: with no credentials at all it logs "worker failed", drains, and exits ZERO, so a restart-on-failure policy never trips and a misconfigured deploy stops quietly on the dashboard. Console mode is deliberately exempt - it runs a mock job in a `console-room` and dials nothing, so demanding transport credentials there would refuse to start the text-mode fallback over keys it never uses.
 
-The service's config is the root `railway.json`, and its `watchPatterns` cover `agent/**`, `data/**`, the `Dockerfile`, `railway.json` and `.dockerignore` - without them a web-only push rebuilds and redeploys the worker, which drains live calls for a change it does not contain. `data/**` appears in BOTH services' patterns on purpose: an inventory edit is a deploy for the worker as well as the web surface, because the worker reads the same files. It sets no `startCommand`: the image's `CMD` carries `--drain-timeout 600`, and a start command specified here would silently replace it and take the drain with it.
+The service's config is `.railway/railway.ts` (the section below says why it is one file rather than a `railway.json` per service), and its `watchPatterns` cover `agent/**`, `data/**`, the `Dockerfile` and `.dockerignore` - without them a web-only push rebuilds and redeploys the worker, which drains live calls for a change it does not contain. `data/**` appears in BOTH services' patterns on purpose: an inventory edit is a deploy for the worker as well as the web surface, because the worker reads the same files. It sets no `startCommand`: the image's `CMD` carries `--drain-timeout 600`, and a start command specified there would silently replace it and take the drain with it.
+
+That drain needed a second number to mean anything, and this is where it was missing. `--drain-timeout 600` is how long the *worker* will wait to finish a call; `deploy.drainingSeconds` is how long *Railway* waits between SIGTERM and SIGKILL, and its default is **0**. So the worker was asking for ten minutes to hang up gracefully and being killed on the spot. The config sets `drainingSeconds: 600` to match the CMD, and the two numbers are deliberately the same so neither can drift into being the real one. Railway's docs give no maximum for it, only that default of 0, so 600 is matched to our own timeout rather than to a documented ceiling.
 
 ### `web`
 
@@ -38,6 +40,67 @@ The browser gets a listen-only ticket to the call in progress, and the route tha
 This is why there is no separate token service: minting is one Next server route using `livekit-server-sdk`, which is the same tier the rest of the app's server work already happens in. It also satisfies the hard rule in AGENTS.md that no provider is ever called from the browser.
 
 A `web` deployed without LiveKit variables does not crash. `api/session/room` answers 503 with an honest reason and the surface keeps its "no audio track" label, which is the correct behaviour for a machine that has no call to show.
+
+## The configuration is one file, and the CLI applies it
+
+Both services are described by `.railway/railway.ts`: sources, builders,
+dockerfile paths, watch patterns, health check, restart policies, replicas, and
+the variable names each service carries. One file for the project, not one per
+service.
+
+**It is not a `railway.json` because Railway retired that.** Config as code is
+deprecated, and not gently: the API refuses to set a service's config file path
+at all, answering `Config as Code (railway.json / railway.toml) is deprecated.
+Use Infrastructure as Code (.railway/railway.ts) instead`. New services cannot
+opt into it, existing files stop being read on **2026-12-01**, and the CLI
+prints the deprecation warning on every command while one is still in the tree.
+
+This project had two of those files and neither was ever read. Both services
+were created after the change, and their live settings showed builder
+`RAILPACK`, no watch patterns and no health check, while the two `railway.json`
+files in the repository claimed `DOCKERFILE`, patterns and a health check on
+`/`. The worker's image built from the Dockerfile anyway, but only because
+Railway auto-detects a root `Dockerfile`, not because anything read the file
+sitting next to it. Deleting both changed nothing: the plan was identical before
+and after. Configuration that looks authoritative and is inert is worse than
+none, because it is what you check when something breaks.
+
+That paragraph is measurement, not inference: the refused mutation and both
+services' live settings were read at provisioning, and the two plans, before and
+after the files were deleted, were run from this tree.
+
+The workflow is two commands, and the first one is safe:
+
+```
+railway config plan     # reads Railway, prints the diff, changes nothing
+railway config apply    # shows the same plan, then asks before writing
+```
+
+Both walk up from the working directory to find `.railway/railway.ts`, so
+either runs from the repository root. `plan` redacts variable values by default.
+
+Two things about the file are easy to trip over. **Omit means delete**: it
+describes the whole environment, so removing a service or a variable name from
+it is a request to remove that thing from Railway, and `apply` marks those as
+destructive before it asks. And **the CLI needs the SDK**: `railway config plan`
+refuses to run without it (`The Railway TypeScript SDK is not installed`), which
+is the only reason there is a `package.json` at the repository root. It is not
+the web app, which has its own in `web/`, and neither image installs from it.
+
+### Provisioning, in three steps
+
+1. Connect the repository to each service, with **Root Directory empty**. Not
+   `/web` for the web service: the reason is in the `web` contract below, and it
+   has already failed a build once.
+2. Paste the secrets as service variables. The names are in
+   `agent/.env.example`, plus the `web` additions in the next section;
+   `.railway/railway.ts` lists them as `preserve()`, which means "keep whatever
+   is set on Railway", so applying the config never writes or overwrites a
+   value.
+3. `railway config apply` from the repository root, and read the plan it prints
+   before confirming.
+
+Then find out whether it worked: "Verifying a deploy", below, is how.
 
 ## Secrets and the environment contract
 
@@ -103,19 +166,23 @@ build that fails on stage is the worst available failure shape.
 
 Two consequences for provisioning, both easy to get wrong:
 
-- **Root Directory must stay unset.** Railway pulls only the files under a
+- **Root Directory must stay empty.** Railway pulls only the files under a
   service's root directory, so setting it to `/web` removes `data/` from the
-  build context and produces exactly the broken image above.
-- **The service's config file is `/web/railway.json`**, set per service as an
-  absolute path. Railway's config file does not follow Root Directory, and a
-  root `railway.json` cannot describe two different services.
+  build context and produces exactly the broken image above. This is not a
+  hypothetical: the service was created with `/web`, and the first build after
+  that failed with `"/data": not found`. `.railway/railway.ts` now declares
+  `rootDirectory: null` so the setting is owned by code rather than by whoever
+  clicked last.
+- **The dockerfile path has to be given**, as `web/Dockerfile`. With the root
+  empty, Railway's auto-detection finds the *worker's* `Dockerfile` at the top
+  of the repository, which is the wrong image for this service.
 
-`railway.json` deliberately sets no `startCommand`: the image's `CMD` is
-`npm run start`, so the start path is defined once, in the file that also pins
-`NODE_ENV`. `healthcheckPath` is `/` rather than a dedicated endpoint because
-`/` is the page that reads `../data`, so a mislayered image fails its health
-check instead of serving broken prices. `watchPatterns` covers `web/**` and
-`data/**`: an inventory edit is a deploy for this service.
+The config sets no `startCommand`: the image's `CMD` is `npm run start`, so the
+start path is defined once, in the file that also pins `NODE_ENV`.
+`healthcheckPath` is `/` rather than a dedicated endpoint because `/` is the
+page that reads `../data`, so a mislayered image fails its health check instead
+of serving broken prices. `watchPatterns` covers `web/**` and `data/**`: an
+inventory edit is a deploy for this service.
 
 ### The trap in `next start`
 
@@ -198,9 +265,9 @@ missing credentials for the voice path: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_AP
 Set them in agent/.env (see agent/.env.example) or in the environment.
 ```
 
-A non-zero exit is what `restartPolicyType: ON_FAILURE` in the root
-`railway.json` is for, so the deploy crash-loops through its ten retries and
-ends up **failed** on the dashboard, with the variable names in the log.
+A non-zero exit is what `restartPolicyType: ON_FAILURE` in
+`.railway/railway.ts` is for, so the deploy crash-loops through its ten retries
+and ends up **failed** on the dashboard, with the variable names in the log.
 
 That was not true before #66, and the old behaviour is worth keeping in mind
 because it is still the shape of the failure below: the framework's own path
@@ -353,8 +420,8 @@ One boundary on the whole section: none of it has been run on Railway. Every
 response and exit code above came from the two images built out of this tree,
 and the platform's half - that a non-zero exit crash-loops and ends as a failed
 deploy, and what `railway logs` shows by default - is the documented behaviour
-of the policy in `railway.json` and of the CLI's own `--help`. Confirming it on
-the real service is `task-railway-live-smoke`.
+of the policy in `.railway/railway.ts` and of the CLI's own `--help`.
+Confirming it on the real service is `task-railway-live-smoke`.
 
 ## Open: what the two-service split breaks
 

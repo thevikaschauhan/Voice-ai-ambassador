@@ -70,10 +70,10 @@ RUN cd agent && uv run --no-sync python -m adapter.agent download-files
 
 WORKDIR /app/agent
 
-# NO EXPOSE, and no healthcheck in railway.json. docs/09-deploy.md is explicit
-# that this service "needs no domain, no port, and no health-check route, and it
-# should be given none" - a public domain on an outbound-only worker is a hole
-# with nothing behind it.
+# NO EXPOSE, and no healthcheck in `.railway/railway.ts`. docs/09-deploy.md is
+# explicit that this service "needs no domain, no port, and no health-check
+# route, and it should be given none" - a public domain on an outbound-only
+# worker is a hole with nothing behind it.
 #
 # One qualification to that doc's wording, measured rather than assumed: the
 # framework DOES open a listening socket inside the container. In `start` mode
