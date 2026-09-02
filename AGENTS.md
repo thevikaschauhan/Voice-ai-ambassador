@@ -70,7 +70,7 @@ Guardrails inspect digits; verbalisation destroys digits; audio cannot be retrac
 - [ ] Any new model interaction has at least one entry in the eval set (`docs/05-evals.md`)
 - [ ] No new `VERIFY:` marker silently resolved
 - [ ] `cd agent && uv run pytest` clean
-- [ ] `uvx ruff@0.15.14 check agent` and `uvx ruff@0.15.14 format --check agent` clean. Pinned, not `uv run ruff`: ruff is not a project dependency, so an unpinned call runs whatever version you have installed and `format` disagrees between minor versions. CI runs these two exact commands (gates 3 and 4)
+- [ ] `cd agent && uv run ruff check . && uv run ruff format --check .` clean. `uv run`, not a bare `ruff`: the version is pinned in `pyproject.toml`'s dev group (`ruff==0.15.14`) because `format` output differs between minor versions, so a stray global install would disagree with the gate about a tree it had just formatted. CI runs these two exact commands (gates 3 and 4)
 - [ ] Web work: `cd web && npm test && npm run typecheck && npm run lint && npm run build` clean
 - [ ] Web work: reduced motion respected, keyboard focus visible, works at 375px width
 
