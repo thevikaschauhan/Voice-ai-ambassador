@@ -13,9 +13,20 @@
 # environment, so running it beside the others would leave whichever gate came
 # next measuring a half-installed tree.
 #
-# Web (`npm test`, `typecheck`, `lint`, `build`) is NOT here yet. It is four more
-# gates in the same checklist and belongs in this file, but it is a separate
-# decision from bootstrapping the agent side.
+# The web gates are the other four, and they are here now:
+#   6. `npm test`        vitest
+#   7. `npm run typecheck`
+#   8. `npm run lint`
+#   9. `npm run build`   next build
+#
+# They run as their own job because they share nothing with the agent's: a
+# different toolchain, a different lockfile and a different working directory.
+# All four are listed separately because they FAIL APART - vitest transpiles
+# types away rather than checking them, so a green `npm test` says nothing about
+# what `tsc` would refuse, and a change to a shared type that breaks no test is
+# evidence the tests are not typechecked (AGENTS.md 2026-08-31). Collapsing them
+# into one step would still catch everything, but the summary would stop saying
+# WHICH claim broke.
 
 name: gates
 
@@ -145,3 +156,53 @@ jobs:
       - name: Core-only test suite
         working-directory: agent
         run: uv run --no-sync pytest -q
+
+  web:
+    name: web gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned to an exact tag, verified to exist rather than assumed: a
+      # floating major is a promise the publisher has not made, which is why
+      # setup-uv above is pinned the same way.
+      #
+      # Node 24 is the same major `web/Dockerfile` runs, and docs/09- states the
+      # rule this keeps: the Node version belongs in both places or in neither.
+      # Both pin the major and float the patch, so they move together.
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # `npm ci` installs exactly what the lockfile pins and refuses to
+      # re-resolve, which is what makes this a gate rather than a sample of
+      # today's registry. --ignore-scripts matches the image: the only package
+      # here with a meaningful install script is `sharp`, for `next/image`, and
+      # this app has no `next/image`.
+      - name: Install (from the lockfile, no install scripts)
+        working-directory: web
+        run: npm ci --ignore-scripts
+
+      - name: Gate 6 - vitest
+        working-directory: web
+        run: npm test
+
+      - name: Gate 7 - tsc --noEmit
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Gate 8 - eslint
+        working-directory: web
+        run: npm run lint
+
+      # Last, because it is the slowest and the one the other three exist to
+      # make cheap. The npm script pins NODE_ENV=production itself and that pin
+      # is load-bearing: an inherited NODE_ENV=development makes `next build`
+      # prerender /404 from the dev pages-router error component and fail on
+      # `<Html>`, an error naming a pages-router problem this app does not have.
+      # So the script is called, never `next build` directly.
+      - name: Gate 9 - next build
+        working-directory: web
+        run: npm run build
