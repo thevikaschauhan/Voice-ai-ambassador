@@ -1,0 +1,26 @@
+# Ignore file for web/Dockerfile specifically (BuildKit reads
+# `<dockerfile>.dockerignore` in preference to a root `.dockerignore`).
+#
+# It lives here rather than at the repo root so that this card touches nothing
+# outside `web/`: the agent-worker image is a separate service with a different
+# context, and a single shared root ignore file would be one file two cards edit.
+# If a builder ever ignores this in favour of a root file, the only consequence
+# is a larger context and a slower build, never a wrong image.
+#
+# The build context is the REPO ROOT, because the app reads `../data` at request
+# time - so `data/` is deliberately not excluded here.
+.git
+.gitignore
+**/node_modules
+**/.next
+**/__pycache__
+**/*.pyc
+**/.venv
+**/.pytest_cache
+**/.ruff_cache
+**/.DS_Store
+# The agent tree is not part of the web image. Its own service builds it.
+agent
+# Agent scratch space and per-agent worktrees: never part of any service image.
+hive
+worktrees
