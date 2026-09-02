@@ -11,6 +11,7 @@ demand back. These tests are what notices when it stops doing that.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,11 @@ import pytest
 
 AGENT_DIR = Path(__file__).resolve().parents[1]
 TOOL = AGENT_DIR / "tools" / "reviewer_packet.py"
+
+# Derived from the tool, never restated: the packet's language set is the
+# tool's own, and a copy here would be a second source of truth for it.
+sys.path.insert(0, str(AGENT_DIR / "tools"))
+from reviewer_packet import LANGUAGE_NAMES  # noqa: E402
 
 pytest.importorskip("yaml")
 
@@ -281,3 +287,96 @@ def test_the_preroll_ask_says_we_will_not_borrow_the_english(arabic):
     seam the buyer hears rather than one it hides."""
     section = arabic.split("## 2b")[1].split("## 3.")[0]
     assert "we play nothing" in section
+
+
+# --- packet completeness against the data directory ------------------------
+#
+# The tests above each guard ONE copy type, and each was added beside the
+# artifact it guards. That is why none of them caught #81: a new native-copy
+# file arrives with no test, so nothing was watching the set itself.
+
+DATA_DIR = AGENT_DIR.parent / "data"
+
+# A file needs native authorship if it SAYS so. Matching the marker rather than
+# listing the files is the whole point: a list here would be the same
+# hand-maintained thing that already failed once. The narrower phrasings are
+# deliberate - `whitelist.yaml` carries `VERIFY:` markers too, but they ask for
+# a Golden Visa threshold and a phone number from the client, which is factual
+# verification and not a language anyone has to speak.
+_NATIVE_MARKER = re.compile(
+    r"native[-\s](?:authored|speaker|reviewer)|written by a native",
+    re.IGNORECASE,
+)
+
+
+def packet_module():
+    """The tool as a module, for reading its declarations rather than its output."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("reviewer_packet", TOOL)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def native_copy_files() -> set[str]:
+    """Every data file that asks for native-authored copy, found by reading."""
+    return {
+        path.name
+        for path in DATA_DIR.glob("*.yaml")
+        if _NATIVE_MARKER.search(path.read_text(encoding="utf-8"))
+    }
+
+
+def test_every_native_copy_file_has_a_section_in_the_packet():
+    """The guard #81 did not have.
+
+    `farewells.yaml` landed needing an authored farewell, a closing-phrase
+    list and a courtesy list in both languages, and the packet did not ask for
+    any of it. Every individual test above still passed, because each watches
+    its own artifact and none watches the set.
+
+    So this compares the packet's declared sections against the data directory
+    itself. The day another native-copy file lands without a section, this
+    fails, and it fails in the only window that matters: before the native
+    session it would have been collected in.
+    """
+    missing = native_copy_files() - set(packet_module().NATIVE_COPY_SECTIONS)
+    assert not missing, (
+        f"these data files ask for native-authored copy and the packet has no "
+        f"section for them: {sorted(missing)}. Add a section to "
+        f"tools/reviewer_packet.py and register it in NATIVE_COPY_SECTIONS, "
+        f"rather than registering it without asking."
+    )
+
+
+def test_the_registry_does_not_claim_files_that_no_longer_need_native_copy():
+    """The other direction, so the table cannot rot into a fiction.
+
+    A stale entry is not harmless: it is a heading this test would then demand
+    forever, which is how a packet ends up asking a reviewer for copy nothing
+    reads.
+    """
+    stale = set(packet_module().NATIVE_COPY_SECTIONS) - native_copy_files()
+    assert not stale, (
+        f"NATIVE_COPY_SECTIONS names files that no longer ask for native "
+        f"copy: {sorted(stale)}"
+    )
+
+
+@pytest.mark.parametrize("language", sorted(LANGUAGE_NAMES))
+def test_every_registered_section_is_actually_in_the_generated_packet(language):
+    """Registering a section is not the same as writing one.
+
+    Without this, `NATIVE_COPY_SECTIONS` could be brought up to date by adding
+    a line to a dict, which would satisfy the test above while the reviewer's
+    document still asks for nothing.
+    """
+    packet = generate(language)
+    sections = packet_module().NATIVE_COPY_SECTIONS
+    for filename, heading in sorted(sections.items()):
+        assert heading in packet, (
+            f"{filename} is registered to section {heading!r}, which is not in "
+            f"the generated {language} packet"
+        )
