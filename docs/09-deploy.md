@@ -480,19 +480,22 @@ response body:
 | Response | What it means |
 |---|---|
 | 403 `{"room":null,"reason":"the listening view is not available on the hosted demo; start a call instead"}` | **This is the pass on the hosted service**, and it is the first row because it is the only one a deployed `web` with `DEMO_ACCESS_CODE` set will ever give you. The listening view finds its room by asking LiveKit for the newest occupied one, which is right for a laptop watching its own agent and wrong on a service where rooms are per-visitor. The rows below are the laptop's answers, and you will see them only with the access code unset. |
-| 503 `{"room":null,"reason":"no LiveKit room is open; the agent is not in a call"}` | **This is the pass.** All three variables are set and LiveKit accepted them; there is simply no call in progress yet. This is the correct answer for a healthy, idle deployment. |
+| 503 `{"room":null,"reason":"no LiveKit room is open; the agent is not in a call"}` | **This is the pass on a laptop**, with the access code unset. All three variables are set and LiveKit accepted them; there is simply no call in progress yet. You will not see it on the hosted service, and that costs the check something - see "What this check cannot prove" below. |
 | 200 `{"url":...,"token":...,"room":...}` | Also healthy, and a call is live right now. The token is listen-only and expires in ten minutes. |
 | 503 `{"room":null,"reason":"LiveKit is not configured"}` | At least one of `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` is missing or blank on the service. A variable set to nothing but whitespace counts as missing here, because the reader trims before it tests, so a half-finished paste looks identical to an absent one. |
 | 503 `{"room":null,"reason":"LiveKit call failed: ..."}` | The variables are set and LiveKit refused them or could not be reached. The tail carries the cause: `invalid API key` (observed) is a key this project does not know. A well-formed key and secret that do not match each other surface instead as `LiveKit rejected the API key and secret for this project`. |
 
 **A healthy idle deployment answers 403 hosted, or 503 on a laptop, and neither
 is a defect.** It is worth saying plainly because the instinct is to read any
-4xx or 5xx as broken and start changing variables. The route is honest rather than reassuring: it will not mint
-a ticket to a call that does not exist. If you want a 200 out of this endpoint,
-start a call.
+4xx or 5xx as broken and start changing variables. The route is honest rather
+than reassuring: on a laptop it will not mint a ticket to a call that does not
+exist, and on the hosted service it will not mint one at all. If you want a 200
+out of this endpoint, start a call on a laptop.
 
 There is one way to get a misleading 200, and it is worth knowing before you
-trust one. `LIVEKIT_ROOM` is unset on Railway on purpose, per the contract
+trust one. It is a laptop-mode trap now rather than a hosted one, since the
+hosted 403 lands before any of this, but it is the reason `LIVEKIT_ROOM` stays
+unset on Railway too. `LIVEKIT_ROOM` is unset on purpose, per the contract
 above. **If it is set, the route stops calling LiveKit at all**: it skips the
 room lookup and mints the token locally, and token minting is offline signing.
 Measured, with a deliberately fake key and secret and `LIVEKIT_ROOM` pinned: the
@@ -526,8 +529,11 @@ Python in it and a handshake file the other container owns.
 2. `GET /` on the web domain returns 200. The image is layered right.
 3. `GET /api/session/room` and read the reason. On the hosted service the pass
    is 403 `the listening view is not available` - that route is closed there by
-   design. On a laptop, `no LiveKit room is open` or a 200 are both passes, and
-   `is not configured` or `call failed` are the two real failures.
+   design, and because it is closed this step no longer says anything about the
+   `web` service's LiveKit credentials. On a laptop, with the access code unset,
+   `no LiveKit room is open` or a 200 are both passes and `is not configured` or
+   `call failed` are the two real failures - and there the step does prove those
+   credentials, which is the difference between the two modes.
 4. `GET /api/session/stream` returns 503 `bridge not configured`. Expected.
    Leave it.
 5. `GET /talk` returns 200, then `POST /api/talk` with no body:
@@ -549,22 +555,72 @@ Python in it and a handshake file the other container owns.
 Anything beyond this is a live call, which is `task-railway-live-smoke` and
 `docs/07-demo-runbook.md`, not deploy verification.
 
+### What this check cannot prove
+
+Say the limit out loud, because the section spends its length insisting that a
+green tick is not evidence and would be a poor place to quietly overclaim.
+
+On the hosted service these six steps prove two things and not a third. They
+prove the **worker's** copy of the credentials, because `registered worker` only
+appears after LiveKit accepted them (step 1). They prove the **web image's
+layout**, because `/` cannot answer 200 without `data/` beside the app (step 2).
+They do **not** prove the `web` service's `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET`. Every step above would pass exactly as it does now with
+three junk values on that service.
+
+The reason is #78, and it is a fix rather than a regression: `api/session/room`
+used to reach LiveKit to find the room, which is what made its 503 the one
+response that proved those three values were *correct* rather than merely
+*present*. It is closed on the hosted service now, and the 403 lands before
+`liveKitConfig()` is even read. Nothing else in the check calls LiveKit from the
+web service. Worth being precise about the risk this leaves: the worker and the
+`web` service hold **separate copies** of the same three variable names, pasted
+separately, so one can be right while the other is wrong and every check above
+still passes.
+
+**The proof is the first real call on `/talk`, and it is owed after any change
+to the `web` service's variables.** That call is the only thing that makes the
+web service present its credentials to LiveKit. What a wrong trio looks like
+there, read from `api/talk/route.ts`:
+
+| Response | What it means |
+|---|---|
+| 503 `{"room":null,"reason":"this demo is not connected to LiveKit"}` | One of the three is missing or blank on the `web` service. `liveKitConfig()` trims before it tests, so a whitespace-only paste reads as absent. |
+| 502 `{"room":null,"reason":"LiveKit rejected this project key and secret"}` | All three are set, LiveKit was reachable, and it refused them. This is the wrong-trio answer, and the one worth memorising. |
+| 502 `{"room":null,"reason":"could not start a call just now"}` | Something else failed on the way, an unreachable host among them. The detail is in the service log, not the response. |
+| 429 | The concurrency cap, not a fault: the service is fine and the visitor should come back. |
+
+So the honest reading of a green six-step check is "this deployment is up and
+correctly built, and the worker can reach LiveKit". Whether the *browser* can is
+settled by one call, and until somebody makes it the web service's trio is
+unverified. That is the trade the safety fix bought, and it is a good trade: a
+verification step is not worth handing a stranger a token for someone else's
+conversation.
+
 **Provenance, since a verification procedure is worth only what it was checked
 against.** Steps 2, 3 and 4 were run against a production `web` build from this
 tree: the 200 on `/` with no variables set, the `is not configured`, `invalid
 API key` and `bridge not configured` reasons, and the misleading pinned-room 200
 are all observed responses rather than readings of the source.
 
-**The pass in step 3 is no longer an inference.** It was written from
-`lib/livekit/room.ts` and the assertion in `web/tests/room-grant.test.ts`,
-because provoking it needs valid credentials and a project with no room open. It
-has since been observed on the hosted deployment: `GET /api/session/room`
-answered 503 `no LiveKit room is open; the agent is not in a call` against
-deployment 53a92ef7. That is worth more than a green tick, and worth more than
-the wording suggests. The string is only reachable *after* `listRooms()`
-returned, so it does not merely mean the three variables are set - it means
-LiveKit accepted the key and the secret. It is the one response in this section
-that proves the secrets are correct rather than present.
+**Step 3's `no LiveKit room is open` pass was observed, and then went out of
+reach.** It was first written from `lib/livekit/room.ts` and the assertion in
+`web/tests/room-grant.test.ts`, because provoking it needs valid credentials and
+a project with no room open. It was then observed on the hosted deployment:
+`GET /api/session/room` answered 503 `no LiveKit room is open; the agent is not
+in a call` against deployment 53a92ef7. That mattered more than the wording
+suggested, because the string is only reachable *after* `listRooms()` returned,
+so it did not merely mean the three variables were set - it meant LiveKit had
+accepted the key and the secret.
+
+**#78 closed that route on the hosted service at 17:55Z**, for the reason in the
+first row of step 3's table, and the observation above now describes laptop mode
+only. It is left standing rather than deleted because it is still the laptop's
+expectation and it is still the only response either mode has ever produced that
+proved those credentials correct. What the hosted service lost with it is set out
+in "What this check cannot prove" above; the 403 that replaced it was observed on
+deployment bad71116 the same evening, along with the `/` 200 on the Next 16
+build and the worker's registration on d0e1b65d.
 
 One line here still could not be provoked and is marked as such: the `rejected
 the API key and secret` wording is read from that route's error handling, since
