@@ -70,15 +70,19 @@ RUN cd agent && uv run --no-sync python -m adapter.agent download-files
 
 WORKDIR /app/agent
 
-# The framework's own health server, and the reason there is no healthcheck in
-# railway.json: in `start` mode it binds 8081 on all interfaces with `GET /`
-# returning 200 (503 when the inference process is dead or the LiveKit
-# connection has failed) and `GET /worker` returning worker JSON. The port is a
-# fixed prod default in `WorkerOptions` with no CLI flag and no env var, so it
-# cannot follow Railway's injected `PORT`. Exposed for anyone who wires a probe
-# to 8081 directly; see the PR body for the one-line product change that would
-# let it read `PORT` instead.
-EXPOSE 8081
+# NO EXPOSE, and no healthcheck in railway.json. docs/09-deploy.md is explicit
+# that this service "needs no domain, no port, and no health-check route, and it
+# should be given none" - a public domain on an outbound-only worker is a hole
+# with nothing behind it.
+#
+# One qualification to that doc's wording, measured rather than assumed: the
+# framework DOES open a listening socket inside the container. In `start` mode
+# it binds 8081 on all interfaces, with `GET /` returning 200 (503 when the
+# inference process is dead or the LiveKit connection has failed) and
+# `GET /worker` returning worker JSON. It is simply never published or probed -
+# and it could not follow a platform-injected `PORT` anyway, because the port is
+# a fixed prod default in `WorkerOptions` with no CLI flag and no env var. So
+# the deployment has no ingress; the process is not quite socketless.
 
 # Exec form, no shell: the worker must receive SIGTERM itself to drain.
 CMD ["uv", "run", "--no-sync", "python", "-m", "adapter.agent", "start", "--drain-timeout", "600"]
