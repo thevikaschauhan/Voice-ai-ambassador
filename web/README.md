@@ -18,13 +18,19 @@ npm run build
 `data/inventory.json` and `data/disclosures.yaml` are read from the repo root at
 request time, so the dev server must be started from inside `web/`.
 
-**The `next` scripts pin `NODE_ENV` and that is load-bearing.** `next build` is
-a production build by definition, and inheriting a non-production `NODE_ENV`
-(some agent shells export `NODE_ENV=development`) makes it prerender `/404` from
-the dev pages-router error component and fail with `<Html> should not be
-imported outside of pages/_document`. The error names a pages-router problem
-this app does not have, which is what makes it expensive to diagnose. Do not
-remove the prefixes.
+**The `next` scripts pin `NODE_ENV`.** Under Next 15 that pin was
+load-bearing: inheriting a non-production `NODE_ENV` (some agent shells export
+`NODE_ENV=development`) made `next build` prerender `/404` from the dev
+pages-router error component and fail with `<Html> should not be imported
+outside of pages/_document` - an error naming a pages-router problem this app
+does not have, which is what made it expensive to diagnose.
+
+Next 16 no longer does that, measured rather than assumed: the fourteen client
+chunks from a `NODE_ENV=development` build are byte-identical to the pinned
+one. The prefixes stay anyway. They cost nothing, `next start`'s runtime
+behaviour under a development `NODE_ENV` has not been measured, and one command
+for the build on a laptop, in CI and in the image is worth more than the
+characters saved.
 
 ## What is here
 

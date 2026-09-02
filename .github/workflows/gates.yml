@@ -198,11 +198,12 @@ jobs:
         run: npm run lint
 
       # Last, because it is the slowest and the one the other three exist to
-      # make cheap. The npm script pins NODE_ENV=production itself and that pin
-      # is load-bearing: an inherited NODE_ENV=development makes `next build`
-      # prerender /404 from the dev pages-router error component and fail on
-      # `<Html>`, an error naming a pages-router problem this app does not have.
-      # So the script is called, never `next build` directly.
+      # make cheap. The npm script pins NODE_ENV=production itself. That pin was
+      # load-bearing under Next 15, where an inherited NODE_ENV=development made
+      # `next build` prerender /404 from the dev pages-router error component
+      # and fail on `<Html>`; under Next 16 the client chunks come out
+      # byte-identical either way. The script is still what gets called, so the
+      # build is one command here, in the image and on a laptop.
       - name: Gate 9 - next build
         working-directory: web
         run: npm run build
