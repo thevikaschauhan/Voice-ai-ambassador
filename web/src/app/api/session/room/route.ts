@@ -1,5 +1,6 @@
 import { RoomUnavailable, liveKitConfig } from '@/lib/livekit/config'
 import { mintViewerGrant } from '@/lib/livekit/room'
+import { hosted } from '@/lib/hosted'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -11,8 +12,30 @@ export const dynamic = 'force-dynamic'
  * expires in ten minutes and can do exactly one thing: subscribe to audio in
  * one named room. The API secret that signed it stays here, which is the whole
  * reason this route exists rather than the browser talking to LiveKit itself.
+ *
+ * IT IS CLOSED ON THE HOSTED SERVICE, and that is a safety fix rather than a
+ * feature decision. `mintViewerGrant` finds the room by asking LiveKit for the
+ * newest occupied one, which is exactly right when a laptop is watching the one
+ * call its own agent is in. On the public service, rooms are per-visitor: the
+ * same lookup would hand this listen-only token to whichever stranger's
+ * conversation started most recently. There is no version of "the newest room"
+ * that means "the room you are entitled to hear", so the answer is not a better
+ * heuristic - it is that a hosted visitor never gets a token for a room they
+ * did not create. They get the talk page, which creates one.
+ *
+ * The laptop behaviour is untouched: with no access code set, this is what it
+ * always was.
  */
 export async function GET(): Promise<Response> {
+  if (hosted()) {
+    return Response.json(
+      {
+        room: null,
+        reason: 'the listening view is not available on the hosted demo; start a call instead',
+      },
+      { status: 403, headers: { 'cache-control': 'no-store' } },
+    )
+  }
   if (liveKitConfig() === null) {
     // Not an error: a machine with no LiveKit configured is the ordinary state
     // for replay work, and the surface keeps its honest "no audio track" label.

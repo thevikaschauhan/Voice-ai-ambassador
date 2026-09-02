@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { replayTextCore } from '@/lib/textmode/core'
 import { agentDir, processTextCore } from '@/lib/textmode/process'
+import { textModeRefused } from '@/lib/textmode/availability'
 
 export const runtime = 'nodejs'
 
@@ -27,6 +28,20 @@ interface Body {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  if (textModeRefused()) {
+    // A labelled replay is safe when a presenter is there to narrate the
+    // label, and misleading when a client is typing their own questions into
+    // it and getting scripted answers back (docs/09-). Refusing says less and
+    // implies nothing false.
+    return NextResponse.json(
+      {
+        error:
+          'text mode is not available on the hosted demo; it needs the agent on the same machine',
+      },
+      { status: 503 },
+    )
+  }
+
   let body: Body
   try {
     body = (await request.json()) as Body
