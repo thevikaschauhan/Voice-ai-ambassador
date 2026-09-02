@@ -757,18 +757,43 @@ class _RecordedSay:
     allow_interruptions: Any
 
 
+class _FakeHandle:
+    """A speech handle whose playout the caller must await, like the real one.
+
+    `interrupted` is settable, because the close path branches on it: a
+    farewell the buyer talked over must not end the call.
+    """
+
+    def __init__(self, interrupted: bool = False) -> None:
+        self.interrupted = interrupted
+        self.waited = False
+
+    async def wait_for_playout(self) -> None:
+        self.waited = True
+
+
 class _FakeSession:
-    def __init__(self) -> None:
+    def __init__(self, interrupt_farewell: bool = False) -> None:
         self.said: list[_RecordedSay] = []
+        self.handles: list[_FakeHandle] = []
+        self.interrupts = 0
+        self._interrupt_farewell = interrupt_farewell
 
     def say(self, text, *, allow_interruptions=NOT_GIVEN, **kwargs):
         self.said.append(_RecordedSay(text, allow_interruptions))
-        return None
+        handle = _FakeHandle(interrupted=self._interrupt_farewell)
+        self.handles.append(handle)
+        return handle
+
+    def interrupt(self) -> None:
+        self.interrupts += 1
 
 
-def _attach(monkeypatch, agent: AmbassadorAgent) -> _FakeSession:
+def _attach(
+    monkeypatch, agent: AmbassadorAgent, *, interrupt_farewell: bool = False
+) -> _FakeSession:
     """A real AgentSession needs a room, a worker and live credentials."""
-    session = _FakeSession()
+    session = _FakeSession(interrupt_farewell=interrupt_farewell)
     monkeypatch.setattr(
         AmbassadorAgent, "session", property(lambda self: session), raising=False
     )
@@ -3631,3 +3656,288 @@ def test_an_empty_environment_value_counts_as_unset(monkeypatch, clean_transport
 
     assert "LIVEKIT_URL" in adapter_agent.export_transport_env(["dev"])
     assert os.environ["LIVEKIT_URL"] == "wss://from-the-env-file"
+
+
+# --- ending the call ------------------------------------------------------
+#
+# The client asked for this after their first hosted call: nothing ended a call
+# but the buyer closing the tab, so a client who said goodbye heard silence.
+# The order is the whole of the feature - a close that races the audio is a
+# hang-up, not a goodbye.
+
+
+def _closing_agent(monkeypatch, **session_kwargs):
+    buf = StringIO()
+    log = EventLog("sess_test", stream=buf, verbose=False)
+    closed: list[str] = []
+
+    async def close_call(reason: str) -> None:
+        closed.append(reason)
+
+    agent = AmbassadorAgent(
+        settings=make_settings(language="en"), log=log, close_call=close_call
+    )
+    session = _attach(monkeypatch, agent, **session_kwargs)
+    return agent, session, buf, closed, log
+
+
+async def test_the_farewell_is_spoken_and_awaited_before_the_call_ends(monkeypatch):
+    agent, session, buf, closed, log = _closing_agent(monkeypatch)
+
+    await agent.say_farewell_and_close("buyer_farewell")
+
+    assert len(session.said) == 1
+    # The authored copy, not something composed on the way out.
+    assert "thank you" in session.said[0].text.lower()
+    # Interruptible, unlike the disclosure: the buyer may still have something
+    # to say, and hanging up mid-sentence is worse than the silence this
+    # replaces.
+    assert session.said[0].allow_interruptions is True
+    # The close waited for the audio to actually play.
+    assert session.handles[0].waited is True
+    assert closed == ["buyer_farewell"]
+
+
+async def test_call_ended_is_emitted_before_the_close_is_asked_for(monkeypatch):
+    """`ctx.shutdown` runs the callback that seals the audit, so `call_ended`
+    has to be on the stream before the close is requested or the seal and the
+    reason race each other."""
+    buf = StringIO()
+    log = EventLog("sess_test", stream=buf, verbose=False)
+    order: list[str] = []
+
+    async def close_call(reason: str) -> None:
+        order.append("closed")
+
+    agent = AmbassadorAgent(
+        settings=make_settings(language="en"), log=log, close_call=close_call
+    )
+    _attach(monkeypatch, agent)
+
+    await agent.say_farewell_and_close("buyer_farewell")
+
+    await log.aclose()
+    events = [e["event"] for e in json_lines(buf)]
+    assert "call_ended" in events
+    assert order == ["closed"]
+    # And nothing was emitted after the close was requested.
+    assert events[-1] == "call_ended"
+
+
+async def test_the_duration_cap_still_hangs_up_when_talked_over(monkeypatch):
+    """The asymmetry that matters, stated as a test.
+
+    A buyer who talks over their OWN goodbye was not finished asking, and that
+    cancels the close - a request they can withdraw. The duration cap is not a
+    request: it bounds spend on a public URL, so talking over it must not
+    extend the call. The audit still records that it was talked over.
+    """
+    agent, session, buf, closed, log = _closing_agent(
+        monkeypatch, interrupt_farewell=True
+    )
+
+    await agent.say_farewell_and_close("duration_cap")
+
+    assert closed == ["duration_cap"]
+    await log.aclose()
+    events = [e["event"] for e in json_lines(buf)]
+    assert "farewell_interrupted" in events
+    assert "call_ended" in events
+
+
+async def test_only_one_close_per_call(monkeypatch):
+    """Two paths can ask - the buyer's goodbye and the duration cap - and the
+    buyer must not hear the farewell twice."""
+    agent, session, buf, closed, log = _closing_agent(monkeypatch)
+
+    await agent.say_farewell_and_close("buyer_farewell")
+    await agent.say_farewell_and_close("duration_cap")
+
+    assert len(session.said) == 1
+    assert closed == ["buyer_farewell"]
+
+
+async def test_the_duration_cap_uses_the_same_farewell(monkeypatch):
+    agent, session, buf, closed, log = _closing_agent(monkeypatch)
+
+    await agent.say_farewell_and_close("duration_cap")
+
+    assert len(session.said) == 1
+    assert closed == ["duration_cap"]
+    await log.aclose()
+    reasons = [e["reason"] for e in json_lines(buf) if e["event"] == "call_ended"]
+    assert reasons == ["duration_cap"]
+
+
+async def test_a_buyer_who_disconnects_gets_no_speech(monkeypatch):
+    """Nothing to say and nobody to say it to - but the call is still recorded
+    as ended, and closed, so a farewell cannot start into an empty room."""
+    agent, session, buf, closed, log = _closing_agent(monkeypatch)
+
+    agent.note_buyer_left()
+
+    assert session.said == []
+    # And no farewell afterwards.
+    await agent.say_farewell_and_close("buyer_farewell")
+    assert session.said == []
+
+    await log.aclose()
+    reasons = [e["reason"] for e in json_lines(buf) if e["event"] == "call_ended"]
+    assert reasons == ["buyer_left"]
+
+
+async def test_the_model_never_gets_a_turn_the_buyer_ended():
+    """The defect the first live run found, as a test.
+
+    The first version detected the goodbye in `on_user_turn_completed` and
+    called `session.interrupt()`. Nothing was speaking yet, so the interrupt
+    was a no-op, the model then generated its own "Thank you for your time.
+    Have a pleasant day." - and the buyer heard TWO farewells, the model's and
+    the authored one. Taking the turn away from the model is the only version
+    that cannot do that, so the assertion is about the model never being
+    called, not about an interrupt being requested.
+    """
+    agent, log, buf, spy = make_agent([HealthyStream(["Anything else? "])])
+
+    chunks = await run_llm_node(agent, user_ctx("Thanks, that is all. Goodbye."))
+
+    text = spoken(chunks)
+    assert "ambassador can pick this up" in text
+    assert "Anything else?" not in text
+    # The model was never asked, so there is nothing to interrupt.
+    assert spy.chat_ctxs == []
+    await log.aclose()
+    events = [e["event"] for e in json_lines(buf)]
+    assert "llm_request" not in events
+
+
+async def test_the_close_is_armed_by_the_farewell_turn_not_fired_by_it():
+    """Firing when the copy is handed over would end the call while the
+    farewell is still in the TTS pipeline - a hang-up, not a goodbye."""
+    agent, log, buf, spy = make_agent([HealthyStream(["Anything else? "])])
+
+    await run_llm_node(agent, user_ctx("Goodbye."))
+
+    assert agent._closing_turn == agent._tracker.turn_index
+    assert agent._closing is False
+    await log.aclose()
+    assert "call_ended" not in buf.getvalue()
+
+
+async def test_an_ordinary_turn_arms_nothing():
+    agent, log, buf, spy = make_agent([HealthyStream(["A studio is AED 985,000. "])])
+
+    await run_llm_node(agent, user_ctx("What does a studio at Skyrise cost?"))
+
+    assert agent._closing_turn is None
+    assert len(spy.chat_ctxs) == 1
+
+
+async def test_a_goodbye_turn_costs_the_buyer_no_policy_attempt():
+    """The farewell is checked BEFORE the confirmation policies read the
+    utterance, and that ordering is load-bearing for a small reason: the
+    policies count the buyer's attempts, and a goodbye is not an attempt at
+    anything. Reading it would spend one of the three the recognition policy
+    allows before it hands over."""
+    agent, log, buf, spy = make_agent([HealthyStream(["Anything else? "])])
+
+    await run_llm_node(agent, user_ctx("Thanks, that is all. Goodbye."))
+    await log.aclose()
+
+    # The per-turn policy readings, not the once-per-session capability lines.
+    events = [e["event"] for e in json_lines(buf)]
+    for policy_event in (
+        "budget_confirmation",
+        "budget_confirmation_spoken",
+        "project_confirmation",
+        "recognition_escalation",
+    ):
+        assert policy_event not in events, policy_event
+    # And the recognition policy's attempt counter is untouched, so a goodbye
+    # cannot spend one of the three it allows before handing over.
+    assert agent._recognition.consecutive == 0
+
+
+async def test_the_farewell_copy_is_validated_at_construction(monkeypatch):
+    """Copy that fails our own guardrails is a defect in the copy, so it is
+    caught in front of whoever started the process - the same rule the
+    confirmation terminal lines already follow."""
+    log = EventLog("sess_test", stream=StringIO(), verbose=False)
+
+    class _RejectsOnlyTheFarewell:
+        """Scoped to the farewell, or the confirmation terminal lines fail
+        first and the test proves nothing about this copy."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def compose(self, raw: str) -> str:
+            if "ambassador can pick this up" in raw:
+                raise ValueError("an ungrounded figure")
+            return raw
+
+    with pytest.raises(RuntimeError, match="farewell copy"):
+        AmbassadorAgent(
+            settings=make_settings(language="en"),
+            log=log,
+            guard_factory=_RejectsOnlyTheFarewell,
+        )
+
+
+async def test_an_invalidated_preemptive_generation_does_not_hand_the_goodbye_back():
+    """The second defect the local runs found, and the reason the farewell is
+    checked above the observed-turn gate.
+
+    `preemptive_generation` runs `llm_node` on the PARTIAL. When the final
+    transcript is not equivalent the framework cancels that generation and
+    calls `llm_node` again - and with the check below the gate, the second call
+    fell through to the model. Measured live: the authored farewell was
+    cancelled, the model's own "Have a pleasant day." played in its place, and
+    the call still ended. The buyer got a goodbye nobody authored.
+    """
+    agent, log, buf, spy = make_agent(
+        [HealthyStream(["Anything else? "]), HealthyStream(["Anything else? "])]
+    )
+
+    # The partial is not a farewell, so the first pass runs the model.
+    ctx = user_ctx("Thanks")
+    await run_llm_node(agent, ctx)
+    assert len(spy.chat_ctxs) == 1
+
+    # The final is, and the framework asks again.
+    message = lk_llm.ChatMessage(role="user", content=["Thanks, that is all."])
+    await agent.on_user_turn_completed(ctx, message)
+    chunks = await run_llm_node(agent, user_ctx("Thanks, that is all."))
+
+    assert "ambassador can pick this up" in spoken(chunks)
+    # And the second pass did NOT go to the model.
+    assert len(spy.chat_ctxs) == 1
+    assert agent._closing_turn == agent._tracker.turn_index
+
+
+async def test_the_audit_records_what_the_buyer_heard_on_the_last_turn():
+    """A farewell turn runs no model, so `generated_sentences` is empty by
+    design - the same as the other deterministic lines. The copy therefore has
+    to reach `spoken_chunks`, or the record for the final turn of every polite
+    call claims nothing was said."""
+    agent, log, buf, spy = make_agent([HealthyStream(["Anything else? "])])
+
+    await run_llm_node(agent, user_ctx("Thanks, that is all."))
+
+    chunks = agent._tracker.spoken_chunks
+    assert len(chunks) == 1
+    assert "ambassador can pick this up" in chunks[0].text
+    assert chunks[0].completed is True
+    await log.aclose()
+    assert "farewell_spoken" in buf.getvalue()
+
+
+async def test_a_farewell_the_buyer_talked_over_is_audited_as_incomplete():
+    """`mark_interrupted` flips the chunk, and the same signal cancels the
+    close - one fact, two consequences, and they must not disagree."""
+    agent, log, buf, spy = make_agent([HealthyStream(["Anything else? "])])
+
+    await run_llm_node(agent, user_ctx("Thanks, that is all."))
+    agent._tracker.mark_interrupted()
+
+    assert agent._tracker.spoken_chunks[-1].completed is False

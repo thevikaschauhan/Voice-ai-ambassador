@@ -1,0 +1,121 @@
+# The end of a call: how the agent recognises that the buyer is closing the
+# conversation, and the words it says before hanging up.
+#
+# The client asked for this after their first hosted call. Until now nothing
+# ended a call except the buyer closing the tab, so a client who said goodbye
+# heard silence.
+#
+# DETECTION IS CONSERVATIVE ON PURPOSE, because the two failure directions are
+# not symmetric. A missed goodbye leaves the call behaving exactly as it does
+# today; a false one hangs up on a live buyer. So a farewell has to be what the
+# utterance IS, not a word inside it: at least one `phrases` entry must match,
+# and everything else in the utterance must be a `courtesies` token. That is
+# what keeps "before we say goodbye, what about the payment plan" a question
+# about the payment plan.
+#
+#   phrases     the closing intents themselves. Multi-word entries are matched
+#               as contiguous token runs, so "that is all" does not fire on the
+#               word "all" alone.
+#   courtesies  tokens that may surround a farewell without changing what it
+#               is ("ok, bye then", "thanks so much, goodbye"). A courtesy
+#               NEVER fires on its own - "thank you" mid-call is not an ending,
+#               which is why a phrase match is required as well.
+#   speech      the authored farewell. Fixed copy, never model-generated, the
+#               same rule as the disclosure and the guardrail bridges
+#               (ADR-013): a farewell that varies is not authored copy. It
+#               still passes the guardrail pipeline like any other speech.
+#
+# Quote every entry. Bare no/yes/on/off load as YAML 1.1 BOOLEANS, and a
+# coerced boolean is a word that can never match - the trap `currencies.yaml`
+# and `recognition.yaml` both walked into. The loader rejects a non-string
+# loudly rather than leaving a dead entry in a table.
+
+phrases:
+  en:
+    - "goodbye"
+    - "good bye"
+    - "bye"
+    - "bye bye"
+    - "that is all"
+    - "that's all"
+    - "that is everything"
+    - "that's everything"
+    - "i have to go"
+    - "i've got to go"
+    - "i need to go"
+    - "i must go"
+    - "no more questions"
+    - "nothing else"
+    - "we are done"
+    - "we're done"
+    - "i'm done"
+    - "have a good day"
+    - "speak soon"
+    - "talk soon"
+
+  # VERIFY: native-authored Arabic closing phrases. Left EMPTY rather than
+  # machine-translated, and empty is SAFE here in a way it is not for the
+  # disclosure: with no phrases the detection simply never fires in Arabic and
+  # the call ends the way it does today. A guessed phrase list is the dangerous
+  # option, because a wrong entry hangs up on a live buyer.
+  ar: []
+
+  # VERIFY: native-authored Hindi closing phrases. Same rule, same reason.
+  hi: []
+
+courtesies:
+  en:
+    - "thanks"
+    - "thank"
+    - "you"
+    - "ok"
+    - "okay"
+    - "alright"
+    - "all"
+    - "right"
+    - "please"
+    - "so"
+    - "much"
+    - "very"
+    - "well"
+    - "then"
+    - "now"
+    - "for"
+    - "your"
+    - "help"
+    - "time"
+    - "today"
+    - "great"
+    - "good"
+    - "cheers"
+    - "bye"
+    - "and"
+    - "i"
+    - "it"
+    - "is"
+    - "was"
+    - "that"
+    - "lovely"
+    - "perfect"
+  ar: []
+  hi: []
+
+speech:
+  en: >
+    Thank you for your time today. If you would like to go further, a Binghatti
+    ambassador can pick this up with you whenever suits. Goodbye.
+
+  # VERIFY: the Arabic and Hindi farewells are the ENGLISH copy standing in
+  # until a native speaker authors them, the same stand-in rule as
+  # `fallbacks.yaml` and for the same reason: a turn must never end in silence,
+  # and the loader therefore refuses an empty one. In practice a call in these
+  # languages already runs in English today, because `disclosures.yaml` has no
+  # ar/hi copy and a call cannot open without it - so this stand-in matches the
+  # rest of that call rather than introducing a new language switch.
+  # Do not machine-translate them.
+  ar: >
+    Thank you for your time today. If you would like to go further, a Binghatti
+    ambassador can pick this up with you whenever suits. Goodbye.
+  hi: >
+    Thank you for your time today. If you would like to go further, a Binghatti
+    ambassador can pick this up with you whenever suits. Goodbye.
