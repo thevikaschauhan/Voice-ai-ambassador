@@ -144,6 +144,217 @@ what the registry offers today. `--ignore-scripts` is safe in this tree because
 the only package with a meaningful install script is `sharp`, for `next/image`,
 and this app has no `next/image`. When the web gates do land in CI, the Node
 version belongs in both places or in neither.
+## Verifying a deploy
+
+You have pasted the six secrets and Railway has redeployed. This section is how
+you find out whether that worked. Most of the states below were produced on
+purpose, against a production `web` build and the worker image from this tree;
+the rest are read from the framework source at the version this repo pins. Which
+is which is recorded at the end, because a verification procedure that cannot
+say where its own expectations came from is just folklore.
+
+**The one rule, and it holds for both services: the deploy status is not
+evidence.** Railway shows you whether the container started, and both of these
+services can start perfectly and still be useless. The worker can fail every
+attempt to reach LiveKit and then exit *successfully*. The `web` healthcheck can
+pass with every LiveKit variable missing. So there are two specific things to
+look at instead, one per service, and neither of them is the green tick.
+
+### `agent-worker`: you are looking for one log line
+
+The deployment has no domain and no published port, by the design in the section
+above, so there is nothing to curl from outside; the framework's own health
+server binds 8081 inside the container and is never published, which is the
+point of it. The liveness signal is a single line in the deploy log:
+
+```
+railway logs -s agent-worker -d
+```
+
+Up means a record whose message is `registered worker`, carrying the worker's
+`id`, the `url` it registered against, and the `region`
+(`livekit/agents/worker.py`). Until that line appears the worker is not in the
+pool and no buyer can reach it, whatever the dashboard says.
+
+Two details will trip you up if you go looking for the wrong shape:
+
+- **The production log is JSON.** `setup_logging` installs a `JsonFormatter`
+  whenever devmode is off, and the container's `CMD` runs the `start`
+  subcommand, so `id` is a field in a JSON object and not the `id=...` suffix
+  you get in a local dev run. Grep for `registered worker`, not for `id=`.
+- **`railway logs` defaults to the most recent *successful* deployment**, or the
+  latest one if none has succeeded. A crash-loop is not a successful deployment,
+  so on a service that deployed cleanly last week the default view shows you
+  *that* deployment and hides today's refusal entirely. Whenever the status is
+  failed or crashed, pass the deployment id explicitly, or read that
+  deployment's log in the dashboard.
+
+**A missing variable is loud, and you do not need this section to catch it.**
+`adapter.agent.preflight()` runs ahead of `cli.run_app`, names what it wants on
+stderr, and exits 1. Measured in this image with an empty environment:
+
+```
+missing credentials for the voice path: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENROUTER_API_KEY, FISH_API_KEY
+Set them in agent/.env (see agent/.env.example) or in the environment.
+```
+
+A non-zero exit is what `restartPolicyType: ON_FAILURE` in the root
+`railway.json` is for, so the deploy crash-loops through its ten retries and
+ends up **failed** on the dashboard, with the variable names in the log.
+
+That was not true before #66, and the old behaviour is worth keeping in mind
+because it is still the shape of the failure below: the framework's own path
+logs `worker failed`, drains, and exits **0** (measured at the #64 gate), and a
+clean exit never trips `ON_FAILURE`, so nothing retries and Railway reports a
+healthy deployment sitting on a process that has already given up. Preflight
+took the *missing* variable out of that path. It could not take the rest.
+
+**So the case this check exists for is a variable that is present and wrong.**
+Preflight tests presence, not validity: a credential that is complete nonsense
+passes it and reaches the framework, where the quiet exit still lives. Measured
+in this image, all six variables set to junk with `LIVEKIT_URL` pointing at an
+unresolvable host:
+
+- sixteen `failed to connect to livekit, retrying in Ns` warnings, each carrying
+  the real cause in its `error` field,
+- then `worker failed`, `RuntimeError: failed to connect to livekit after 16
+  attempts`, and `draining worker` whose `id` reads `unregistered` rather than a
+  real worker id,
+- and **exit code 0**, two minutes and seventeen seconds after start.
+
+Two consequences, and both of them bite. The exit code means Railway shows that
+deploy as having stopped cleanly rather than crashed. The two minutes mean a
+status check thirty seconds after pasting a bad key finds a container that is
+running perfectly well, because it is still retrying. A wrong key against a real
+LiveKit host takes the same road rather than a faster one: the connection and
+the register handshake sit inside a single `except Exception` on that retry
+counter, so a rejection is retried sixteen times and ends in the same silent
+exit, with the refusal in the `error` field instead of a DNS failure.
+
+Which is why this check is positive-only. **Do not verify the worker by looking
+for a crash, because when a value is merely wrong there will not be one.**
+Verify it by finding `registered worker`, and treat the absence of that line as
+the failure whatever the deploy status says. The log then tells you
+which of the two failures you have: names on stderr and a crash-loop is a
+missing variable, sixteen retries ending in a drain marked `unregistered` is a
+wrong one.
+
+One limit on the positive case, so you do not read it as more than it says.
+`registered worker` proves the worker reached LiveKit; it does not prove the
+worker can hear. `STT_ENABLED` defaults to off, and with it off preflight does
+not ask for `DEEPGRAM_API_KEY` at all, which is why it is absent from the five
+names above. Getting the recogniser configured is the environment contract's
+business rather than this check's, but a registered worker is not on its own a
+worker that can take a call.
+
+### `web`: the healthcheck proves the layout, not the configuration
+
+`healthcheckPath` is `/`, and a 200 there is worth exactly one thing: the image
+is layered correctly. `/` is a dynamic route that reads `../data` at request
+time, so it cannot answer 200 unless `data/` really is sitting beside the app in
+the container. That is the whole reason `/` was chosen over a dedicated endpoint,
+and a mislayered image fails it with the `ENOENT` on `/data/inventory.json`
+described in the contract above.
+
+What a green healthcheck does **not** tell you is whether LiveKit is configured.
+Measured on a production build with no LiveKit variables set at all: `GET /`
+still answers **200**. The page renders from `../data` and the surface
+honestly reports no audio track. So finish the check at the route that actually
+reads the credentials.
+
+### `web`: on `api/session/room`, the reason is the evidence
+
+```
+curl -i https://<your-railway-domain>/api/session/room
+```
+
+Read the `reason`, not the status code. Every string below is the literal
+response body:
+
+| Response | What it means |
+|---|---|
+| 503 `{"room":null,"reason":"no LiveKit room is open; the agent is not in a call"}` | **This is the pass.** All three variables are set and LiveKit accepted them; there is simply no call in progress yet. This is the correct answer for a healthy, idle deployment. |
+| 200 `{"url":...,"token":...,"room":...}` | Also healthy, and a call is live right now. The token is listen-only and expires in ten minutes. |
+| 503 `{"room":null,"reason":"LiveKit is not configured"}` | At least one of `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` is missing or blank on the service. A variable set to nothing but whitespace counts as missing here, because the reader trims before it tests, so a half-finished paste looks identical to an absent one. |
+| 503 `{"room":null,"reason":"LiveKit call failed: ..."}` | The variables are set and LiveKit refused them or could not be reached. The tail carries the cause: `invalid API key` (observed) is a key this project does not know. A well-formed key and secret that do not match each other surface instead as `LiveKit rejected the API key and secret for this project`. |
+
+**A healthy idle deployment answers 503, and that is not a defect.** It is worth
+saying plainly because the instinct is to read any 5xx as broken and start
+changing variables. The route is honest rather than reassuring: it will not mint
+a ticket to a call that does not exist. If you want a 200 out of this endpoint,
+start a call.
+
+There is one way to get a misleading 200, and it is worth knowing before you
+trust one. `LIVEKIT_ROOM` is unset on Railway on purpose, per the contract
+above. **If it is set, the route stops calling LiveKit at all**: it skips the
+room lookup and mints the token locally, and token minting is offline signing.
+Measured, with a deliberately fake key and secret and `LIVEKIT_ROOM` pinned: the
+route answers **200 with a fully-formed signed token**. Nothing validates those
+credentials until a browser tries to use the token and is refused by LiveKit. So
+a 200 with the room pinned proves that the service is running, and nothing
+whatsoever about whether the secrets you pasted are correct. Leave `LIVEKIT_ROOM`
+unset and the 503 reason does that job properly.
+
+### `api/session/stream`: 503 is the finished state
+
+```
+curl -i https://<your-railway-domain>/api/session/stream
+```
+
+Expect 503 `{"live":false,"reason":"bridge not configured"}`, and stop there.
+This is not a fault and there is no variable that fixes it: the event bridge is
+same-host by construction, which is issue #63. `AMBASSADOR_BRIDGE_HANDSHAKE` and
+`AMBASSADOR_AGENT_DIR` are deliberately unset on this service, the contract above
+says why, and the surface degrades to replay exactly as intended. A deployer who
+sets them chasing this 503 gets a container pointing at a directory with no
+Python in it and a handshake file the other container owns.
+
+### The whole check, in order
+
+1. `railway logs -s agent-worker -d` and find `registered worker`. No line means
+   not deployed, whatever the status says. If the deploy is failed or crashed,
+   pass the deployment id or the default view will show you the last good one
+   instead; stderr there names the missing variable. If it is green and the line
+   is absent, look for the retry warnings and the drain.
+2. `GET /` on the web domain returns 200. The image is layered right.
+3. `GET /api/session/room` and read the reason. `no LiveKit room is open` or a
+   200 are both passes; `is not configured` or `call failed` are the two real
+   failures, and they tell you which.
+4. `GET /api/session/stream` returns 503 `bridge not configured`. Expected.
+   Leave it.
+
+Anything beyond this is a live call, which is `task-railway-live-smoke` and
+`docs/07-demo-runbook.md`, not deploy verification.
+
+**Provenance, since a verification procedure is worth only what it was checked
+against.** Steps 2, 3 and 4 were run against a production `web` build from this
+tree: the 200 on `/` with no variables set, the `is not configured`, `invalid
+API key` and `bridge not configured` reasons, and the misleading pinned-room 200
+are all observed responses rather than readings of the source. Two lines here
+could not be provoked and are marked as such: the `no LiveKit room is open`
+pass needs valid credentials and an empty project, and is instead the documented
+behaviour of `lib/livekit/room.ts` asserted in `web/tests/room-grant.test.ts`;
+the `rejected the API key and secret` wording is read from that same route's
+error handling.
+
+On the worker side, both failure shapes were run in the image built from the
+root `Dockerfile` at this commit: the empty-environment exit 1 with its five
+names, and the junk-credential run with its sixteen retries, `unregistered`
+drain and exit 0 with the timing taken from the container's own start and finish
+times. Three things there are not mine. The `registered worker` line and its
+JSON shape come from the pinned framework source, since a real registration
+needs real credentials. The pre-#66 exit 0 on *missing* credentials was measured
+at the #64 gate. And the claim that a wrong key against a reachable LiveKit host
+ends the same way is read from `worker.py` - one `except Exception` around the
+connect and the register handshake, on the same retry counter - not provoked,
+because provoking it needs a real project to be refused by.
+
+One boundary on the whole section: none of it has been run on Railway. Every
+response and exit code above came from the two images built out of this tree,
+and the platform's half - that a non-zero exit crash-loops and ends as a failed
+deploy, and what `railway logs` shows by default - is the documented behaviour
+of the policy in `railway.json` and of the CLI's own `--help`. Confirming it on
+the real service is `task-railway-live-smoke`.
 
 ## Open: what the two-service split breaks
 

@@ -9,6 +9,16 @@
 #
 # The build context is the REPO ROOT, because the app reads `../data` at request
 # time - so `data/` is deliberately not excluded here.
+#
+# Env files: never. Mirrors the root `.dockerignore`: the env contract is
+# `agent/.env.example` and the real values are Railway service variables. This
+# file needs its own copy of the rule because `web/Dockerfile` does `COPY web ./`
+# into the builder stage, and `next build` reads `.env.local` - so a developer's
+# local env file would be both copied into a layer and baked into the build.
+**/.env
+**/.env.*
+!**/.env.example
+
 .git
 .gitignore
 **/node_modules
