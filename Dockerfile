@@ -41,7 +41,20 @@ FROM ghcr.io/astral-sh/uv:0.10.7-python3.14-trixie-slim
 
 # Bytecode compiled at build time and no .pyc writes at runtime: a worker that
 # compiles on first import pays it inside the first job.
+#
+# `UV_NO_CACHE=1` and NOT a `--mount=type=cache` on the sync steps. Railway's
+# builder rejects an id-less cache mount outright - `dockerfile invalid: flag
+# '--mount=type=cache,target=/root/.cache/uv' is missing an id argument` - and
+# the id it wants is `s/<service id>-<target>`, which would put one Railway
+# service's identifier in the repo and make the build unportable. Local docker
+# accepts the id-less form, so this failed only on the platform.
+#
+# It is an ENV rather than `--no-cache` per invocation on purpose: the failure
+# mode of forgetting the flag on a uv step added later is a silently fatter
+# image, not a build error, and one declaration cannot be forgotten. uv falls
+# back to a temporary directory it discards, so no cache lands in a layer.
 ENV UV_COMPILE_BYTECODE=1 \
+    UV_NO_CACHE=1 \
     UV_LINK_MODE=copy \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -52,8 +65,7 @@ WORKDIR /app
 # re-download the tree. `--no-install-project` because the project itself is
 # still missing at this point.
 COPY agent/pyproject.toml agent/uv.lock ./agent/
-RUN --mount=type=cache,target=/root/.cache/uv \
-    cd agent && uv sync --frozen --no-install-project
+RUN cd agent && uv sync --frozen --no-install-project
 
 # `data/` sits BESIDE `agent/`, not inside it, and that is not cosmetic: every
 # loader resolves it as `Path(__file__).resolve().parents[3] / "data"` from
@@ -62,8 +74,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY data/ ./data/
 COPY agent/ ./agent/
 
-RUN --mount=type=cache,target=/root/.cache/uv \
-    cd agent && uv sync --frozen
+RUN cd agent && uv sync --frozen
 
 # Plugin model files, so the first call is not the one that downloads them.
 RUN cd agent && uv run --no-sync python -m adapter.agent download-files
