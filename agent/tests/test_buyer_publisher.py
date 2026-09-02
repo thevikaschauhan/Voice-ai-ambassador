@@ -424,3 +424,107 @@ def test_the_wrong_turn_never_leaks_into_the_label(tmp_path, capsys):
     tail = bp.EventTail(tmp_path / "run.jsonl")
     asyncio.run(tail.wait_for("turn_complete", turn=7, timeout=0.15))
     assert "turn_complete on turn 7" in capsys.readouterr().out
+
+
+# --- a scoped wait finds an event that has already been consumed ----------
+#
+# `EventTail` reads forward only, so a wait for an event that has already gone
+# past used to time out on a line that arrived. In the verified pacing run the
+# barged-in turn's seal cost 60 seconds that way: it was consumed while waiting
+# for the barge-in's own turn, and then waited for on its own account.
+
+
+def write_events(path: Path, *records: dict) -> None:
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+
+
+def test_a_scoped_wait_finds_a_seal_another_wait_already_consumed(tmp_path):
+    """The exact 60-second timeout from the run, as a unit test."""
+    log = tmp_path / "run.jsonl"
+    write_events(
+        log,
+        {"event": "turn_complete", "turn": 3},
+        {"event": "user_turn", "turn": 4},
+        {"event": "turn_complete", "turn": 4},
+    )
+    tail = bp.EventTail(log)
+
+    # The barge-in's own turn is looked up first, consuming turn 3's seal on
+    # the way past.
+    barged = asyncio.run(tail.wait_for("user_turn", turn=None, timeout=1))
+    assert barged is not None and barged["turn"] == 4
+
+    # And now the barged-in turn's seal, asked for after the fact.
+    sealed = asyncio.run(tail.wait_for("turn_complete", turn=3, timeout=1))
+    assert sealed is not None
+    assert sealed["turn"] == 3
+
+
+def test_an_unscoped_wait_stays_forward_only(tmp_path):
+    """The trap that makes the naive version of this fix wrong. "Any turn"
+    means the NEXT one - the clip-to-turn lookup depends on it - so history is
+    deliberately not searched, or every clip would resolve to the first
+    `user_turn` of the run."""
+    log = tmp_path / "run.jsonl"
+    write_events(log, {"event": "user_turn", "turn": 1})
+    tail = bp.EventTail(log)
+
+    first = asyncio.run(tail.wait_for("user_turn", turn=None, timeout=1))
+    assert first is not None and first["turn"] == 1
+
+    # Nothing new has arrived, so there is no next one.
+    assert asyncio.run(tail.wait_for("user_turn", turn=None, timeout=0.2)) is None
+
+
+def test_the_raw_form_stays_forward_only_too(tmp_path):
+    """An arbitrary predicate's intent is unknown, so satisfying it from
+    history could answer "the next X" with an X from a minute ago."""
+    log = tmp_path / "run.jsonl"
+    write_events(log, {"event": "brief", "extra": 1})
+    tail = bp.EventTail(log)
+
+    assert (
+        asyncio.run(tail.wait_while(lambda r: "extra" in r, timeout=1, label="x"))
+        is not None
+    )
+    assert (
+        asyncio.run(tail.wait_while(lambda r: "extra" in r, timeout=0.2, label="x"))
+        is None
+    )
+
+
+def test_a_scoped_wait_still_finds_an_event_that_arrives_later(tmp_path):
+    """Looking backwards must not stop it looking forwards."""
+    log = tmp_path / "run.jsonl"
+    log.write_text("", encoding="utf-8")
+    tail = bp.EventTail(log)
+
+    async def scenario():
+        async def append():
+            await asyncio.sleep(0.05)
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"event": "turn_complete", "turn": 9}) + "\n")
+
+        found, _ = await asyncio.gather(
+            tail.wait_for("turn_complete", turn=9, timeout=3), append()
+        )
+        return found
+
+    assert asyncio.run(scenario())["turn"] == 9
+
+
+def test_a_scoped_wait_ignores_the_same_event_on_another_turn_in_history(tmp_path):
+    """Looking backwards must not loosen the scoping #60 introduced."""
+    log = tmp_path / "run.jsonl"
+    write_events(log, {"event": "turn_complete", "turn": 2})
+    tail = bp.EventTail(log)
+
+    assert asyncio.run(tail.wait_for("turn_complete", turn=5, timeout=0.2)) is None
+
+
+def test_a_scoped_wait_that_never_arrives_still_names_the_turn(tmp_path, capsys):
+    tail = bp.EventTail(tmp_path / "run.jsonl")
+    assert asyncio.run(tail.wait_for("turn_complete", turn=4, timeout=0.15)) is None
+    assert "turn_complete on turn 4" in capsys.readouterr().out

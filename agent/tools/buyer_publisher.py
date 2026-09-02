@@ -432,23 +432,60 @@ class EventTail:
         `turn=None` still means "any turn" and is a legitimate answer - the
         disclosure precedes every turn, and the priming line's turn index is
         the thing being discovered - but it has to be said out loud.
+
+        A TURN-SCOPED WAIT ALSO LOOKS BACKWARDS; an unscoped one does not, and
+        the difference is not a detail. The stream is read forward only, so a
+        wait for an event that has already gone past times out on a line that
+        arrived - the barged-in turn's seal cost 60 seconds of a verified run
+        that way, consumed while waiting for the barge-in's own turn. Scoped
+        waits are safe to satisfy from history because `turn_complete`,
+        `user_turn` and `tts_first_audio` occur once per turn, so "turn 3's
+        seal" means the same thing whenever it is asked.
+
+        `turn=None` cannot be satisfied from history and is deliberately left
+        forward-only. "Any turn" only sensibly means the NEXT one: searching
+        history for it would make the clip-to-turn lookup return the first
+        `user_turn` of the whole run forever, which is worse than the timeout
+        this change exists to remove.
         """
         if turn is None:
-            described = label or event
-        else:
-            described = label or f"{event} on turn {turn}"
-        return await self.wait_while(
-            lambda record: record.get("event") == event
-            and (turn is None or record.get("turn") == turn),
-            timeout=timeout,
-            label=described,
-        )
+            return await self.wait_while(
+                lambda record: record.get("event") == event,
+                timeout=timeout,
+                label=label or event,
+            )
+
+        described = label or f"{event} on turn {turn}"
+
+        def matches(record: dict) -> bool:
+            return record.get("event") == event and record.get("turn") == turn
+
+        deadline = time.monotonic() + timeout
+        while True:
+            # Poll first so `seen` is current, then look at the whole history:
+            # one search covers both the line that arrived a minute ago and the
+            # one that has not arrived yet.
+            self.poll()
+            for record in self.seen:
+                if matches(record):
+                    return record
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.05)
+        print(f"  ! timed out waiting for {described} after {timeout:.0f}s", flush=True)
+        return None
 
     async def wait_while(self, predicate, *, timeout: float, label: str) -> dict | None:
         """The raw form, for a condition that is not one event on one turn.
 
         Prefer `wait_for`. This exists for the genuine exceptions and is named
         so that reaching for it is a visible decision.
+
+        Forward-only, and stays that way: an arbitrary predicate's intent is
+        unknown, so satisfying it from history could answer "the next X" with
+        an X from a minute ago. Only `wait_for`'s turn-scoped form is safe to
+        look backwards, because a named event on a named turn means the same
+        thing whenever it is asked.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
