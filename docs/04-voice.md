@@ -125,6 +125,31 @@ Ours is only the audit consequence: the `TurnRecord` marks the interrupted chunk
 
 The framework's default false-interruption handling (pause playback, two-second grace, resume if the "interruption" was a cough) is deliberately kept, and the audit adapts to it rather than the reverse: the turn seals when the speech handle resolves, not when the agent state changes - so a resumed false interruption audits `completed: true`, a confirmed interruption audits `completed: false`, and sealing is asynchronous relative to `agent_state_changed`. A session driver that tears down mid-speech must close the session (or call the agent's finalise hook) or the last turn seals with `audit_incomplete: true`.
 
+## Levels
+
+The three shipping voices are not level-matched, and two of them are community
+uploads whose loudness is a property of whatever audio they were cloned from.
+Measured on 2026-09-02 from ~25 seconds of real synthesis in each shipping id:
+speech RMS 2133 (en), 2395 (ar), 8299 (hi), with the Hindi voice peaking at
+30491 of a possible 32767. Back to back that is a jump in loudness on a
+language change, and the headroom on the loudest voice is thin enough that a
+louder-than-average sentence has somewhere unpleasant to go.
+
+`adapter/levels.py` holds a per-voice gain and `tts_node` applies it to the
+frames on their way out. **Every gain is at most 1.0**: voices are matched DOWN
+to the quietest rather than up to a middle. That is the safety argument, not a
+preference. The table is calibrated from about 25 seconds per voice, which
+estimates a voice's average level and bounds nothing; attenuation turns a bad
+estimate into a small loudness error, while amplification turns the same error
+into clipping - the one artefact a listener cannot un-hear, on the one path
+where no test can catch it (#41). The cost is that the demo sits at the
+quietest voice's level, which is a volume knob on the listener's side.
+
+A voice with no measurement is passed through untouched, which is what it did
+before this existed. That is silent at runtime by design, so a test asserts
+every id in `PROVISIONAL_VOICE_ID_*` is calibrated: when the client picks a
+voice at the meeting, the suite fails until somebody measures it.
+
 ## Recording, consent, data
 
 - Disclosure + transcription notice at call start, selected language, fixed copy from `data/disclosures.yaml`, native-reviewed, never model-generated. The copy says "transcribed", not "recorded" - the POC stores no raw audio, and the notice must match what is actually retained. Spoken from the agent's `on_enter` hook with `allow_interruptions=False`, so it completes even under barge-in.
