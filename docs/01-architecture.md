@@ -248,6 +248,8 @@ LLM_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_API_KEY=
 LLM_THINKING=off               # NEVER on for the voice path - thinking precedes speech (ADR-016)
 BRIEF_MODEL=qwen/qwen3.7-flash # same model, thinking off; separate var so it can diverge later
+STT_ENABLED=true               # defaults FALSE in code; off, preflight skips DEEPGRAM_API_KEY and the
+                               # worker registers deaf, so every deploy sets it explicitly
 STT_PROVIDER=deepgram          # decided, ADR-017 - streaming; openrouter is the retired path, still selectable
 DEEPGRAM_API_KEY=              # required whenever STT_ENABLED is set and the provider is deepgram
 DEEPGRAM_MODEL=nova-3          # Arabic dialect handling is this plus deepgram_language()
