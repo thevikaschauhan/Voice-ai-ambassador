@@ -1,0 +1,28 @@
+# Keep the build context to what the image actually needs. `data/` and `agent/`
+# are copied explicitly; everything else here is either secret, huge, or
+# irrelevant to a worker process.
+
+# Never. The env contract is agent/.env.example; the real values are Railway
+# service variables (docs/01- Deployment: "keys in Railway env only").
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local interpreters and caches - rebuilt inside the image, and a host venv
+# would be the wrong platform anyway.
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+
+# The other services and the fleet's own working state.
+web/
+hive/
+worktrees/
+
+# Build artefacts and captured runs.
+console-recordings/
+**/*.wav
+.git/
+.github/
