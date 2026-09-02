@@ -15,9 +15,17 @@ dependencies = [
 eval = "evals.cli:main"
 
 [dependency-groups]
+# `ruff` is pinned with `==` where everything else in this file uses `>=`, and
+# the exception is the whole point of it being here. `ruff format` output is
+# version-sensitive: a different minor version wraps some lines differently, so
+# a floating range lets the formatter that produces a tree disagree with the
+# `ruff format --check` gate that judges it, over a tree neither of them
+# changed. The gate and the checklist both run `uv run ruff`, so this line is
+# the single place the version is decided.
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "ruff==0.15.14",
 ]
 # The voice stack is a group, not a main dependency, so that ADR-002 stays
 # enforceable in practice rather than only on paper:

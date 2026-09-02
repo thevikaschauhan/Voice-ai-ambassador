@@ -12,12 +12,17 @@
 #
 # Gate 4 arrived last and is why the numbers shifted. It is separate from gate 3
 # because the two fail apart: `check` is lint rules, `format` is layout, and a
-# tree can satisfy either while breaking the other. Both pin the SAME ruff via
-# `uvx ruff@<version>` rather than running whatever is on the PATH, and that
-# matters more for `format` than for `check`: ruff is not a project dependency,
-# so an unpinned invocation picks up a contributor's own install, and a
-# different minor version wraps lines differently. The pin is what stops this
-# gate disagreeing with the formatter that produced the tree.
+# tree can satisfy either while breaking the other.
+#
+# Both run `uv run ruff`, and the version comes from `agent/pyproject.toml`,
+# which pins `ruff==0.15.14` in the dev group. That indirection is the point.
+# `format` output is version-sensitive - a different minor version wraps some
+# lines differently - so the formatter that produces a tree and the check that
+# judges it have to be the same binary, or they disagree about a tree neither
+# changed. Ruff used to be absent from the project entirely, which meant a
+# contributor's `uv run ruff` silently resolved to whatever they had installed
+# while CI pinned its own copy through `uvx`; the two agreed only by accident.
+# One pin, in the file that already decides every other version.
 #
 # Gate 2 lives in its own job on purpose. It removes the voice group from the
 # environment, so running it beside the others would leave whichever gate came
@@ -78,14 +83,15 @@ jobs:
         run: uv sync --frozen
 
       - name: Gate 3 - ruff check
-        run: uvx ruff@0.15.14 check agent
+        working-directory: agent
+        run: uv run --no-sync ruff check .
 
-      # The same pinned ruff as the step above, deliberately. See the note at
-      # the top: `format` output is version-sensitive and ruff is not in
-      # pyproject.toml, so an unpinned local `ruff format` and a pinned check
-      # here would eventually disagree about a tree neither had changed.
+      # The same ruff as the step above, from the same pin in pyproject.toml.
+      # See the note at the top for why `format` in particular needs that to be
+      # true rather than nearly true.
       - name: Gate 4 - ruff format --check
-        run: uvx ruff@0.15.14 format --check agent
+        working-directory: agent
+        run: uv run --no-sync ruff format --check .
 
       - name: Gate 1 - full test suite
         working-directory: agent
