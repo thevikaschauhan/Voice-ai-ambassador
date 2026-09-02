@@ -6,18 +6,28 @@
 #   1. `uv run pytest`                         the full suite
 #   2. `uv sync --no-group voice` then pytest  the core alone still runs (ADR-002)
 #   3. `ruff check`
-#   4. `uv run eval`                           offline: no key, no network, no spend
-#   5. 100% branch coverage on guardrail and derivation code
+#   4. `ruff format --check`                   formatting is a gate now, not a habit
+#   5. `uv run eval`                           offline: no key, no network, no spend
+#   6. 100% branch coverage on guardrail and derivation code
+#
+# Gate 4 arrived last and is why the numbers shifted. It is separate from gate 3
+# because the two fail apart: `check` is lint rules, `format` is layout, and a
+# tree can satisfy either while breaking the other. Both pin the SAME ruff via
+# `uvx ruff@<version>` rather than running whatever is on the PATH, and that
+# matters more for `format` than for `check`: ruff is not a project dependency,
+# so an unpinned invocation picks up a contributor's own install, and a
+# different minor version wraps lines differently. The pin is what stops this
+# gate disagreeing with the formatter that produced the tree.
 #
 # Gate 2 lives in its own job on purpose. It removes the voice group from the
 # environment, so running it beside the others would leave whichever gate came
 # next measuring a half-installed tree.
 #
 # The web gates are the other four, and they are here now:
-#   6. `npm test`        vitest
-#   7. `npm run typecheck`
-#   8. `npm run lint`
-#   9. `npm run build`   next build
+#   7. `npm test`        vitest
+#   8. `npm run typecheck`
+#   9. `npm run lint`
+#  10. `npm run build`   next build
 #
 # They run as their own job because they share nothing with the agent's: a
 # different toolchain, a different lockfile and a different working directory.
@@ -70,6 +80,13 @@ jobs:
       - name: Gate 3 - ruff check
         run: uvx ruff@0.15.14 check agent
 
+      # The same pinned ruff as the step above, deliberately. See the note at
+      # the top: `format` output is version-sensitive and ruff is not in
+      # pyproject.toml, so an unpinned local `ruff format` and a pinned check
+      # here would eventually disagree about a tree neither had changed.
+      - name: Gate 4 - ruff format --check
+        run: uvx ruff@0.15.14 format --check agent
+
       - name: Gate 1 - full test suite
         working-directory: agent
         run: uv run --no-sync pytest -q
@@ -78,7 +95,7 @@ jobs:
       # replays recorded replies, calls no provider and spends nothing, so it is
       # safe on every pull request including from a fork. It rewrites
       # docs/eval-report.md as a side effect; that is discarded with the runner.
-      - name: Gate 4 - eval suite, offline
+      - name: Gate 5 - eval suite, offline
         working-directory: agent
         run: uv run --no-sync eval
 
@@ -104,7 +121,7 @@ jobs:
       # The suite runs twice - once as gate 1, once here - so a plain test
       # failure and a coverage shortfall are different red steps rather than one
       # ambiguous one. It costs about seven seconds.
-      - name: Gate 5 - guardrail and derivation branch coverage is 100%
+      - name: Gate 6 - guardrail and derivation branch coverage is 100%
         working-directory: agent
         shell: bash
         run: |
@@ -185,15 +202,15 @@ jobs:
         working-directory: web
         run: npm ci --ignore-scripts
 
-      - name: Gate 6 - vitest
+      - name: Gate 7 - vitest
         working-directory: web
         run: npm test
 
-      - name: Gate 7 - tsc --noEmit
+      - name: Gate 8 - tsc --noEmit
         working-directory: web
         run: npm run typecheck
 
-      - name: Gate 8 - eslint
+      - name: Gate 9 - eslint
         working-directory: web
         run: npm run lint
 
@@ -204,6 +221,6 @@ jobs:
       # and fail on `<Html>`; under Next 16 the client chunks come out
       # byte-identical either way. The script is still what gets called, so the
       # build is one command here, in the image and on a laptop.
-      - name: Gate 9 - next build
+      - name: Gate 10 - next build
         working-directory: web
         run: npm run build

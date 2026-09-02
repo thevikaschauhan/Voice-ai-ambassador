@@ -44,7 +44,9 @@ SAMPLE_RATE = 24000
 # git (#53 saved the agent's own ear-check recording to the Desktop for the
 # same reason), so the test that reads them self-skips.
 SAMPLES = Path(
-    os.environ.get("BINGHATTI_VOICE_SAMPLES", Path.home() / "Desktop" / "binghatti-voice-samples")
+    os.environ.get(
+        "BINGHATTI_VOICE_SAMPLES", Path.home() / "Desktop" / "binghatti-voice-samples"
+    )
 )
 
 
@@ -61,7 +63,10 @@ def tone(rms: float, seconds: float = 1.0, hz: float = 200.0) -> bytes:
     n = int(SAMPLE_RATE * seconds)
     samples = array(
         "h",
-        (round(amplitude * math.sin(2 * math.pi * hz * i / SAMPLE_RATE)) for i in range(n)),
+        (
+            round(amplitude * math.sin(2 * math.pi * hz * i / SAMPLE_RATE))
+            for i in range(n)
+        ),
     )
     return samples.tobytes()
 

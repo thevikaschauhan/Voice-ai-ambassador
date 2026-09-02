@@ -132,6 +132,11 @@ export default defineRailway(() => {
       BRIEF_MODEL: preserve(),
       DEEPGRAM_API_KEY: preserve(),
       DEEPGRAM_MODEL: preserve(),
+      // Toby's per-call duration cap (#77), set to 600 on the hosted service.
+      // Named here for the reason the whole list exists: omit means delete, and
+      // an apply from a file that did not name it would take the cap away and
+      // leave a public URL with uncapped calls on metered providers.
+      DEMO_MAX_CALL_SECONDS: preserve(),
       DEMO_MODE: preserve(),
       FISH_API_KEY: preserve(),
       FISH_TTS_MODEL: preserve(),
