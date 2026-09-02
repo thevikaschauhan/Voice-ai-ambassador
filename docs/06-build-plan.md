@@ -27,6 +27,11 @@ A head start already exists: the pure core (schemas, inventory loading with comp
 | `agent-worker` service | The LiveKit Agents worker (`adapter/agent.py`). Outbound only: it joins rooms and exposes no port, so it takes no public domain |
 | `web` service | The Next.js surface, with the viewer token minted in its own server route (`api/session/room`, `livekit-server-sdk`). Public Railway domain. No separate token service |
 | Deployment secrets | Railway service variables only; keys never enter the repo. The env contract is `agent/.env.example`, referenced rather than copied |
+| Hosted client demo | The Railway URL is shared with the client, who tries the POC at their end with nobody from us in the room. So the hosted stack has to be a complete experience on its own, not a viewer onto a call happening somewhere else (`task-hosted-talk-page`) |
+| Browser talk path | The client enters an access code, picks a language, and talks. A server route creates a fresh room and mints a publish-capable token; the browser publishes its microphone with `livekit-client` and plays the agent back. The worker is dispatched automatically, so nothing has to tell it which room to join (`docs/09-deploy.md`) |
+| Per-call language | The room carries its language in room metadata and the entrypoint reads it, falling back to `LANGUAGE`. Three languages from one worker, instead of one worker per language (`task-hosted-language-from-metadata`) |
+| Hosted transcript source | The framework's own `lk.transcription` text streams, which carry the buyer-visible words and nothing else. No event bridge on the hosted service (`task-hosted-language-from-metadata` verifies it) |
+| Hosted access controls | A public URL in front of paid providers, so: an access code checked server-side, a cap on concurrent demo rooms, a short token TTL, short room timeouts, and a per-call duration cap. Named in `docs/09-deploy.md` |
 
 ### Faked (`STUB:`)
 
@@ -35,6 +40,8 @@ Booking = spoken read-back, no calendar. CRM write = console log behind an inter
 ### Deferred (do not build; present as roadmap)
 
 Remaining three languages - SIP/80015 - WhatsApp follow-up - durable event store + PII hashing - per-referenced-project allowed-set scoping - `compute_payment` tool - POC 2 - everything `PHASE-2:`.
+
+On the hosted client demo specifically, three things are deliberately absent rather than unfinished. **The latency meter, the guardrail and violation panels, and the ambassador brief stay laptop-only**: they carry the unredacted records that issue #30 keeps loopback-bound, and they are the tech lead's screen in the meeting rather than the client's. **Hosted text mode** stays laptop-only for the same reason it exists, being a fallback for a room with bad audio; on the hosted service it refuses with a reason instead of serving a script. **A transport for the event bridge between services** is not built, because the bridge's loopback restriction is a security property and replacing it is design work this POC does not need once the transcript comes from the framework. The hosted page says which panels it is not showing, in one sentence.
 
 On hosting specifically: one Railway project with one environment, so no staging tier. No custom domain (the generated Railway domain is the demo URL), no autoscaling, and no replica count above one. The web gates are no longer on that list: `npm test`, `npm run typecheck`, `npm run lint` and `npm run build` run as a third job in `gates.yml`. All of these are consequences of the two-service topology rather than separate choices; `docs/09-deploy.md` is where they are argued.
 

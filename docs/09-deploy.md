@@ -58,16 +58,21 @@ The last two are same-host paths, and the section below is about what that means
 ## The `web` service contract
 
 The table above is the inventory; this is the destination. Every value here is
-verified against a running container, not read off the source.
+verified against a running container, not read off the source, with one stated
+exception: the two `DEMO_` rows name variables that **do not exist yet**. They
+are listed so this document and the build cards use the same words for them, and
+they are the only rows in this table that nothing has run against.
 
 | Variable | Railway value | If absent |
 |---|---|---|
 | `LIVEKIT_URL` | service variable | `api/session/room` answers 503 with a reason; the surface keeps its "no audio track" label |
 | `LIVEKIT_API_KEY` | service variable | same |
 | `LIVEKIT_API_SECRET` | service variable | same |
-| `LIVEKIT_ROOM` | unset | the server picks a room name, which is the intended behaviour |
-| `AMBASSADOR_AGENT_DIR` | **unset** | text mode serves the replay core (issue #63) |
-| `AMBASSADOR_BRIDGE_HANDSHAKE` | **unset** | `api/session/stream` answers 503 `{"live":false,"reason":"bridge not configured"}` (issue #63) |
+| `LIVEKIT_ROOM` | unset | the server picks a room name, which is the intended behaviour. It must stay unset once the talk path ships: pinning one room name would send every client into the same call |
+| `AMBASSADOR_AGENT_DIR` | **unset** | text mode has no agent to spawn. Today that means it serves the labelled replay core; once `task-hosted-talk-page` lands it refuses with a reason instead (issue #63) |
+| `AMBASSADOR_BRIDGE_HANDSHAKE` | **unset** | `api/session/stream` answers 503 `{"live":false,"reason":"bridge not configured"}`. Stays unset on the hosted service by decision, not by omission: the hosted transcript comes from `lk.transcription` instead (issue #63) |
+| `DEMO_ACCESS_CODE` | service variable, never `NEXT_PUBLIC_` | the talk page refuses every attempt rather than letting anyone in; an unset gate is a closed gate, not an open one |
+| `DEMO_MAX_ROOMS` | service variable | the concurrency cap falls back to its in-code default rather than to unlimited |
 | `PORT` | injected by Railway | falls back to 3000, set in the image |
 | `NODE_ENV` | `production`, set in the image | the npm scripts pin it anyway, and that pin is load-bearing |
 
@@ -76,13 +81,16 @@ The three LiveKit variables carry the same names the agent uses, so they are the
 
 **There are no `NEXT_PUBLIC_` variables, and that absence is the security
 property rather than an omission.** Nothing the browser needs is a secret: it
-receives a signalling URL, a room name and a ten-minute listen-only token minted
-in the server route. A `NEXT_PUBLIC_` variable is compiled into the client
+receives a signalling URL, a room name and a short-lived token minted in the
+server route, listen-only for the viewer surface and publish-capable for the
+talk path. A token is not a credential in the sense that matters here: it is
+minted per call, scoped to one room, and expires. The API key and secret that
+sign it never leave the server. A `NEXT_PUBLIC_` variable is compiled into the client
 bundle, so introducing one to "make the URL available" would be the first step
 of putting credentials in a page.
 
-The last two variables must be left unset deliberately, not merely left blank by
-oversight. Both are same-host paths (issue #63): setting `AMBASSADOR_AGENT_DIR`
+The two `AMBASSADOR_` variables must be left unset deliberately, not merely left
+blank by oversight. Both are same-host paths (issue #63): setting `AMBASSADOR_AGENT_DIR`
 in this container points at a directory with no Python, no uv and no `agent/`,
 and `AMBASSADOR_BRIDGE_HANDSHAKE` would point at a file the other container
 writes. Unset is the state each reader already treats as "off", so the surface
@@ -361,19 +369,130 @@ deploy, and what `railway logs` shows by default - is the documented behaviour
 of the policy in `railway.json` and of the CLI's own `--help`. Confirming it on
 the real service is `task-railway-live-smoke`.
 
-## Open: what the two-service split breaks
+## The hosted stack is a client-facing demo source
 
-Two of the web surface's features are same-host by construction, and putting `web` and `agent-worker` in separate containers ends both. Neither is a defect in the code; both are deliberate designs that assumed one machine. Recording them here because `task-railway-web-service` and `task-railway-agent-service` will both walk into them.
+The open question in this section used to be whether the hosted stack is what
+the meeting is demonstrated from or a persistent environment alongside a laptop
+demo. It has been answered, and the answer is neither: **the web URL is shared
+with the client so they can try the POC at their end, with nobody from us
+present.** That is the demanding case. An unattended visitor cannot be handed a
+caveat out loud, so anything the hosted surface cannot honestly do it has to say
+for itself, on the page.
 
-**Text mode.** `web/src/lib/textmode/process.ts` spawns `uv run python -m adapter.textmode` as a child process in `AMBASSADOR_AGENT_DIR`. The `web` container is a Node image: no Python, no uv, no copy of `agent/`. So text mode cannot run there. This matters more than a missing panel, because text mode is in the ships table as the venue plan B and `docs/07-demo-runbook.md` lists it as the first recovery when audio fails in the room.
+Two of the surface's features are same-host by construction, and separate
+containers end both. Neither is a defect; both are deliberate designs that
+assumed one machine. Tracked as **issue #63**, which is the citation to use from
+a build pull request rather than this heading.
 
-**The live event stream.** The ambassador view's transcript, latency meter and guardrail decisions arrive over the event bridge, and the bridge is loopback-only on purpose: the agent binds nothing but localhost, the handshake is a 0600 file on a shared filesystem, and `handshake.ts` refuses any host that is not loopback so a rewritten handshake cannot point the token somewhere else. Two Railway services share neither a filesystem nor a loopback interface. The restriction is a security property, so the answer is not to relax it.
+**Text mode.** `web/src/lib/textmode/process.ts` spawns `uv run python -m
+adapter.textmode` as a child process in `AMBASSADOR_AGENT_DIR`. The `web`
+container is a Node image: no Python, no uv, no copy of `agent/`. Worth being
+precise about what happens today, because it is not a crash:
+`api/text-turn/route.ts` picks `processTextCore(dir)` only when
+`AMBASSADOR_AGENT_DIR` names a directory and `replayTextCore()` otherwise, and
+the page says which one it got. So the hosted text page serves a labelled replay
+rather than attempting a spawn.
 
-Both are tracked as **issue #63**, which is the citation to use from a build pull request rather than this heading.
+**The live event stream.** The transcript, latency meter and guardrail decisions
+arrive over the event bridge, and the bridge is loopback-only on purpose: the
+agent binds nothing but localhost, the handshake is a `0600` file on a shared
+filesystem, and `handshake.ts` refuses any host that is not loopback so a
+rewritten handshake cannot point the token elsewhere. Two Railway services share
+neither a filesystem nor a loopback interface. The restriction is a security
+property, so the answer is not to relax it.
 
-The question they raise is a scoping one, and it is not mine to answer: **is the hosted stack what the meeting is demonstrated from, or a persistent environment that exists alongside a laptop demo?** If the demo is driven from a laptop, both features keep working there and the hosted `web` is a public read-only view that is honestly missing two panels. If the demo is driven from the hosted URL, then the bridge and text mode need a transport between services rather than files and subprocesses, and that is design work nobody has scoped, touching a security property deliberately.
+### What ships instead
 
-The decision sits with the human as `task-railway-demo-source`. Until it is answered, neither build card should invent an answer: both build the current shape.
+**A browser talk path.** The client enters an access code, picks a language, and
+talks to the ambassador. A server route creates a room and mints a token that
+can publish, which is the one grant `mintViewerGrant` deliberately withholds
+(`room.ts`: `canPublish: false`, `hidden: true`, ten-minute TTL, for a surface
+that watches a call rather than joining one). The talk path needs its own route
+and its own grant rather than a loosened viewer grant, so that the listen-only
+token stays listen-only and the two intentions cannot be confused in review.
+
+The browser publishing a microphone does not breach the rule that the UI makes
+no provider calls. The microphone goes to LiveKit transport; recognition,
+synthesis and inference all stay in the worker with the keys. The rule is about
+where provider credentials live, and this moves none of them.
+
+**Per-call language.** Today the language is a per-worker environment value
+(`config.py`, `LANGUAGE`, default `en`), so a worker speaks one language for its
+whole life. The room will carry its language in room metadata and the entrypoint
+will read it, falling back to `LANGUAGE` when the metadata is absent or
+unparseable. The `ALLOW_UNCERTIFIED_LANGUAGE` rule is untouched: it is a
+certification gate on what may be spoken at all, not a routing decision.
+
+**The transcript, from the framework rather than the bridge.** The hosted
+transcript rail reads the framework's own transcription text streams. What
+reaches those streams is the buyer-visible text and only that, which is why this
+substitution is honest rather than a downgrade dressed up.
+
+**Text mode degrades honestly.** On the hosted service `/text` and
+`api/text-turn` refuse with a reason and a sentence on the page. This is a
+change from what happens today, and the change is the point: a labelled replay
+is safe when a presenter is there to narrate the label, and misleading when a
+client is typing their own questions into it and getting scripted answers back.
+Refusing says less and implies nothing false. Text mode stays what it was built
+to be, the laptop's fallback for a room with bad audio.
+
+**The tech lead's panels stay laptop-only.** The latency meter, the guardrail
+and violation panels and the ambassador brief carry unredacted records, which is
+exactly what issue #30 keeps loopback-bound. They are the tech lead's screen in
+the meeting, not the client's. The hosted page states in one sentence which
+panels it is not showing, instead of replaying a fixture into them.
+
+### Abuse controls, because the URL is public
+
+A public URL in front of metered providers is a spend surface. The access code
+is checked server-side and is never a `NEXT_PUBLIC_` variable, since a
+`NEXT_PUBLIC_` value is compiled into the client bundle and an access code in
+the bundle is decoration. A cap on concurrent demo rooms is enforced by listing
+rooms before minting a token, reusing the call `activeRoom` already makes. Token
+TTL stays short, and the room's own timeouts close rooms nobody joined and rooms
+everybody left.
+
+The per-call duration cap is **in scope**, on the test god's card set: it is a
+timer in the entrypoint and nothing more. `ctx.shutdown(reason=...)` exists and
+is synchronous, and the entrypoint already registers a shutdown callback that
+seals the audit, so a cancelled sleeper that calls it needs no new machinery and
+no new failure mode. Anything larger, such as metering minutes across calls or
+per-visitor quotas, is out.
+
+### What a builder should verify rather than take from this document
+
+These were read out of the pinned dependencies in this repository, not from a
+documentation site, so they describe the versions that actually ship
+(`livekit-agents` 1.7.0, `livekit-server-sdk` 2.18.0). They are still worth
+re-checking at build time, because a scope document is not a test.
+
+| Claim | Where it was read | Why it matters here |
+|---|---|---|
+| An unset `agent_name` means automatic dispatch | `worker.py`: `agent_name: str = ""`, documented as "Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically" | `agent.py` constructs `WorkerOptions(entrypoint_fnc=..., prewarm_fnc=...)` with no `agent_name`, so a server-created room gets the agent with nothing dispatching it explicitly |
+| The `WorkerOptions` path takes no `agent_name` from the environment | `worker.py`: the `LIVEKIT_AGENT_NAME` and `LIVEKIT_AGENT_NAME_OVERRIDE` fallbacks sit inside the `rtc_session` decorator, not on the `WorkerOptions` path | A stray `LIVEKIT_AGENT_NAME` service variable would otherwise silently switch the worker to explicit dispatch, and the symptom would be a room where the agent never arrives |
+| Transcription streams are published by default | `room_io/types.py`: `transcription_enabled: NotGivenOr[bool] = NOT_GIVEN`, "If not given, default to True"; the topic is `lk.transcription` in `types.py` | `session.start(agent=agent, room=ctx.room)` passes no output options, so the hosted rail has a source without an agent-side change |
+| Both sides of the conversation reach those streams | `room_io/room_io.py` builds a user transcription output and an agent transcription output in the same enabled branch | A rail fed by only one of them would show half a conversation |
+| The streams carry real words, not TTS respellings | `agent.py`'s `tts_node` applies `respell_stream` inside itself, and its own comment says respelling happens there and nowhere earlier; the framework forks transcription from `transcription_node`, which this agent does not override | The client would otherwise read "bin-GAH-tee" on screen |
+| The words are the verbalised form | `interception.py` yields `decision.spoken` | The rail reads as speech, so a figure appears as words rather than as digits. That is what the buyer heard, and it is the honest thing to show, but it is not the digit form a reader might expect |
+| Room metadata is readable before `connect` | `ctx.job.room.metadata` is a `str` on the job's room message (`protocol/models.pyi`), where `ctx.room` is the connected `rtc.Room` | The entrypoint calls `ctx.connect()` last, after building STT, TTS and the LLM from settings. Reading the job's copy means the language is known in time and the entrypoint needs no reordering |
+| `createRoom` takes metadata and both timeouts | `RoomServiceClient.d.ts`: `metadata?: string`, `emptyTimeout?: number`, `departureTimeout?: number`, `maxParticipants?: number` | Metadata is a string, so the language has to be serialised. `departureTimeout` is the one that reclaims a room after the client closes the tab, and without it the concurrency cap counts rooms nobody is in |
+
+Two things could not be verified by reading, and are the live smoke's job
+(`task-hosted-live-smoke`): that LiveKit Cloud dispatches this project's worker
+to a room the web service created, and that a real browser's published
+microphone reaches the worker and the agent's audio comes back.
+
+### The three build cards this scope implies
+
+- **`task-hosted-language-from-metadata`** (agent side): read the language from
+  room metadata with a fallback to `LANGUAGE`, and verify the transcription
+  streams carry what the table above says they carry.
+- **`task-hosted-talk-page`** (web side): the talk page and its publish-capable
+  token route, the access gate and the room cap, and `/text` refusing honestly.
+- **`task-hosted-live-smoke`**: a real browser against the hosted worker, which
+  is the only place the two unverifiable claims get settled.
+
+Issue #63 stays open until those cards close it.
 
 ## Not deployed
 

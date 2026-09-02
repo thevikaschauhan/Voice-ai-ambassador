@@ -63,6 +63,7 @@ Invite them to try it, any language they speak. Steering rules:
 - The cost slide: measured per-call economics against a staffed hotline minute (`docs/08-`).
 - The roadmap: three more languages, SIP into 80015 (an integration - LiveKit speaks SIP natively - not a rebuild), WhatsApp follow-up, CRM write-back, UAE-region inference, POC 2 investment advisor.
 - The asks (from `docs/00-`): price sheet or inventory feed, legal contact, booking system details, pilot scope.
+- The client URL: they can try it themselves afterwards, in any of the three languages, from a browser. Say what it does not show before they open it, because nobody will be there to say it later: the latency meter, the guardrail panels and the ambassador brief are this screen only, and the hosted text-mode tab refuses rather than replaying a script. The client's page carries the transcript and the conversation, which is the part that has to stand on its own (`docs/09-deploy.md`).
 
 ## Fallback ladder
 
