@@ -225,6 +225,7 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "endpointing": "turn index and four millisecond marks, all from the framework's own EOUMetrics",
     "tts_first_audio": "turn index and two millisecond marks",
     "tts_connection": "turn index, a boolean, milliseconds and a pooled-socket count",
+    "generation_discarded": "a turn index and four counts of what was dropped",
     "tts_pool_reprewarm": "turn index and an enum outcome the adapter itself wrote",
     "interrupted": "a turn index",
     "turn_complete": "timings, counts, booleans and the list of tool names fired",
@@ -601,6 +602,58 @@ class TurnTracker:
         """
         self.buyer_utterance = utterance
         self.adopted = True
+
+    def discard_generation(self) -> bool:
+        """Drop the records of a generation whose audio was cancelled.
+
+        `preemptive_generation` starts the model on a partial transcript. When
+        the final transcript is not equivalent, `AgentActivity` cancels that
+        speech handle and generates again - so the first generation's sentences
+        were inspected but never played, and leaving them on the turn made the
+        audit claim speech the buyer never heard. The audit claim is "what the
+        buyer actually heard" (docs/02-), so they come off.
+
+        WHAT IS NOT DROPPED, and why. Tool calls and the handover flag stay:
+        a tool that fired had a real side effect, and clearing `handed_over`
+        would let the replacement generation page a second ambassador for one
+        buyer turn - the notify-once rule outranks tidiness. The clock is not
+        reset either, for the same reason adoption does not reset it (#52): t0
+        is when the model began, which is still the honest start of the buyer's
+        wait.
+
+        The emitted stream keeps the discarded `guardrail` lines, because the
+        claim that every sentence is inspected rests on them. The event below is
+        what stops a consumer counting them as spoken.
+
+        Returns whether anything was actually dropped.
+        """
+        dropped = (
+            len(self.generated_sentences)
+            + len(self.spoken_chunks)
+            + len(self.violations)
+        )
+        if not dropped and self.llm_ttft is None:
+            return False
+        self._log.emit(
+            "generation_discarded",
+            turn=self.turn_index,
+            sentences=len(self.generated_sentences),
+            chunks=len(self.spoken_chunks),
+            violations=len(self.violations),
+            regenerated=self.regenerated,
+        )
+        self.generated_sentences = []
+        self.spoken_chunks = []
+        self.violations = []
+        self.guardrail_total = None
+        self.regenerated = False
+        # The latency marks describe the reply the buyer heard, and that reply
+        # has not started yet. Measured from an unchanged t0, so the buyer's
+        # wait still runs from when the model first began.
+        self.llm_ttft = None
+        self.llm_first_sentence = None
+        self.tts_first_audio = None
+        return True
 
     def record_endpointing(
         self,
