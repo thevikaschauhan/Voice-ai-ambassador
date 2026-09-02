@@ -33,6 +33,8 @@ The service's config is `.railway/railway.ts` (the section below says why it is 
 
 That drain needed a second number to mean anything, and this is where it was missing. `--drain-timeout 600` is how long the *worker* will wait to finish a call; `deploy.drainingSeconds` is how long *Railway* waits between SIGTERM and SIGKILL, and its default is **0**. So the worker was asking for ten minutes to hang up gracefully and being killed on the spot. The config sets `drainingSeconds: 600` to match the CMD, and the two numbers are deliberately the same so neither can drift into being the real one. Railway's docs give no maximum for it, only that default of 0, so 600 is matched to our own timeout rather than to a documented ceiling.
 
+Two of the worker's inputs are now per CALL rather than per service, and both are read in `entrypoint`. The language comes from the room's metadata, which the web talk route writes and this reads as the JSON string `{"v":1,"language":"en"|"ar"|"hi"}` - the codes are `Language` in `ambassador/schemas.py`, unknown keys are ignored so either side can add a field without a coordinated deploy, and a `v` that is present and not 1 is refused because `language` may not mean the same thing in a contract this build has not seen. An absent `v` is read as 1, since an absent version cannot be a future one. It is taken from `ctx.job.room.metadata`, the job's own room message, and not from `ctx.room`, which has no metadata until `ctx.connect()` has run and the entrypoint connects last, after STT, TTS and the prompt have been built from the language. Every failure - no metadata, unparseable, an unknown code, an unknown version - falls back to `LANGUAGE` and emits `language_selected` naming which failure it was, because an unattended visitor learns nothing from a call that refuses to start and we learn nothing from a fallback that does not say why. `ALLOW_UNCERTIFIED_LANGUAGE` is untouched by all of this: it gates what may be spoken at all, and a routing decision does not get to overrule a certification. The second per-call input is `DEMO_MAX_CALL_SECONDS`, the duration cap: zero disables it and zero is the default, so the laptop demo and the console are unchanged, and the hosted service sets a number because its URL is public and an abandoned open tab bills three metered providers. It is a cancelled sleeper that calls `ctx.shutdown()`, cancelled by the same shutdown callback that seals the audit, and it emits `call_duration_cap_armed` when it is set and `call_duration_cap` before it fires - the armed event exists so a cap that never took effect because its variable never reached the container is distinguishable from a call that simply ended early. An unreadable value refuses to start rather than being read as absent, because absent means uncapped.
+
 ### `web`
 
 The browser gets a listen-only ticket to the call in progress, and the route that mints it is `web/src/app/api/session/room/route.ts`. What crosses the wire is the signalling URL, a room name, and a token that expires in ten minutes and can do exactly one thing: subscribe to audio in one named room. The API secret that signs it stays on the server.
@@ -582,8 +584,14 @@ where provider credentials live, and this moves none of them.
 (`config.py`, `LANGUAGE`, default `en`), so a worker speaks one language for its
 whole life. The room will carry its language in room metadata and the entrypoint
 will read it, falling back to `LANGUAGE` when the metadata is absent or
-unparseable. The `ALLOW_UNCERTIFIED_LANGUAGE` rule is untouched: it is a
-certification gate on what may be spoken at all, not a routing decision.
+unparseable. The metadata is the JSON string `{"v":1,"language":"en"|"ar"|"hi"}`,
+unknown keys ignored, and the envelope version is read asymmetrically on purpose:
+a `v` that is present and not 1 is REFUSED, because `language` may not mean the
+same thing in a contract the reader has not seen, while an ABSENT `v` is read as
+1, because an absent version cannot be a future one and refusing it would turn a
+writer's omission into a wrong-language call. The `ALLOW_UNCERTIFIED_LANGUAGE`
+rule is untouched: it is a certification gate on what may be spoken at all, not a
+routing decision.
 
 **The transcript, from the framework rather than the bridge.** The hosted
 transcript rail reads the framework's own transcription text streams. What

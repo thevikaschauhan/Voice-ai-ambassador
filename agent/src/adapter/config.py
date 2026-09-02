@@ -180,6 +180,36 @@ def _explicit_bool(file_values: dict[str, str], key: str) -> bool:
     return raw in _TRUE_SPELLINGS or raw in _FALSE_SPELLINGS
 
 
+def _resolve_seconds(file_values: dict[str, str], key: str) -> int:
+    """A whole number of seconds, or nothing. Refuses anything else.
+
+    Parse and range live together here rather than the parse here and the
+    bound in `load_settings`, because they are one rule: a duration is a
+    non-negative integer.
+
+    It RAISES rather than falling back to the default, and the direction is the
+    point. Zero means no cap, so every unreadable value - a typo, a unit
+    suffix, a negative - would otherwise read as "no cap" on the one variable
+    whose job is to bound spend on a public URL. Refusing to start is loud and
+    happens on the operator's machine; a silently uncapped call is quiet and
+    happens on the client's.
+    """
+    raw = _resolve(file_values, key, "").strip()
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(
+            f"{key} must be a whole number of seconds (0 disables the cap), got {raw!r}"
+        ) from None
+    if value < 0:
+        raise ValueError(
+            f"{key} must be zero or positive (0 disables the cap), got {value}"
+        )
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     # LiveKit transport (ADR-005)
@@ -225,6 +255,13 @@ class Settings:
     # that permits it. Off by default: the disclosure is the one thing a call
     # may not open without.
     allow_uncertified_language: bool
+    # Hard stop for one call, in seconds; 0 disables it. The hosted demo is a
+    # public URL in front of metered providers (docs/09-), so a visitor who
+    # walks away from an open tab is a bill. Deliberately the whole of the
+    # answer to that: a timer in the entrypoint, no metering across calls and
+    # no per-visitor quota, both of which docs/09- rules out. Zero by default
+    # so the laptop demo and the console are unaffected.
+    demo_max_call_seconds: int
 
     @property
     def thinking_disabled(self) -> bool:
@@ -500,4 +537,5 @@ def load_settings(env_path: Path | None = None) -> Settings:
         allow_uncertified_language=_resolve_bool(
             file_values, "ALLOW_UNCERTIFIED_LANGUAGE"
         ),
+        demo_max_call_seconds=_resolve_seconds(file_values, "DEMO_MAX_CALL_SECONDS"),
     )

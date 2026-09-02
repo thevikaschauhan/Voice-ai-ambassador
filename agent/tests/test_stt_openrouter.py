@@ -210,6 +210,7 @@ def test_arabic_routes_to_the_day_zero_winner_when_it_is_set():
             demo_mode=False,
             language="en",
             allow_uncertified_language=False,
+            demo_max_call_seconds=0,
         )
 
     undecided = settings_with("")
