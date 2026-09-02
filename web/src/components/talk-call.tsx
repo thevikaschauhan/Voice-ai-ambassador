@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useRef, useState } from 'react'
 import { startTalking } from '@/lib/talk/session'
-import type { TalkHandle, TalkLine, TalkPhase } from '@/lib/talk/session'
+import type { TalkEnding, TalkHandle, TalkLine, TalkPhase } from '@/lib/talk/session'
 
 /**
  * The client-facing talk surface.
@@ -36,6 +36,7 @@ export function TalkCall() {
   const [trouble, setTrouble] = useState<string | null>(null)
   const [muted, setMuted] = useState(false)
   const [lines, setLines] = useState<readonly TalkLine[]>([])
+  const [ending, setEnding] = useState<TalkEnding | null>(null)
   const handleRef = useRef<TalkHandle | null>(null)
 
   const record = useCallback((line: TalkLine) => {
@@ -53,6 +54,10 @@ export function TalkCall() {
   const start = useCallback(async () => {
     setRefusal(null)
     setTrouble(null)
+    setEnding(null)
+    // The previous call's transcript goes here rather than after the connect,
+    // so a second call never opens with the last one's words still on screen.
+    setLines([])
     setPhase('starting')
     try {
       const response = await fetch('/api/talk', {
@@ -72,10 +77,13 @@ export function TalkCall() {
         {
           onPhase: setPhase,
           onLine: record,
+          onEnded: (reason) => {
+            setEnding(reason)
+            handleRef.current = null
+          },
           onTrouble: setTrouble,
         },
       )
-      setLines([])
       setMuted(false)
     } catch (error) {
       // The most likely cause by far is a refused microphone, and telling a
@@ -93,9 +101,10 @@ export function TalkCall() {
   }, [code, language, record])
 
   const end = useCallback(async () => {
+    // The handle reports its own ending, so this does not set one: one source
+    // for "why did the call stop", whether it stopped here or over there.
     await handleRef.current?.end().catch(() => {})
     handleRef.current = null
-    setPhase('ended')
   }, [])
 
   const inCall = phase === 'connecting' || phase === 'live' || phase === 'reconnecting'
@@ -135,6 +144,17 @@ export function TalkCall() {
       {trouble ? (
         <p className="border border-ink-700 px-5 py-3.5 text-[13px] text-ink-300" role="status">
           {trouble}
+        </p>
+      ) : null}
+      {ending !== null ? (
+        <p
+          className={`border px-5 py-3.5 text-[13px] leading-relaxed text-ink-300 ${
+            ending.kind === 'ended' ? 'border-ink-700' : 'border-warn-500/40'
+          }`}
+          role="status"
+        >
+          {ending.message}
+          {lines.length > 0 ? ' The conversation stays below.' : ''}
         </p>
       ) : null}
 
@@ -209,7 +229,7 @@ export function TalkCall() {
             disabled={busy || code.trim() === ''}
             className="border border-ink-600 px-5 py-2.5 text-[13px] tracking-wide text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
           >
-            {busy ? 'Starting' : 'Start call'}
+            {busy ? 'Starting' : ending !== null ? 'Start another call' : 'Start call'}
           </button>
         </form>
       )}
@@ -220,7 +240,9 @@ export function TalkCall() {
           <p className="text-[13px] text-ink-500">
             {inCall
               ? 'Listening. Say hello whenever you are ready.'
-              : 'The conversation will appear here as it happens.'}
+              : ending !== null
+                ? 'That call had nothing transcribed before it stopped.'
+                : 'The conversation will appear here as it happens.'}
           </p>
         ) : (
           <ol className="flex flex-col gap-3">

@@ -220,8 +220,47 @@ counted before the room is created, and two visitors arriving in the same
 instant can both pass the check: an accepted race whose cost is one extra room,
 against a lock this service has nowhere to keep.
 
-The transcript rail reads the framework's `lk.transcription` streams and appends
-each chunk. `TextStreamReader`'s own docstring says an async iteration returns
+**How a call ends is read from `DisconnectReason`, not inferred.** The agent
+finishing politely and the network dying look identical inside
+`ConnectionState`, and naming the wrong one is a lie in either direction: "the
+ambassador ended the call" after a dropped signal, or "connection lost" after a
+farewell the visitor just heard. So the reason is read. `ROOM_DELETED` (what a
+worker shutting its job down produces), `ROOM_CLOSED` (the room's own timeout)
+and `PARTICIPANT_REMOVED` (the shape a duration cap takes) are deliberate ends;
+`DUPLICATE_IDENTITY` says another tab took the call; everything else, an absent
+reason included, falls to "stopped unexpectedly". That default is the safe one -
+it is true whatever happened and it offers another call, where claiming a
+finished conversation would be a fabricated farewell.
+
+The ending is also where the session tears itself down, rather than in the End
+call button: the common case is the other side hanging up, so the transcript
+handler is unregistered, the audio sinks are detached and the microphone is
+released there, once, whoever ended it. The visitor's own End call routes
+through the same path so the two cannot drift. The farewell stays on screen, and
+the button becomes "Start another call" - which posts to `api/talk` again, so
+the access code and the room cap are re-checked server-side even though the
+code is still in the field.
+
+Reconnect attempts are bounded to four over about four seconds. The library
+default climbs through ten attempts to its maximum delay, and on a room that no
+longer exists every one of them fails while the visitor reads "Reconnecting" for
+the whole climb - the call was over at the first attempt.
+
+The transcript rail reads the framework's `lk.transcription` streams, and the
+two sides of the conversation arrive differently - which is a fact about the
+framework, not a preference. `room_io.py` builds the USER output with
+`is_delta_stream=False` and the AGENT output with `True`, and the non-delta
+branch of `_ParticipantStreamTranscriptionOutput` "always create a new writer"
+per update, writing the whole text so far and closing it. So the agent's segment
+is one stream of deltas to append, while the visitor's is a succession of whole
+texts in separate streams. The rail is therefore keyed on the `lk.segment_id`
+attribute rather than on the stream id: keyed on the stream, one visitor
+sentence piles up as several lines each a little longer than the last. The final
+flag is `lk.transcription_final` and its value is the string `"true"`, read
+rather than inferred from a stream ending, because on the visitor's side every
+interim stream ends too. Measured on the agent side by execution
+(`task-hosted-language-from-metadata`) and read from the framework source for
+the visitor side; the visitor half is what the next hosted call settles. `TextStreamReader`'s own docstring says an async iteration returns
 the whole string received so far, which reads as cumulative; the implementation
 decodes and yields each chunk's own content, and `readAll` is what concatenates.
 That was settled by reading `livekit-client`'s source, because appending

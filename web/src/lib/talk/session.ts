@@ -1,6 +1,13 @@
 'use client'
 
-import { ConnectionState, Room, RoomEvent, Track } from 'livekit-client'
+import {
+  ConnectionState,
+  DefaultReconnectPolicy,
+  DisconnectReason,
+  Room,
+  RoomEvent,
+  Track,
+} from 'livekit-client'
 import type { Participant, RemoteTrack } from 'livekit-client'
 import { isAgent } from '@/lib/session/room-signals'
 
@@ -30,7 +37,86 @@ import { isAgent } from '@/lib/session/room-signals'
 /** The framework's transcription topic, verified in `room_io/types.py`. */
 const TRANSCRIPTION_TOPIC = 'lk.transcription'
 
+/**
+ * Which utterance a stream belongs to, which is not the same as which stream it
+ * is: the visitor's side opens a new stream per update within one segment.
+ */
+const SEGMENT_ID_ATTRIBUTE = 'lk.segment_id'
+
+/** Carried on the closing header, as the string "true". */
+const TRANSCRIPTION_FINAL_ATTRIBUTE = 'lk.transcription_final'
+
 export type TalkPhase = 'connecting' | 'live' | 'reconnecting' | 'ended'
+
+/**
+ * Why a call stopped, in the visitor's terms.
+ *
+ * A call that the ambassador finished politely and a call whose network died
+ * look identical from inside `ConnectionState`, and telling a visitor the wrong
+ * one is a lie in either direction: "the ambassador ended the call" when the
+ * signal dropped, or "connection lost" after a farewell they just heard. The
+ * only thing that separates them is `DisconnectReason`, so it is read.
+ */
+export type TalkEndingKind = 'ended' | 'lost' | 'taken_over' | 'failed'
+
+export interface TalkEnding {
+  kind: TalkEndingKind
+  /** Shown to the visitor as-is. */
+  message: string
+}
+
+/**
+ * The closed mapping, and where an unrecognised reason falls.
+ *
+ * Deliberate ends are the ones where the room itself is finished: the agent
+ * shut its job down (`ROOM_DELETED`, which is what a graceful goodbye
+ * produces), the room's own timeout closed it (`ROOM_CLOSED`), the server
+ * removed this participant (`PARTICIPANT_REMOVED`, which is the shape a
+ * duration cap takes), or the visitor pressed End call (`CLIENT_INITIATED`).
+ *
+ * Everything else falls to `lost`, INCLUDING an absent reason. That is the safe
+ * direction here: `lost` says the call stopped and offers another one, which is
+ * true whatever happened, while `ended` claims the conversation was finished on
+ * purpose and would be a fabricated farewell if it were not.
+ */
+export function endingFor(reason: DisconnectReason | undefined): TalkEnding {
+  switch (reason) {
+    case DisconnectReason.CLIENT_INITIATED:
+      return { kind: 'ended', message: 'Call ended.' }
+    case DisconnectReason.ROOM_DELETED:
+    case DisconnectReason.ROOM_CLOSED:
+      return { kind: 'ended', message: 'The ambassador ended the call.' }
+    case DisconnectReason.PARTICIPANT_REMOVED:
+      return {
+        kind: 'ended',
+        message: 'The call ended. Demo calls are limited in length.',
+      }
+    case DisconnectReason.DUPLICATE_IDENTITY:
+      return {
+        kind: 'taken_over',
+        message: 'This call was picked up in another tab, so it ended here.',
+      }
+    case DisconnectReason.AGENT_ERROR:
+      return {
+        kind: 'failed',
+        message: 'Something went wrong on our side and the call stopped.',
+      }
+    default:
+      return { kind: 'lost', message: 'The call stopped unexpectedly.' }
+  }
+}
+
+/**
+ * Reconnect attempts, bounded.
+ *
+ * The library default climbs through ten attempts to its maximum delay. On a
+ * room that no longer exists every one of them fails, and the visitor watches
+ * "Reconnecting" for the whole climb before being told anything - which is the
+ * worst of both, since the call was over at the first attempt. Four attempts
+ * over about four seconds is enough for a hiccup on a hotel network and short
+ * enough that a closed room resolves to an answer quickly.
+ */
+const RECONNECT_DELAYS_MS = [0, 300, 1_200, 2_700]
 
 export interface TalkLine {
   id: string
@@ -44,6 +130,11 @@ export interface TalkLine {
 export interface TalkEvents {
   onPhase: (phase: TalkPhase) => void
   onLine: (line: TalkLine) => void
+  /**
+   * The call is over, and why. Fires exactly once per session, whoever ended
+   * it - including the visitor - so the page has one place to settle into.
+   */
+  onEnded: (ending: TalkEnding) => void
   /** A failure the visitor needs to read, in their words rather than ours. */
   onTrouble: (reason: string) => void
 }
@@ -61,12 +152,50 @@ export interface TalkHandle {
 }
 
 export async function startTalking(grant: TalkGrant, events: TalkEvents): Promise<TalkHandle> {
+  // The agent's audio, played. A remote audio track with no sink attached is
+  // not decoded at all, so this is what makes the call audible rather than
+  // merely connected.
+  const sinks = new Map<string, HTMLAudioElement>()
+  // Text so far per SEGMENT, so an agent segment spread over several writes
+  // keeps accumulating across them.
+  const segments = new Map<string, string>()
+
   const room = new Room({
     // The framework's own defaults for a speech call. Named rather than
     // inherited so that a future change to the library's defaults is a change
     // to this file, not a silent change to how the demo sounds.
     adaptiveStream: true,
     dynacast: true,
+    reconnectPolicy: new DefaultReconnectPolicy(RECONNECT_DELAYS_MS),
+  })
+
+  // Fires exactly once, whoever ended the call. Everything that tears the
+  // session down runs here rather than in the End-call button, because the
+  // common case is the OTHER side hanging up: the agent finishes, the room
+  // closes, and this page is told about it after the fact.
+  let finished = false
+  const finish = (reason: DisconnectReason | undefined) => {
+    if (finished) return
+    finished = true
+    const ending = endingFor(reason)
+    room.unregisterTextStreamHandler(TRANSCRIPTION_TOPIC)
+    for (const element of sinks.values()) {
+      element.srcObject = null
+      element.remove()
+    }
+    sinks.clear()
+    segments.clear()
+    // Releases the microphone. The browser's own recording indicator stays lit
+    // until the local track is actually stopped, and a visitor whose call is
+    // over should not be left looking at one. Idempotent, and already
+    // disconnected in the server-initiated case, so failure here is not news.
+    void room.disconnect().catch(() => {})
+    events.onPhase('ended')
+    events.onEnded(ending)
+  }
+
+  room.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+    finish(reason)
   })
 
   room.on(RoomEvent.ConnectionStateChanged, (state) => {
@@ -80,18 +209,13 @@ export async function startTalking(grant: TalkGrant, events: TalkEvents): Promis
       case ConnectionState.Reconnecting:
         events.onPhase('reconnecting')
         break
-      case ConnectionState.Disconnected:
-        events.onPhase('ended')
-        break
+      // Disconnected is deliberately NOT handled here: this event knows the
+      // state but not the reason, and the reason is the whole point.
       default:
         break
     }
   })
 
-  // The agent's audio, played. A remote audio track with no sink attached is
-  // not decoded at all, so this is what makes the call audible rather than
-  // merely connected.
-  const sinks = new Map<string, HTMLAudioElement>()
   room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, _pub, participant: Participant) => {
     if (track.kind !== Track.Kind.Audio) return
     const element = track.attach()
@@ -123,27 +247,43 @@ export async function startTalking(grant: TalkGrant, events: TalkEvents): Promis
   /**
    * The transcript, from the framework's text streams.
    *
-   * One stream per segment, and BOTH sides publish: the framework builds a user
-   * transcription output and an agent transcription output in the same branch,
-   * so a rail fed by one of them would show half a conversation.
+   * BOTH SIDES PUBLISH, and they publish DIFFERENTLY. Read out of
+   * `livekit-agents` 1.7.0's `room_io/_output.py`, where
+   * `_ParticipantStreamTranscriptionOutput` branches on `is_delta_stream`:
    *
-   * The chunks are DELTAS. The reader class's own docstring says an async
-   * iteration "returns the entire string that has been received up to the
-   * current point in time", which reads as cumulative - the implementation
-   * decodes and yields each chunk's own content, and `readAll` is what
-   * concatenates them. Verified by reading `livekit-client`'s source rather
-   * than its comment, because appending cumulative chunks would print every
-   * word an increasing number of times.
+   *   agent   `is_delta_stream=True`. One writer is REUSED for the segment and
+   *           each write is a delta, so the pieces have to be appended.
+   *   visitor `is_delta_stream=False`. Every update "always create a new
+   *           writer", writes the WHOLE text so far and closes it, and the
+   *           flush opens yet another one for the final.
+   *
+   * That asymmetry is why the rail is keyed on `lk.segment_id` rather than on
+   * the stream id. Keyed on the stream, one visitor sentence arrives as a pile
+   * of separate lines each a little longer than the last, because each of those
+   * new writers is its own stream. Keyed on the segment they land on one line:
+   * appended for the agent, replaced for the visitor.
+   *
+   * The final flag is `lk.transcription_final` and its value is the STRING
+   * "true", not a boolean; it rides on the closing header. It is read rather
+   * than inferred from the stream ending, because on the visitor's side every
+   * interim stream ends too.
    */
   room.registerTextStreamHandler(TRANSCRIPTION_TOPIC, (reader, participantInfo) => {
     const speaker: TalkLine['speaker'] =
       participantInfo.identity === grant.identity ? 'visitor' : 'agent'
-    const id = reader.info.id
+    const attributes = reader.info.attributes ?? {}
+    // One line per segment. The stream id is the fallback for a stream with no
+    // segment id, where one stream is the best guess at one line.
+    const id = attributes[SEGMENT_ID_ATTRIBUTE] ?? reader.info.id
+    const wasFinal = attributes[TRANSCRIPTION_FINAL_ATTRIBUTE] === 'true'
+    const appends = speaker === 'agent'
+
     void (async () => {
-      let text = ''
+      let text = appends ? (segments.get(id) ?? '') : ''
       try {
-        for await (const delta of reader) {
-          text += delta
+        for await (const piece of reader) {
+          text += piece
+          segments.set(id, text)
           events.onLine({ id, speaker, text, final: false })
         }
       } catch {
@@ -151,7 +291,8 @@ export async function startTalking(grant: TalkGrant, events: TalkEvents): Promis
         // words, and dropping the line would make the rail disagree with what
         // they heard.
       }
-      events.onLine({ id, speaker, text, final: true })
+      segments.set(id, text)
+      events.onLine({ id, speaker, text, final: wasFinal })
     })()
   })
 
@@ -168,16 +309,13 @@ export async function startTalking(grant: TalkGrant, events: TalkEvents): Promis
       await room.localParticipant.setMicrophoneEnabled(!muted)
     },
     async end() {
-      room.unregisterTextStreamHandler(TRANSCRIPTION_TOPIC)
-      for (const element of sinks.values()) {
-        element.srcObject = null
-        element.remove()
-      }
-      sinks.clear()
-      await room.disconnect()
-      events.onPhase('ended')
+      // The visitor's own End call goes through the same path as the agent's,
+      // so there is one teardown rather than two that drift. The library will
+      // also emit Disconnected here; `finish` is once-only, so that is a no-op.
+      finish(DisconnectReason.CLIENT_INITIATED)
+      await room.disconnect().catch(() => {})
     },
   }
 }
 
-export { TRANSCRIPTION_TOPIC, isAgent }
+export { TRANSCRIPTION_TOPIC, SEGMENT_ID_ATTRIBUTE, TRANSCRIPTION_FINAL_ATTRIBUTE, isAgent }
