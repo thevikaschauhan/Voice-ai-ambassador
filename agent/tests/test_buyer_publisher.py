@@ -531,3 +531,84 @@ def test_a_scoped_wait_that_never_arrives_still_names_the_turn(tmp_path, capsys)
     tail = bp.EventTail(tmp_path / "run.jsonl")
     assert asyncio.run(tail.wait_for("turn_complete", turn=4, timeout=0.15)) is None
     assert "turn_complete on turn 4" in capsys.readouterr().out
+
+
+# --- the barge-in trigger reads the audio, not the log --------------------
+#
+# Hosted, the event log arrives p50 6.3s and p90 85.6s after the event it
+# describes (measured over 162 records), so a barge-in fired 0.6s after a
+# `tts_first_audio` that arrived six seconds late lands on the FOLLOWING turn.
+# One hosted run asked for two interruptions and got four. The agent's own
+# track cannot lag its own audio.
+
+
+def _loud() -> "bp.rtc.AudioFrame":
+    return bp.rtc.AudioFrame(
+        data=(b"\xff\x7f" * 480),
+        sample_rate=24000,
+        num_channels=1,
+        samples_per_channel=480,
+    )
+
+
+def test_nothing_is_interrupted_before_the_agent_speaks():
+    q = bp.AgentQuiescence()
+    assert asyncio.run(q.wait_until_speaking(timeout=0.05)) is False
+
+
+def test_the_onset_is_the_moment_audio_starts():
+    q = bp.AgentQuiescence()
+    q.observe_frame(_loud())
+    assert asyncio.run(q.wait_until_speaking(timeout=0.05)) is True
+
+
+def test_silence_from_an_idle_track_is_not_an_onset():
+    """An idle agent still publishes a track. Treating its silence as the start
+    of a reply would fire the barge-in into the gap before one."""
+    q = bp.AgentQuiescence()
+    q.observe_frame(bp._silence())
+    assert asyncio.run(q.wait_until_speaking(timeout=0.05)) is False
+
+
+def test_arming_forgets_the_previous_reply():
+    """The off-by-one-turn error, one layer down: without arming, the first
+    read matches the tail of the PREVIOUS reply and the interruption fires
+    before this turn's speech has begun."""
+    q = bp.AgentQuiescence()
+    q.observe_frame(_loud())
+    assert asyncio.run(q.wait_until_speaking(timeout=0.05)) is True
+
+    q.arm_onset()
+    assert asyncio.run(q.wait_until_speaking(timeout=0.05)) is False
+
+    q.observe_frame(_loud())
+    assert asyncio.run(q.wait_until_speaking(timeout=0.05)) is True
+
+
+def test_the_onset_survives_the_speech_continuing():
+    """`_busy_since` moves forward on every loud frame, which is why it cannot
+    answer 'when did this reply START' - the onset has to be kept separately."""
+    q = bp.AgentQuiescence()
+    q.arm_onset()
+    q.observe_frame(_loud())
+    first = q._speaking_since
+    q.observe_frame(_loud())
+    q.observe_frame(_loud())
+    assert q._speaking_since == first
+
+
+def test_an_onset_still_reads_as_busy_for_the_pacing_gate():
+    """One signal, two jobs, and they must not disagree: the frame that opens
+    the barge-in window is also the frame that keeps the next clip waiting."""
+    q = bp.AgentQuiescence()
+    q.arm_onset()
+    q.observe_frame(_loud())
+    assert asyncio.run(q.wait_until_speaking(timeout=0.05)) is True
+    assert q.quiet_for() < 0.01
+
+
+def test_the_trigger_names_what_it_waited_for_when_it_times_out(capsys):
+    """A silent skip would look like a barge-in that was asked for and landed."""
+    q = bp.AgentQuiescence()
+    assert asyncio.run(q.wait_until_speaking(timeout=0.05)) is False
+    assert "never started speaking" in capsys.readouterr().out
