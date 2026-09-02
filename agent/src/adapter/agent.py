@@ -25,11 +25,13 @@ Run it:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import sys
 from collections.abc import AsyncIterable, Callable
-from dataclasses import dataclass
-from typing import Any, Final, Literal
+from dataclasses import dataclass, replace
+from typing import Any, Final, Literal, get_args
 
 from livekit import rtc
 from livekit.agents import (
@@ -78,6 +80,7 @@ from ambassador.projects import (
     build_name_index,
 )
 from ambassador.recognition import RecognitionMonitor, load_noise_words
+from ambassador.schemas import Language
 from ambassador.verbalise import load_spoken_forms
 
 from .brief import BriefExtractor
@@ -1372,6 +1375,129 @@ async def shutdown_session(
     await log.aclose()
 
 
+# The cross-service contract with the web talk route (docs/09-, "Per-call
+# language"). The room's metadata is this JSON string and nothing else:
+#
+#     {"v":1,"language":"en"|"ar"|"hi"}
+#
+# The codes are `Language` in ambassador/schemas.py, read from it rather than
+# restated so a fourth language cannot be added to the product and silently
+# rejected here. Unknown keys are ignored, so the writer can add a field
+# without a coordinated deploy.
+_METADATA_VERSION: Final = 1
+_LANGUAGE_CODES: Final[frozenset[str]] = frozenset(get_args(Language))
+
+
+@dataclass(frozen=True)
+class LanguageSelection:
+    """Which language this call runs in, and where that came from.
+
+    `reason` is one of a fixed set of adapter-authored words, never the
+    metadata itself: the string is written by another service, and a foreign
+    service's free text has no business on the emitted event stream.
+    """
+
+    language: Language
+    source: Literal["room_metadata", "worker_default"]
+    reason: Literal[
+        "",
+        "no_metadata",
+        "not_json",
+        "not_an_object",
+        "no_language_key",
+        "unsupported_language",
+        "unsupported_version",
+    ] = ""
+
+
+def language_from_metadata(
+    metadata: str | None, default: Language
+) -> LanguageSelection:
+    """Read the call's language out of room metadata, or fall back.
+
+    EVERY failure falls back to the worker's `LANGUAGE` and says which failure
+    it was. That direction is deliberate and it is the whole design: this runs
+    on a public URL, so the input is untrusted and unversioned in practice, and
+    a call that refuses to start teaches the client nothing. A call in the
+    wrong language is visible to them in one sentence and visible to us in one
+    event.
+
+    The version field is the one place this is not purely lenient. A `v` that
+    is present and not 1 means the writer is speaking a contract this code has
+    not seen, so `language` may not mean what it means here, and guessing is
+    how you ship a demo that speaks Arabic to an English visitor. A `v` that is
+    ABSENT is accepted as 1, because an absent version cannot be a future
+    version - it can only be a v1 writer who left out a constant - and
+    rejecting that would turn a harmless omission into a wrong-language call.
+    """
+    if not metadata or not metadata.strip():
+        return LanguageSelection(default, "worker_default", "no_metadata")
+    try:
+        parsed = json.loads(metadata)
+    except (ValueError, TypeError):
+        return LanguageSelection(default, "worker_default", "not_json")
+    if not isinstance(parsed, dict):
+        return LanguageSelection(default, "worker_default", "not_an_object")
+    version = parsed.get("v", _METADATA_VERSION)
+    if version != _METADATA_VERSION:
+        return LanguageSelection(default, "worker_default", "unsupported_version")
+    language = parsed.get("language")
+    if language is None:
+        return LanguageSelection(default, "worker_default", "no_language_key")
+    if language not in _LANGUAGE_CODES:
+        return LanguageSelection(default, "worker_default", "unsupported_language")
+    return LanguageSelection(language, "room_metadata")
+
+
+def job_room_metadata(ctx: JobContext) -> str:
+    """The metadata string off the JOB's room message, not the connected room.
+
+    `ctx.room` is an `rtc.Room` that only has metadata once `ctx.connect()` has
+    run, and `entrypoint` connects last, after STT, TTS and the LLM have been
+    built from the settings this value decides. `ctx.job.room` is the
+    server-sent `Room` proto and carries `metadata: str` from the moment the
+    job arrives, so reading it needs no reordering.
+
+    Defensive because the console runs a mock job: anything missing reads as no
+    metadata, which falls back to the worker default and leaves the laptop
+    demo behaving exactly as it did.
+    """
+    job = getattr(ctx, "job", None)
+    room = getattr(job, "room", None)
+    metadata = getattr(room, "metadata", "")
+    return metadata if isinstance(metadata, str) else ""
+
+
+def start_call_duration_cap(
+    ctx: JobContext, log: EventLog, seconds: int
+) -> asyncio.Task[None] | None:
+    """Shut the call down after `seconds`. Returns None when there is no cap.
+
+    Zero is no cap, which is the default and what the laptop demo and the
+    console run with. The hosted service sets a number because its URL is
+    public and its providers are metered (docs/09-).
+
+    Module level rather than a closure so the timer is testable without a live
+    room, the same reason `shutdown_session` is out here. The caller must keep
+    the returned task referenced for as long as the job runs.
+    """
+    if seconds <= 0:
+        return None
+
+    async def _expire() -> None:
+        await asyncio.sleep(seconds)
+        # Emitted BEFORE the shutdown call, so the audit says why the call
+        # ended even though `ctx.shutdown` runs the callback that closes the
+        # log. Reversing these two loses the one event that distinguishes a
+        # capped call from a visitor hanging up.
+        log.emit("call_duration_cap", limit_seconds=seconds, action="shutdown")
+        ctx.shutdown(reason=f"demo call duration cap reached ({seconds}s)")
+
+    task = asyncio.create_task(_expire(), name="call-duration-cap")
+    log.emit("call_duration_cap_armed", limit_seconds=seconds)
+    return task
+
+
 def prewarm(proc: JobProcess) -> None:
     """Load Silero once per worker process, not once per call."""
     proc.userdata["vad"] = silero.VAD.load()
@@ -1380,6 +1506,16 @@ def prewarm(proc: JobProcess) -> None:
 async def entrypoint(ctx: JobContext) -> None:
     settings = load_settings()
     log = EventLog(session_id=utils.shortuuid("sess_"))
+
+    # Per-call language, before anything is built from it. `LANGUAGE` used to
+    # be the whole answer, which made a worker speak one language for its life;
+    # the hosted demo lets a visitor pick, and it arrives in room metadata.
+    # Resolved here so `session_start` below already reports the language the
+    # call will actually run in, rather than the worker's default plus a
+    # correction three events later.
+    worker_default = settings.language
+    selection = language_from_metadata(job_room_metadata(ctx), worker_default)
+    settings = replace(settings, language=selection.language)
 
     missing = settings.missing_for_voice()
     if missing:
@@ -1395,6 +1531,18 @@ async def entrypoint(ctx: JobContext) -> None:
         log.emit("events_bridge", host="127.0.0.1", port=bridge.port)
 
     log.emit("session_start", config=settings.redacted())
+    # After session_start, because it explains a value that event already
+    # carried. `reason` is empty when the metadata was read successfully.
+    log.emit(
+        # Not "call_language": that is already a FIELD name on three other
+        # events, and an event and a field sharing a name makes a grep for
+        # either one useless.
+        "language_selected",
+        language=selection.language,
+        source=selection.source,
+        reason=selection.reason,
+        worker_default=worker_default,
+    )
 
     agent = AmbassadorAgent(settings=settings, log=log)
 
@@ -1450,7 +1598,23 @@ async def entrypoint(ctx: JobContext) -> None:
     def _on_error(ev: ErrorEvent) -> None:
         log.emit("session_error", error=str(ev.error))
 
+    # The per-call hard stop (docs/09-, "Abuse controls"). A cancelled sleeper
+    # and nothing else: `ctx.shutdown()` is synchronous and the shutdown
+    # callback below already seals the audit, so this adds no failure mode of
+    # its own. Counting starts here, before `connect`, so setup counts against
+    # the cap rather than being free - the number bounds a call's cost, and
+    # everything after this point costs.
+    cap = start_call_duration_cap(ctx, log, settings.demo_max_call_seconds)
+
     async def _shutdown() -> None:
+        # Cancel first: a call that ends on its own must not leave a timer
+        # behind that fires into a closed session. Referencing `cap` from this
+        # closure is also what keeps the task ALIVE - `entrypoint` returns
+        # while the job runs on, asyncio holds only a weak reference to a
+        # running task, and a garbage-collected timer is a cap that silently
+        # never fires.
+        if cap is not None:
+            cap.cancel()
         await shutdown_session(
             agent=agent, log=log, llm=llm, stt_node=stt_node, bridge=bridge
         )
@@ -1511,6 +1675,44 @@ def preflight(argv: list[str] | None = None) -> str | None:
     )
 
 
+def export_transport_env(argv: list[str] | None = None) -> list[str]:
+    """Put the transport credentials where the FRAMEWORK looks for them.
+
+    `load_settings()` reads `agent/.env` itself, so this repository's own code
+    works from that file alone. The framework does not: `cli.run_app` reads
+    `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` out of the process
+    environment. The half that works hides the half that does not, and the way
+    it fails is the problem. `dev` at least says so ("ws_url is required, or set
+    LIVEKIT_URL environment variable"); `connect` is SILENT, because its job
+    simulation builds a `LiveKitAPI` with an empty url inside a fire-and-forget
+    task whose exception nobody awaits, so the worker logs "HTTP server
+    listening" and then sits there having dispatched nothing. That cost an hour
+    of reading a room that had only the hosted agent in it.
+
+    Only on the connecting subcommands, matching `preflight`. Console mode
+    dials nothing and must not start loading settings earlier than it does now.
+
+    `setdefault` in spirit but not by name: an environment variable set to the
+    empty string counts as unset here, which is what `config._resolve` already
+    does with the process environment. A real value set by a platform always
+    wins, so the hosted deploy is untouched.
+    """
+    arguments = sys.argv[1:] if argv is None else argv
+    if not _CONNECTING_COMMANDS.intersection(arguments):
+        return []
+    settings = load_settings()
+    exported: list[str] = []
+    for name, value in (
+        ("LIVEKIT_URL", settings.livekit_url),
+        ("LIVEKIT_API_KEY", settings.livekit_api_key),
+        ("LIVEKIT_API_SECRET", settings.livekit_api_secret),
+    ):
+        if value and not os.environ.get(name):
+            os.environ[name] = value
+            exported.append(name)
+    return exported
+
+
 if __name__ == "__main__":
     _refusal = preflight()
     if _refusal:
@@ -1519,4 +1721,7 @@ if __name__ == "__main__":
         # whatever supervisor restarted the process.
         print(_refusal, file=sys.stderr)
         raise SystemExit(1)
+    # After preflight, so a run that is going to be refused is refused before
+    # anything is written to the environment.
+    export_transport_env()
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))

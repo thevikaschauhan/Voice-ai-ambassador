@@ -182,6 +182,14 @@ _REDACTED_FIELDS: Final[dict[str, tuple[str, ...]]] = {
 CLEAR_EVENTS: Final[dict[str, str]] = {
     "session_start": "the already-redacted config summary: model names, modes, booleans",
     "session_end": "a turn count",
+    # Two language codes and two adapter-authored words. The room metadata this
+    # reads is written by another service, and NONE of it is emitted: `reason`
+    # is one of a closed set of literals in `agent.LanguageSelection`, chosen
+    # precisely so a foreign service's free text cannot reach this stream by
+    # being helpfully included in a diagnostic.
+    "language_selected": "two language codes, an enum source and an enum reason",
+    "call_duration_cap_armed": "one integer, the configured cap in seconds",
+    "call_duration_cap": "one integer and a fixed literal action",
     "disclosure": "two language codes and a boolean, all from configuration",
     "budget_policy": "language codes and booleans, all from configuration",
     # An enum action, a currency code and booleans - and deliberately NOT the

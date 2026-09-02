@@ -652,3 +652,57 @@ def test_one_cause_reads_exactly_like_the_single_message():
     assert worker_refusal([], ["STT_ENABLED"]) == undeclared_settings_error(
         ["STT_ENABLED"]
     )
+
+
+# --- the per-call duration cap --------------------------------------------
+#
+# A spend bound on a public URL (docs/09-). The interesting part is not the
+# happy path, it is that every unreadable value refuses to start: zero means
+# "no cap", so a lenient parse would turn a typo into an uncapped call, and it
+# would do it on the one variable whose whole job is to stop that.
+
+
+def test_no_cap_by_default_so_the_laptop_demo_is_unaffected(env_file):
+    assert load_settings(env_file).demo_max_call_seconds == 0
+
+
+def test_the_shipped_example_ships_the_cap_disabled():
+    """And ships it as a literal `0`, not a blank. `parse_env_file` records a
+    bare `KEY=` as an empty STRING, which `_resolve` returns, so a blank line
+    is a value rather than an absence - the drift this repository has already
+    had twice."""
+    assert EXAMPLE_ENV.exists()
+    assert load_settings(EXAMPLE_ENV).demo_max_call_seconds == 0
+    assert "DEMO_MAX_CALL_SECONDS=0" in EXAMPLE_ENV.read_text(encoding="utf-8")
+
+
+def test_a_cap_is_read_from_the_environment(env_file, monkeypatch):
+    monkeypatch.setenv("DEMO_MAX_CALL_SECONDS", "300")
+    assert load_settings(env_file).demo_max_call_seconds == 300
+
+
+def test_a_cap_is_read_from_the_env_file(tmp_path):
+    path = tmp_path / ".env"
+    path.write_text("DEMO_MAX_CALL_SECONDS=90\n", encoding="utf-8")
+    assert load_settings(path).demo_max_call_seconds == 90
+
+
+@pytest.mark.parametrize("value", ["600s", "ten", "5.5", "1_0 minutes", "-1", "-600"])
+def test_an_unreadable_cap_refuses_to_start(env_file, monkeypatch, value):
+    """The fail direction, stated as a test. Falling back to the default here
+    would mean 0, and 0 is no cap - so a typo would silently remove the bound
+    instead of announcing itself. Refusing happens on the operator's machine;
+    an uncapped call happens on the client's.
+    """
+    monkeypatch.setenv("DEMO_MAX_CALL_SECONDS", value)
+    with pytest.raises(ValueError, match="DEMO_MAX_CALL_SECONDS"):
+        load_settings(env_file)
+
+
+def test_the_refusal_says_that_zero_is_how_you_disable_it(env_file, monkeypatch):
+    """An operator who wanted no cap and typed something wrong needs to be told
+    what to type instead, or they will guess at blanking the line - which, per
+    the example test above, is exactly the thing that reads as a value."""
+    monkeypatch.setenv("DEMO_MAX_CALL_SECONDS", "unlimited")
+    with pytest.raises(ValueError, match="0 disables the cap"):
+        load_settings(env_file)

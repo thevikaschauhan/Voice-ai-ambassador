@@ -24,11 +24,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from io import StringIO
-from typing import Any
+from typing import Any, get_args
 
 import httpx
 import pytest
@@ -54,6 +55,7 @@ from adapter.config import (  # noqa: E402
 from adapter.confirmations import ConfirmationCopy  # noqa: E402
 from adapter.disclosure import UncertifiedLanguageError  # noqa: E402
 from adapter.events import EventLog  # noqa: E402
+from ambassador.schemas import Language  # noqa: E402
 from adapter.levels import gain_for  # noqa: E402
 from adapter.interception import (  # noqa: E402
     BRIDGE_COPY,
@@ -96,6 +98,7 @@ def make_settings(**overrides: Any) -> Settings:
         demo_mode=False,
         language="en",
         allow_uncertified_language=False,
+        demo_max_call_seconds=0,
     )
     base.update(overrides)
     return Settings(**base)
@@ -2810,7 +2813,9 @@ async def test_the_sealed_turn_measures_the_buyers_wait_not_the_gap_to_the_next(
     opened early and sealed only when a later turn displaced it."""
     agent, log, _, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
 
-    await preemptive_turn(agent, partial="What does a studio", final="What does it cost?")
+    await preemptive_turn(
+        agent, partial="What does a studio", final="What does it cost?"
+    )
 
     total = log.turns[0].timings_ms.total
     assert total is not None
@@ -2844,8 +2849,12 @@ async def test_two_buyer_turns_do_not_collapse_into_one():
         ]
     )
 
-    await preemptive_turn(agent, partial="What does a studio", final="What does it cost?")
-    await preemptive_turn(agent, partial="And when does it", final="And when is handover?")
+    await preemptive_turn(
+        agent, partial="What does a studio", final="What does it cost?"
+    )
+    await preemptive_turn(
+        agent, partial="And when does it", final="And when is handover?"
+    )
 
     assert [r.turn_index for r in log.turns] == [1, 2]
     await log.aclose()
@@ -2967,7 +2976,9 @@ async def test_a_turn_whose_preemptive_generation_survived_drops_nothing():
     to discard. A fix that dropped records here would erase every normal turn."""
     agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
 
-    await preemptive_turn(agent, partial="What does a studio", final="What does it cost?")
+    await preemptive_turn(
+        agent, partial="What does a studio", final="What does it cost?"
+    )
 
     assert len(log.turns) == 1
     assert [x.strip() for x in log.turns[0].generated_sentences] == [
@@ -2984,7 +2995,9 @@ async def test_the_opening_disclosure_is_not_mistaken_for_a_replacement():
     agent, log, buf, _ = make_agent([HealthyStream([f"A studio is AED {GROUNDED}. "])])
 
     agent.note_speech_handle(SpeechHandle.create())  # the disclosure
-    await preemptive_turn(agent, partial="What does a studio", final="What does it cost?")
+    await preemptive_turn(
+        agent, partial="What does a studio", final="What does it cost?"
+    )
 
     assert [x.strip() for x in log.turns[0].generated_sentences] == [
         f"A studio is AED {GROUNDED}."
@@ -3206,3 +3219,415 @@ def test_the_refusal_echoes_no_value(monkeypatch):
     refusal = adapter_agent.preflight(["start"])
     assert refusal is not None
     assert secret not in refusal
+
+
+def _capturing_log() -> tuple[EventLog, list[dict[str, Any]]]:
+    """An EventLog plus the FULL records it emits.
+
+    `add_observer` is the documented in-process way to see the unredacted
+    stream, and the stream sink is a StringIO so the tests do not write to
+    stdout. Asserting on the records rather than on the JSON lines is
+    deliberate here: these three events exist to be READ by an operator, and
+    the redacted rendering is already covered by tests/test_events.py.
+    """
+    records: list[dict[str, Any]] = []
+    log = EventLog(session_id="sess_test", stream=StringIO())
+    log.add_observer(records.append)
+    return log, records
+
+
+# --- per-call language, from room metadata --------------------------------
+#
+# `LANGUAGE` used to be the whole answer and made a worker speak one language
+# for its life. The hosted demo lets a visitor pick (docs/09-), and the choice
+# arrives as a room-metadata string written by another service - so the input is
+# untrusted, and the matrix below is mostly about what happens when it is wrong.
+# Every failure falls back to the worker default and NAMES itself, because a
+# call that refuses to start teaches an unattended visitor nothing.
+
+
+def test_metadata_selects_each_language_the_product_offers():
+    """Parametrised off `Language` rather than a typed list, so a fourth
+    language added to the product is covered here the day it lands."""
+    from adapter.agent import language_from_metadata
+
+    for code in get_args(Language):
+        chosen = language_from_metadata(f'{{"v":1,"language":"{code}"}}', "en")
+        assert chosen.language == code
+        assert chosen.source == "room_metadata"
+        assert chosen.reason == ""
+
+
+def test_unknown_keys_are_ignored_so_the_writer_can_add_a_field():
+    """The contract says unknown keys are ignored. Without that, the web route
+    could not add a field without a coordinated deploy of both services."""
+    from adapter.agent import language_from_metadata
+
+    chosen = language_from_metadata(
+        '{"v":1,"language":"hi","greeting":"hello","nested":{"a":1}}', "en"
+    )
+    assert chosen.language == "hi"
+    assert chosen.source == "room_metadata"
+
+
+@pytest.mark.parametrize(
+    ("metadata", "reason"),
+    [
+        (None, "no_metadata"),
+        ("", "no_metadata"),
+        ("   \n", "no_metadata"),
+        ("not json at all", "not_json"),
+        ('{"v":1,"language":"ar"', "not_json"),
+        ("[]", "not_an_object"),
+        ('"ar"', "not_an_object"),
+        ("7", "not_an_object"),
+        ("null", "not_an_object"),
+        ('{"v":1}', "no_language_key"),
+        ('{"v":1,"language":null}', "no_language_key"),
+        ('{"v":1,"language":"fr"}', "unsupported_language"),
+        ('{"v":1,"language":"EN"}', "unsupported_language"),
+        ('{"v":1,"language":""}', "unsupported_language"),
+        ('{"v":1,"language":"en-GB"}', "unsupported_language"),
+        ('{"v":1,"language":1}', "unsupported_language"),
+        ('{"v":2,"language":"ar"}', "unsupported_version"),
+        ('{"v":"1","language":"ar"}', "unsupported_version"),
+        ('{"v":null,"language":"ar"}', "unsupported_version"),
+    ],
+)
+def test_every_bad_metadata_falls_back_and_says_which_failure_it_was(metadata, reason):
+    """The reason is the point, not just the fallback. A hosted call in the
+    wrong language is a support question, and the only way to answer it after
+    the fact is an event that distinguishes "the web route sent nothing" from
+    "the web route sent something this build cannot read"."""
+    from adapter.agent import language_from_metadata
+
+    chosen = language_from_metadata(metadata, "en")
+    assert chosen.language == "en"
+    assert chosen.source == "worker_default"
+    assert chosen.reason == reason
+
+
+def test_the_fallback_is_the_workers_own_language_not_english():
+    """`en` is the default default, which makes it easy to write a fallback
+    that only looks right. An operator who sets LANGUAGE=hi and gets no usable
+    metadata must get Hindi."""
+    from adapter.agent import language_from_metadata
+
+    assert language_from_metadata(None, "hi").language == "hi"
+    assert language_from_metadata("rubbish", "ar").language == "ar"
+    assert language_from_metadata('{"v":9}', "ar").language == "ar"
+
+
+def test_a_missing_version_is_read_as_version_one():
+    """The one place leniency is deliberate, and the asymmetry is the design.
+
+    An absent `v` cannot be a FUTURE contract - only a v1 writer who left out a
+    constant - so rejecting it would turn a harmless omission into a
+    wrong-language call for a client we are not in the room with. A `v` that is
+    present and not 1 is refused, because then `language` may not mean what it
+    means here.
+    """
+    from adapter.agent import language_from_metadata
+
+    chosen = language_from_metadata('{"language":"ar"}', "en")
+    assert chosen.language == "ar"
+    assert chosen.source == "room_metadata"
+
+    assert (
+        language_from_metadata('{"v":2,"language":"ar"}', "en").reason
+        == "unsupported_version"
+    )
+
+
+def test_the_reason_never_carries_the_metadata_itself():
+    """The string is written by another service. A diagnostic that quotes it
+    back would put a foreign service's free text on the emitted event stream,
+    which is the one thing `events.CLEAR_EVENTS` classifies against."""
+    from adapter.agent import language_from_metadata
+
+    secret = "MUST-NOT-APPEAR-abc123"
+    chosen = language_from_metadata(f'{{"v":1,"language":"{secret}"}}', "en")
+    assert secret not in chosen.reason
+    assert secret not in chosen.language
+
+
+class _FakeJobRoom:
+    def __init__(self, metadata):
+        self.metadata = metadata
+
+
+class _FakeJob:
+    def __init__(self, room):
+        self.room = room
+
+
+class _FakeCtx:
+    """Only the two attributes `job_room_metadata` and the cap timer read."""
+
+    def __init__(self, job=None):
+        self.job = job
+        self.shutdown_calls: list[str] = []
+
+    def shutdown(self, reason: str = "user requested") -> None:
+        self.shutdown_calls.append(reason)
+
+
+def test_the_metadata_comes_off_the_jobs_room_not_the_connected_one():
+    from adapter.agent import job_room_metadata
+
+    ctx = _FakeCtx(_FakeJob(_FakeJobRoom('{"v":1,"language":"ar"}')))
+    assert job_room_metadata(ctx) == '{"v":1,"language":"ar"}'
+
+
+@pytest.mark.parametrize(
+    "ctx",
+    [
+        _FakeCtx(None),
+        _FakeCtx(_FakeJob(None)),
+        _FakeCtx(_FakeJob(_FakeJobRoom(""))),
+        _FakeCtx(_FakeJob(_FakeJobRoom(None))),
+        _FakeCtx(_FakeJob(_FakeJobRoom(123))),
+    ],
+)
+def test_a_job_with_no_readable_metadata_reads_as_none(ctx):
+    """The console runs a mock job, so this is the laptop demo's path and it
+    must behave exactly as it did before per-call language existed: no
+    metadata, worker default, nothing raised."""
+    from adapter.agent import job_room_metadata, language_from_metadata
+
+    assert job_room_metadata(ctx) == ""
+    assert language_from_metadata(job_room_metadata(ctx), "en").source == (
+        "worker_default"
+    )
+
+
+# --- the per-call duration cap --------------------------------------------
+
+
+def test_no_cap_is_configured_by_default():
+    """Zero is off, and off has to arm nothing at all: the laptop demo and the
+    console must not acquire a timer they never asked for."""
+    from adapter.agent import start_call_duration_cap
+
+    log, records = _capturing_log()
+    ctx = _FakeCtx()
+    assert start_call_duration_cap(ctx, log, 0) is None
+    assert start_call_duration_cap(ctx, log, -5) is None
+    assert [record["event"] for record in records] == []
+    assert ctx.shutdown_calls == []
+
+
+async def test_arming_the_cap_is_visible_before_it_fires():
+    """A cap that is configured but never reached leaves no trace otherwise, so
+    an env var that failed to reach the container looks identical to a call
+    that simply ended early. The armed event is what distinguishes them."""
+    from adapter.agent import start_call_duration_cap
+
+    log, records = _capturing_log()
+    task = start_call_duration_cap(_FakeCtx(), log, 30)
+    assert task is not None
+    try:
+        armed = [r for r in records if r["event"] == "call_duration_cap_armed"]
+        assert [r["limit_seconds"] for r in armed] == [30]
+    finally:
+        task.cancel()
+
+
+async def test_the_cap_shuts_the_call_down_and_says_so_first():
+    """One real second, on the real clock, because the mechanism under test IS
+    a sleep. The event must precede the shutdown: `ctx.shutdown` runs the
+    callback that closes the log, so an event emitted afterwards is an event
+    nobody receives, and the audit would show a call that stopped for no
+    reason.
+    """
+    from adapter.agent import start_call_duration_cap
+
+    log, records = _capturing_log()
+
+    seen_at_shutdown: list[list[str]] = []
+
+    class _RecordingCtx(_FakeCtx):
+        def shutdown(self, reason: str = "user requested") -> None:
+            seen_at_shutdown.append([r["event"] for r in records])
+            super().shutdown(reason)
+
+    ctx = _RecordingCtx()
+    task = start_call_duration_cap(ctx, log, 1)
+    assert task is not None
+    await asyncio.wait_for(task, timeout=10)
+
+    fired = [r for r in records if r["event"] == "call_duration_cap"]
+    assert [r["limit_seconds"] for r in fired] == [1]
+    assert fired[0]["action"] == "shutdown"
+
+    assert len(ctx.shutdown_calls) == 1
+    # The reason reaches the framework's own shutdown record, so it has to say
+    # what happened rather than leaving "user requested" to imply the visitor
+    # hung up.
+    assert "cap" in ctx.shutdown_calls[0] and "1" in ctx.shutdown_calls[0]
+
+    assert seen_at_shutdown and "call_duration_cap" in seen_at_shutdown[0]
+
+
+@pytest.mark.parametrize("let_it_start", [False, True])
+async def test_a_cancelled_cap_never_shuts_anything_down(let_it_start):
+    """The reason `_shutdown` cancels it. A call that ends on its own must not
+    leave a timer behind that fires into a closed session, and cancelling has
+    to be silent: a `call_duration_cap` event on a call that was not capped
+    would misreport why it ended.
+
+    Both parameters are needed and the second is the one that matters. Cancel
+    before the loop has scheduled the task and the coroutine never runs at all,
+    so nothing inside it is under test - a mutation that swallowed
+    `CancelledError` and shut the call down anyway survived a version of this
+    test that only did that. `let_it_start=True` yields first, so the
+    cancellation lands where it does in production: inside the sleep, on a call
+    that has been running.
+    """
+    from adapter.agent import start_call_duration_cap
+
+    log, records = _capturing_log()
+    ctx = _FakeCtx()
+    task = start_call_duration_cap(ctx, log, 1)
+    assert task is not None
+
+    if let_it_start:
+        # One loop turn is enough to get from "created" to "awaiting sleep".
+        await asyncio.sleep(0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled()
+
+    # Past the deadline it would have fired at.
+    await asyncio.sleep(1.2)
+    assert ctx.shutdown_calls == []
+    assert [r["event"] for r in records if r["event"] == "call_duration_cap"] == []
+
+
+# --- the transport credentials the FRAMEWORK reads ------------------------
+#
+# `load_settings()` reads agent/.env, `cli.run_app` reads os.environ, and the
+# half that works hid the half that did not: `connect` dispatched no job, logged
+# nothing after "HTTP server listening", and the room it was supposed to join
+# had only the hosted worker's agent in it - which reads exactly like a working
+# local run until you check the identity.
+
+
+TRANSPORT_NAMES = ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")
+
+
+@pytest.fixture
+def clean_transport_env():
+    """Snapshot and restore the three names, whatever the test leaves behind.
+
+    `monkeypatch.delenv(..., raising=False)` is NOT enough and the difference
+    is silent: when the name is already absent it deletes nothing, so it
+    records nothing, so the value `export_transport_env` then writes straight
+    into `os.environ` survives the test. That leak is what turned an unrelated
+    credential-redaction test in tests/test_config.py red, several files later,
+    with an error that pointed at neither test.
+    """
+    saved = {name: os.environ.get(name) for name in TRANSPORT_NAMES}
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_the_three_transport_names_reach_the_environment(
+    monkeypatch, clean_transport_env
+):
+    from adapter import agent as adapter_agent
+
+    for name in TRANSPORT_NAMES:
+        os.environ.pop(name, None)
+    monkeypatch.setattr(
+        adapter_agent,
+        "load_settings",
+        lambda: make_settings(
+            livekit_url="wss://from-the-env-file",
+            livekit_api_key="key-from-file",
+            livekit_api_secret="secret-from-file",
+        ),
+    )
+
+    assert adapter_agent.export_transport_env(["connect", "--room", "r"]) == [
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+    ]
+    assert os.environ["LIVEKIT_URL"] == "wss://from-the-env-file"
+    assert os.environ["LIVEKIT_API_KEY"] == "key-from-file"
+    assert os.environ["LIVEKIT_API_SECRET"] == "secret-from-file"
+
+
+def test_an_environment_value_already_set_is_never_overwritten(
+    monkeypatch, clean_transport_env
+):
+    """The hosted deploy sets these as Railway service variables and must be
+    untouched. A local `.env` left over in an image would otherwise quietly
+    point production at somebody's laptop project."""
+    from adapter import agent as adapter_agent
+
+    os.environ["LIVEKIT_URL"] = "wss://the-platform-set-this"
+    os.environ["LIVEKIT_API_KEY"] = "platform-key"
+    os.environ.pop("LIVEKIT_API_SECRET", None)
+    monkeypatch.setattr(
+        adapter_agent,
+        "load_settings",
+        lambda: make_settings(
+            livekit_url="wss://from-the-env-file",
+            livekit_api_key="key-from-file",
+            livekit_api_secret="secret-from-file",
+        ),
+    )
+
+    # Only the one that was genuinely absent is filled in.
+    assert adapter_agent.export_transport_env(["start"]) == ["LIVEKIT_API_SECRET"]
+    assert os.environ["LIVEKIT_URL"] == "wss://the-platform-set-this"
+    assert os.environ["LIVEKIT_API_KEY"] == "platform-key"
+    assert os.environ["LIVEKIT_API_SECRET"] == "secret-from-file"
+
+
+def test_a_non_connecting_command_exports_nothing_and_loads_nothing(monkeypatch):
+    """Console mode dials nothing, so it must not start reading settings any
+    earlier than it does today - the `load_settings` here explodes to prove it
+    is never called."""
+    from adapter import agent as adapter_agent
+
+    def explode() -> None:
+        raise AssertionError("settings were loaded for a non-connecting command")
+
+    monkeypatch.setattr(adapter_agent, "load_settings", explode)
+    assert adapter_agent.export_transport_env(["console"]) == []
+    assert adapter_agent.export_transport_env([]) == []
+
+
+def test_an_empty_environment_value_counts_as_unset(monkeypatch, clean_transport_env):
+    """`config._resolve` already treats an empty process value as absent and
+    falls back to the file. This has to agree, or `LIVEKIT_URL=` in a shell
+    would leave the framework with an empty url and the silent `connect`
+    failure back."""
+    from adapter import agent as adapter_agent
+
+    os.environ["LIVEKIT_URL"] = ""
+    os.environ.pop("LIVEKIT_API_KEY", None)
+    os.environ.pop("LIVEKIT_API_SECRET", None)
+    monkeypatch.setattr(
+        adapter_agent,
+        "load_settings",
+        lambda: make_settings(
+            livekit_url="wss://from-the-env-file",
+            livekit_api_key="k",
+            livekit_api_secret="s",
+        ),
+    )
+
+    assert "LIVEKIT_URL" in adapter_agent.export_transport_env(["dev"])
+    assert os.environ["LIVEKIT_URL"] == "wss://from-the-env-file"
