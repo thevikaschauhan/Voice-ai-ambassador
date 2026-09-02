@@ -8,16 +8,38 @@ synthetic voice) into something the client enjoys deciding.
 so every run used Fish's default voice - an English voice nobody selected, used
 for Arabic and Hindi too. They now default to the top register match in each
 list below (marked PROVISIONAL in `adapter/config.py` and `agent/.env.example`).
-That is not the decision. It settles only what nobody wanted decided by
-accident; two candidates per language still go to the meeting, and the client
-still chooses.
 
-**This page is the shortlist, not the decision. Nobody on the build team has
-listened to any of these.** Every candidate below was found by reading Fish's
-public catalogue - an unauthenticated `GET https://api.fish.audio/model`, no
+> **Human decision, 2026-09-02: approved. All three ids confirmed for the
+> demo.** Listening samples were synthesised in the exact shipping ids and the
+> answer was "Approved, Proceed", so what the demo speaks in is now a heard
+> choice rather than an inherited one:
+>
+> | | voice | id |
+> |---|---|---|
+> | en | "Ethan", Fish Official | `536d3a5e000945adb7038665781a4aca` |
+> | ar | Gulf-accented, community | `10c5c2a37a284a81bb0cf3c53955d795` |
+> | hi | "neel", community | `6209a5682085409fa935f901f0bce950` |
+>
+> **This confirms the demo, not the product.** Two candidates per language
+> still go to the meeting and the client still chooses; these are what the
+> system speaks in until they do. The `VERIFY:` under finding 1, on what Fish's
+> paid tier grants for a public-library voice, **stays open** and is unaffected
+> by this approval.
+>
+> One thing the audition found, now fixed rather than lived with: the three
+> voices were not level-matched, and the Hindi one measured nearly four times
+> louder than English and peaked within 7% of full scale. `adapter/levels.py`
+> matches them DOWN to the quietest, so a language change is no longer a volume
+> change. Changing any id above without measuring the new voice fails the
+> suite; see that module for how to recalibrate.
+
+**Every candidate below was found by reading Fish's public catalogue** - an
+unauthenticated `GET https://api.fish.audio/model`, no
 synthesis, no key, no spend. The sample links are Fish's own hosted previews of
 each voice, so the whole shortlist can be auditioned in a browser before a
-single paid character is synthesised.
+single paid character is synthesised. Only the three confirmed above have been
+heard; the remaining six are still previews nobody on the build team has played
+against real sentences.
 
 `VERIFY:` the Arabic and Hindi candidates are shortlisted on their catalogue
 metadata and their accent tags, which is all this team can read. Whether any of
@@ -118,7 +140,12 @@ TTS swap decision happens then, not on day 3.
    `adapter/config.py` and the same three lines in `agent/.env.example` - and a
    test fails if they disagree. `agent/.env` overrides both for a local run,
    which is the right way to try a candidate without committing to it.
-4. Take two per language to the meeting, not one. The point of this page is
+4. Measure the new voice's level and add it to `adapter/levels.py`. A shipped
+   voice with no measurement fails the suite, deliberately: it would otherwise
+   ship at whatever loudness it happens to have, which is the problem the
+   Hindi voice had. The module says how, and it is one synthesis and one
+   function call.
+5. Take two per language to the meeting, not one. The point of this page is
    that the client chooses, and a provisional default in the repository is not
    a choice - it is what stops the demo speaking Arabic in an unselected
    English voice while the choice is still open.

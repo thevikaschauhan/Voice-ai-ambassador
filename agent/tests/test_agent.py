@@ -36,6 +36,7 @@ import pytest
 # ADR-002: the core stays installable and testable with no voice stack present.
 pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
 
+from livekit import rtc  # noqa: E402
 from livekit.agents import Agent, APIConnectOptions  # noqa: E402
 from livekit.agents import llm as lk_llm  # noqa: E402
 from livekit.agents.metrics import EOUMetrics, TTSMetrics  # noqa: E402
@@ -43,11 +44,17 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN  # noqa:
 from livekit.agents.utils import ConnectionPool  # noqa: E402
 from livekit.agents.voice import SpeechHandle  # noqa: E402
 
+from adapter import agent as adapter_agent  # noqa: E402
 from adapter.agent import AmbassadorAgent, shutdown_session  # noqa: E402
-from adapter.config import Settings  # noqa: E402
+from adapter.config import (  # noqa: E402
+    PROVISIONAL_VOICE_ID_EN,
+    PROVISIONAL_VOICE_ID_HI,
+    Settings,
+)
 from adapter.confirmations import ConfirmationCopy  # noqa: E402
 from adapter.disclosure import UncertifiedLanguageError  # noqa: E402
 from adapter.events import EventLog  # noqa: E402
+from adapter.levels import gain_for  # noqa: E402
 from adapter.interception import (  # noqa: E402
     BRIDGE_COPY,
     FALLBACK_COPY,
@@ -850,6 +857,130 @@ async def test_the_respelling_is_applied_to_the_text_handed_to_tts(monkeypatch):
     joined = "".join(handed_to_tts)
     assert "bin-GAH-tee" in joined, joined
     assert "Binghatti" not in joined, joined
+
+
+# --- level matching reaches the audio, not just the table ------------------
+#
+# `levels.py` has full unit coverage and would keep it while `tts_node` ignored
+# it, which is exactly the shape of the lexicon defect one section up: a
+# correction that exists and never arrives. These are the tests that fail if
+# the wiring is removed.
+
+
+def _frame(amplitude: int, samples: int = 480):
+    from array import array
+
+    data = array("h", [amplitude, -amplitude] * (samples // 2)).tobytes()
+    return rtc.AudioFrame(
+        data=data, sample_rate=24000, num_channels=1, samples_per_channel=samples
+    )
+
+
+def _amplitude(frame) -> int:
+    from array import array
+
+    out = array("h")
+    out.frombytes(bytes(frame.data))
+    return max(abs(v) for v in out)
+
+
+def _tts_node_frames(monkeypatch, settings, frames):
+    """Run `tts_node` over fabricated synthesiser output and collect what leaves."""
+    log = EventLog("sess_test", stream=StringIO(), verbose=False)
+    agent = AmbassadorAgent(settings=settings, log=log)
+
+    async def emit(agent_, text, model_settings):
+        async for _ in text:
+            pass
+        for frame in frames:
+            yield frame
+
+    monkeypatch.setattr(Agent.default, "tts_node", staticmethod(emit))
+
+    async def source():
+        yield "Handover is in the third quarter."
+
+    return agent, source
+
+
+async def test_the_loud_voice_is_attenuated_on_the_way_out(monkeypatch):
+    """The Hindi voice measured about 3.9x English and peaked within 7% of full
+    scale. What a caller hears has to come out quieter, not just the number in
+    the table."""
+    settings = make_settings(
+        language="hi",
+        tts_voice_id_hi=PROVISIONAL_VOICE_ID_HI,
+        allow_uncertified_language=True,
+    )
+    agent, source = _tts_node_frames(monkeypatch, settings, [_frame(30000)])
+    out = [frame async for frame in agent.tts_node(source(), None)]
+
+    assert len(out) == 1
+    # gain_for(hi) is about 0.257, so a 30000 peak lands near 7700.
+    assert _amplitude(out[0]) == pytest.approx(
+        round(30000 * gain_for(PROVISIONAL_VOICE_ID_HI)), abs=2
+    )
+    assert _amplitude(out[0]) < 30000
+
+
+async def test_the_quietest_voice_is_handed_through_untouched(monkeypatch):
+    """English is the voice the others are matched down to, so it is at unity
+    for the whole call. Not merely equal - the SAME frame object, because a
+    per-frame copy on the hot path would be a cost paid for nothing."""
+    settings = make_settings(language="en", tts_voice_id_en=PROVISIONAL_VOICE_ID_EN)
+    original = _frame(20000)
+    agent, source = _tts_node_frames(monkeypatch, settings, [original])
+    out = [frame async for frame in agent.tts_node(source(), None)]
+
+    assert out == [original]
+
+
+async def test_an_unconfigured_voice_is_not_touched_either(monkeypatch):
+    """The failure direction at the seam: a voice with no measurement sounds
+    exactly as it did before this existed."""
+    settings = make_settings(language="en", tts_voice_id_en="a-voice-nobody-measured")
+    original = _frame(30000)
+    agent, source = _tts_node_frames(monkeypatch, settings, [original])
+    assert [frame async for frame in agent.tts_node(source(), None)] == [original]
+
+
+async def test_the_first_audio_mark_is_taken_before_the_gain_is_applied(monkeypatch):
+    """`tts_first_audio` measures when Fish's audio ARRIVED, and it is a row in
+    the latency budget (`docs/04-`). Marking after the gain would fold our own
+    work into that number, quietly inflating a measurement by the amount of the
+    thing being measured against.
+
+    Ordering against `apply_gain` itself, not merely against the first yield: a
+    mark that moved below the gain but stayed above the yield would still be
+    wrong and would pass a test that only watched what was emitted.
+    """
+    settings = make_settings(
+        language="hi",
+        tts_voice_id_hi=PROVISIONAL_VOICE_ID_HI,
+        allow_uncertified_language=True,
+    )
+    agent, source = _tts_node_frames(monkeypatch, settings, [_frame(30000)])
+
+    order: list[str] = []
+    real_apply = adapter_agent.apply_gain
+
+    def spy(pcm, gain):
+        order.append("gain")
+        return real_apply(pcm, gain)
+
+    monkeypatch.setattr(adapter_agent, "apply_gain", spy)
+
+    class Tracker:
+        def mark_tts_first_audio(self) -> None:
+            order.append("mark")
+
+    agent._tracker = Tracker()  # noqa: SLF001
+    emitted = [frame async for frame in agent.tts_node(source(), None)]
+
+    assert order[:2] == ["mark", "gain"], order
+    assert len(emitted) == 1
+    # The spy is a pass-through, so the attenuation still happened.
+    assert _amplitude(emitted[0]) < 30000
 
 
 # --- ADR-011: the confirmation takes the turn away from the model ----------

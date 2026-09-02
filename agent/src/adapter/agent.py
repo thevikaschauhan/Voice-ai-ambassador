@@ -93,6 +93,7 @@ from .disclosure import load_disclosures, resolve_opening
 from .events import EventLog, TurnTracker
 from .events_bridge import EventsBridge, bridge_from_env
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
+from .levels import apply_gain, gain_for
 from .lexicon import load_lexicon, respell_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
 from .stt_factory import build_stt, describe
@@ -965,12 +966,29 @@ class AmbassadorAgent(Agent):
         spoken = respell_stream(text, self._lexicon, self._settings.language)
         tracker = self._tracker
         first = True
+        # Level matching, applied per frame as the audio leaves (adapter/levels).
+        # The three shipping voices differ by nearly 4x in loudness, so without
+        # this a language change is also a volume change. Resolved once per
+        # turn rather than per frame, and unity for the quietest voice - which
+        # every other voice is matched down to - so the common path is the
+        # identical object it was before.
+        gain = gain_for(self._settings.voice_id(self._settings.language))
         async for frame in Agent.default.tts_node(self, spoken, model_settings):
             if first:
                 first = False
+                # Marked before the gain is applied: this is a measurement of
+                # when Fish's first audio ARRIVED, and it must not start
+                # including our own work on the frame.
                 if tracker is not None:
                     tracker.mark_tts_first_audio()
                 self._note_tts_connection(tracker)
+            if gain < 1.0:
+                frame = rtc.AudioFrame(
+                    data=apply_gain(bytes(frame.data), gain),
+                    sample_rate=frame.sample_rate,
+                    num_channels=frame.num_channels,
+                    samples_per_channel=frame.samples_per_channel,
+                )
             yield frame
 
     # -- hook 2: function tools firing mid-turn ---------------------------
