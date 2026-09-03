@@ -1,7 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { TalkOrb } from '@/components/talk-orb'
+import type { OrbState } from '@/components/talk-orb'
+import { TalkSubtitles } from '@/components/talk-subtitles'
+import { AMBASSADOR_FALLBACK } from '@/lib/ambassador.shared'
+import type { AmbassadorNames } from '@/lib/ambassador.shared'
+import { SPEAKING_FLOOR } from '@/lib/talk/levels'
+import type { Levels } from '@/lib/talk/levels'
 import { startTalking } from '@/lib/talk/session'
 import type { TalkEnding, TalkHandle, TalkLine, TalkPhase } from '@/lib/talk/session'
 
@@ -20,6 +27,9 @@ import type { TalkEnding, TalkHandle, TalkLine, TalkPhase } from '@/lib/talk/ses
  * a fixture into them.
  */
 
+/** The phases in which a call is up, so the orb and the controls agree. */
+const inCallPhases: ReadonlySet<string> = new Set(['connecting', 'live', 'reconnecting'])
+
 const LANGUAGES = [
   { code: 'en', label: 'English' },
   { code: 'ar', label: 'العربية' },
@@ -28,7 +38,7 @@ const LANGUAGES = [
 
 type LanguageCode = (typeof LANGUAGES)[number]['code']
 
-export function TalkCall() {
+export function TalkCall({ names }: { names: AmbassadorNames }) {
   const [code, setCode] = useState('')
   const [language, setLanguage] = useState<LanguageCode>('en')
   const [phase, setPhase] = useState<TalkPhase | 'idle' | 'starting'>('idle')
@@ -37,7 +47,26 @@ export function TalkCall() {
   const [muted, setMuted] = useState(false)
   const [lines, setLines] = useState<readonly TalkLine[]>([])
   const [ending, setEnding] = useState<TalkEnding | null>(null)
+  const [levels, setLevels] = useState<Levels>({ agent: 0, visitor: 0 })
   const handleRef = useRef<TalkHandle | null>(null)
+
+  /**
+   * Whose turn it is, from the levels and the rail rather than from a flag the
+   * agent would have to send. Precedence matters: the ambassador speaking wins
+   * over the visitor, because the corona should follow whoever is audible and
+   * an open microphone picks her up through the speakers.
+   */
+  const name = names[language]?.trim() || AMBASSADOR_FALLBACK
+  const orb: OrbState = useMemo(() => {
+    if (!inCallPhases.has(phase)) return 'idle'
+    if (levels.agent >= SPEAKING_FLOOR) return 'speaking'
+    if (levels.visitor >= SPEAKING_FLOOR) return 'visitor'
+    // A visitor line that has been finalised with nothing from the ambassador
+    // yet IS the thinking pause - the one moment a silent page reads as broken.
+    const last = lines.length > 0 ? lines[lines.length - 1] : null
+    if (last !== null && last.speaker === 'visitor' && last.final) return 'thinking'
+    return 'listening'
+  }, [phase, levels.agent, levels.visitor, lines])
 
   const record = useCallback((line: TalkLine) => {
     // Keyed on the stream id, so a segment that arrives in ten chunks is one
@@ -77,6 +106,7 @@ export function TalkCall() {
         {
           onPhase: setPhase,
           onLine: record,
+          onLevels: setLevels,
           onEnded: (reason) => {
             setEnding(reason)
             handleRef.current = null
@@ -107,16 +137,19 @@ export function TalkCall() {
     handleRef.current = null
   }, [])
 
-  const inCall = phase === 'connecting' || phase === 'live' || phase === 'reconnecting'
+  const inCall = inCallPhases.has(phase)
   const busy = phase === 'starting'
 
   return (
     <main className="mx-auto flex min-h-screen max-w-[860px] flex-col gap-6 px-4 py-6 sm:px-6">
-      <header>
+      <header className="text-center sm:text-left">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-[15px] tracking-[0.16em] text-ink-100 uppercase">
             Binghatti ambassador
           </h1>
+          {/* The state chip stays: it is the one place a reduced-motion
+              visitor and a screen reader both read the phase of the CALL, as
+              opposed to the orb's label, which reads the turn. */}
           <span
             className={`border px-2.5 py-1 text-[11px] tracking-[0.12em] uppercase ${
               phase === 'live'
@@ -159,7 +192,7 @@ export function TalkCall() {
       ) : null}
 
       {inCall ? (
-        <section className="flex flex-wrap items-center gap-3">
+        <section className="flex flex-wrap items-center justify-center gap-3">
           <button
             type="button"
             onClick={() => {
@@ -181,7 +214,7 @@ export function TalkCall() {
         </section>
       ) : (
         <form
-          className="flex flex-wrap items-end gap-3"
+          className="flex flex-wrap items-end justify-center gap-3"
           onSubmit={(event) => {
             event.preventDefault()
             if (busy || code.trim() === '') return
@@ -234,39 +267,28 @@ export function TalkCall() {
         </form>
       )}
 
-      <section aria-live="polite" className="flex min-h-[18rem] flex-col gap-3">
-        <h2 className="text-[11px] tracking-[0.12em] text-ink-400 uppercase">Transcript</h2>
-        {lines.length === 0 ? (
-          <p className="text-[13px] text-ink-500">
-            {inCall
-              ? 'Listening. Say hello whenever you are ready.'
+      {/* The orb is the centre of the page once a call is up: a visitor with
+          nothing to look at cannot tell a thinking pause from a broken demo.
+          Before the first call it is still shown, idle and dim, so the page is
+          not a bare form either. */}
+      <section className="flex flex-col items-center gap-8 py-2">
+        <TalkOrb state={orb} level={orb === 'visitor' ? levels.visitor : levels.agent} name={name} />
+        <TalkSubtitles
+          lines={lines}
+          name={name}
+          idle={
+            inCall
+              ? 'Say hello whenever you are ready.'
               : ending !== null
                 ? 'That call had nothing transcribed before it stopped.'
-                : 'The conversation will appear here as it happens.'}
-          </p>
-        ) : (
-          <ol className="flex flex-col gap-3">
-            {lines.map((line) => (
-              <li key={line.id} className="flex flex-col gap-1">
-                <span className="text-[11px] tracking-[0.12em] text-ink-500 uppercase">
-                  {line.speaker === 'agent' ? 'Ambassador' : 'You'}
-                </span>
-                <p
-                  className={`text-[13px] leading-relaxed ${
-                    line.final ? 'text-ink-200' : 'text-ink-400'
-                  }`}
-                >
-                  {line.text}
-                </p>
-              </li>
-            ))}
-          </ol>
-        )}
+                : 'The conversation will appear here as it happens.'
+          }
+        />
         {/* The words are the VERBALISED form: the transcription streams carry
             what was spoken, so a price reads as words rather than digits
             (docs/09-). That is what the visitor heard, which is the honest
             thing to show even though a reader might expect the figures. */}
-        <p className="text-[12px] leading-relaxed text-ink-600">
+        <p className="max-w-[62ch] text-center text-[12px] leading-relaxed text-ink-600">
           Figures appear here the way they were spoken rather than as digits, because this
           is a record of the conversation rather than a quote.
         </p>

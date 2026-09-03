@@ -10,6 +10,8 @@ import {
 } from 'livekit-client'
 import type { Participant, RemoteTrack } from 'livekit-client'
 import { isAgent } from '@/lib/session/room-signals'
+import { levelMeter } from '@/lib/talk/levels'
+import type { Levels } from '@/lib/talk/levels'
 
 /**
  * A call the visitor is IN, as opposed to a call the surface is watching.
@@ -135,6 +137,12 @@ export interface TalkEvents {
    * it - including the visitor - so the page has one place to settle into.
    */
   onEnded: (ending: TalkEnding) => void
+  /**
+   * How loud each side is, twenty times a second, so the orb can follow a voice
+   * rather than a state change. Optional: a caller that shows no orb - a test,
+   * or a future surface - pays nothing for the analyser.
+   */
+  onLevels?: (levels: Levels) => void
   /** A failure the visitor needs to read, in their words rather than ours. */
   onTrouble: (reason: string) => void
 }
@@ -159,6 +167,7 @@ export async function startTalking(grant: TalkGrant, events: TalkEvents): Promis
   // Text so far per SEGMENT, so an agent segment spread over several writes
   // keeps accumulating across them.
   const segments = new Map<string, string>()
+  const meter = events.onLevels ? levelMeter(events.onLevels) : null
 
   const room = new Room({
     // The framework's own defaults for a speech call. Named rather than
@@ -185,6 +194,7 @@ export async function startTalking(grant: TalkGrant, events: TalkEvents): Promis
     }
     sinks.clear()
     segments.clear()
+    meter?.stop()
     // Releases the microphone. The browser's own recording indicator stays lit
     // until the local track is actually stopped, and a visitor whose call is
     // over should not be left looking at one. Idempotent, and already
@@ -233,10 +243,20 @@ export async function startTalking(grant: TalkGrant, events: TalkEvents): Promis
       )
     })
     sinks.set(track.sid ?? participant.identity, element)
+
+    // The same track the element is playing, measured. `isAgent` decides the
+    // side rather than the identity comparison used for the transcript,
+    // because a track arrives with a participant and a transcript with an
+    // identity string.
+    const media = track.mediaStreamTrack
+    if (media !== undefined) {
+      meter?.add(track.sid ?? participant.identity, media, isAgent(participant) ? 'agent' : 'visitor')
+    }
   })
 
   room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
     const key = track.sid ?? ''
+    meter?.remove(key)
     track.detach().forEach((element) => {
       element.srcObject = null
       element.remove()
@@ -303,6 +323,24 @@ export async function startTalking(grant: TalkGrant, events: TalkEvents): Promis
   // refused permission cannot leave a half-open room behind. If this throws the
   // caller tears the room down.
   await room.localParticipant.setMicrophoneEnabled(true)
+
+  // The visitor's own level, off the local track. Read after publishing rather
+  // than from a getUserMedia stream of our own, so there is one microphone in
+  // play and muting it stops the orb reacting to it too.
+  //
+  // Wrapped, and the direction is deliberate: the orb is how the call LOOKS and
+  // the call is the thing. A meter that cannot attach costs the visitor's half
+  // of the bloom - the orb reads "listening" while they speak - and must never
+  // cost a working conversation, which is what throwing here would do one line
+  // after the microphone went live.
+  try {
+    for (const publication of room.localParticipant.audioTrackPublications.values()) {
+      const media = publication.track?.mediaStreamTrack
+      if (media !== undefined) meter?.add(publication.trackSid, media, 'visitor')
+    }
+  } catch {
+    // Measured nothing; the call is up.
+  }
 
   return {
     async setMuted(muted: boolean) {

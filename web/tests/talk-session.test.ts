@@ -30,6 +30,9 @@ class FakeRoom {
     setMicrophoneEnabled: async (on: boolean) => {
       this.micEnabled = on
     },
+    // A real LocalParticipant always has this; the fake needs it because
+    // `startTalking` measures the visitor's own level off it.
+    audioTrackPublications: new Map<string, { trackSid: string; track?: unknown }>(),
   }
 
   constructor(options: Record<string, unknown> = {}) {
@@ -234,8 +237,8 @@ describe('a call that the other side ends', () => {
 
   it('bounds its reconnect attempts rather than spinning on a room that is gone', async () => {
     const { room } = await connect()
-    const { DefaultReconnectPolicy } = await import('livekit-client')
-    const policy = room.options.reconnectPolicy as InstanceType<typeof DefaultReconnectPolicy>
+    type Policy = InstanceType<typeof import('livekit-client').DefaultReconnectPolicy>
+    const policy = room.options.reconnectPolicy as Policy
     expect(policy).toBeDefined()
     // The library default is ten attempts climbing to its maximum delay. On a
     // deleted room every one of them fails, and the visitor watches

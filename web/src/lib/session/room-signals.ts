@@ -2,6 +2,7 @@
 
 import { ConnectionState, ParticipantKind, Room, RoomEvent, Track } from 'livekit-client'
 import type { Participant, RemoteTrack, RemoteTrackPublication } from 'livekit-client'
+import { rms as rawRms } from '@/lib/audio/level'
 import type { SessionInput } from '@/lib/session/events'
 import type { Emit } from '@/lib/session/source'
 
@@ -204,17 +205,13 @@ export async function joinRoom(grant: RoomGrant, emit: Emit): Promise<RoomHandle
 }
 
 /**
- * Root mean square of the current window, normalised to roughly 0-1.
+ * The watcher's reading of a track's level, 0 to roughly 1.
  *
- * RMS rather than peak: peak jumps on a single sample and makes the trace look
- * like noise, while RMS is what a level meter shows. The floor keeps a silent
- * track drawing nothing rather than drawing the room's noise floor as speech.
+ * The measurement is shared (`lib/audio/level.ts`); the floor and the scale
+ * below are this panel's policy. The floor keeps a silent track drawing nothing
+ * rather than drawing the room's noise floor as speech.
  */
 function rms(analyser: AnalyserNode): number {
-  const samples = new Float32Array(analyser.fftSize)
-  analyser.getFloatTimeDomainData(samples)
-  let sum = 0
-  for (const sample of samples) sum += sample * sample
-  const value = Math.sqrt(sum / samples.length)
+  const value = rawRms(analyser)
   return value < SPEAKING_FLOOR / 4 ? 0 : Math.min(1, value * 4)
 }
