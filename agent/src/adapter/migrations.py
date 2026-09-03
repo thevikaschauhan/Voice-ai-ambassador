@@ -19,6 +19,7 @@ from a model.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import asyncpg
@@ -119,3 +120,54 @@ async def assert_schema_current(
             "(ADR-018); they are not applied by a worker on startup."
         )
     return expected
+
+
+def _main(argv: list[str] | None = None) -> int:
+    """`python -m adapter.migrations up`, the admin-api preDeployCommand.
+
+    Exists as a module entry point because that is the exact string
+    `.railway/railway.ts` declares. Without it the command exited 0 and applied
+    nothing, which is the worst shape a pre-deploy step can have: the deploy
+    reports success over a schema that never moved.
+
+    `up` is the only verb. A `down` would be a second thing a pre-deploy
+    command could be asked to do by mistake, against a database whose previous
+    state nobody kept.
+    """
+    import asyncio
+    import os
+
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments != ["up"]:
+        print(
+            "usage: python -m adapter.migrations up  (the only verb)",
+            file=sys.stderr,
+        )
+        return 2
+
+    dsn = os.environ.get("DATABASE_URL", "").strip()
+    if not dsn:
+        # One line, because it is read in a deploy log beside everything else.
+        print(
+            "DATABASE_URL is not set; migrations need the session-pooler URL "
+            "(ADR-018), and this step will not guess one.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        applied = asyncio.run(apply_migrations(dsn))
+    except Exception as exc:
+        # The type and message, never the DSN: it carries the password.
+        print(f"migrations failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    if applied:
+        print(f"applied {len(applied)} migration(s): {', '.join(applied)}")
+    else:
+        print(f"schema is up to date at version {latest_version()}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main())
