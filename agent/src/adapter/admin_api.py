@@ -51,6 +51,8 @@ from typing import Annotated, Any, Final, Literal
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
+from ambassador.schemas import Language
+
 from .crypto import EnvelopeError, Sealer
 from .events import EventLog
 from .repository import ConcurrentDecision, Repository
@@ -134,9 +136,17 @@ async def _probe_forever(app: FastAPI) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Connect on start, if a DSN is set, and keep the probe running.
 
-    A missing DSN does not stop the app: `/health` still answers, which is what
+    A MISSING DSN does not stop the app: `/health` still answers, which is what
     keeps a misconfigured deployment diagnosable instead of restart-looping
     before it can be looked at. `/ready` reports the truth in that state.
+
+    A PRESENT BUT BAD DSN is a different case and this lifespan does NOT make
+    it graceful: `Repository.connect` raises and the app does not start. The
+    property that keeps that from reaching a deploy is dwight's session-mode
+    guard in the pre-deploy step, one layer earlier - it failed the deploy on a
+    wrong pooler port before the process was ever launched. Named here so that
+    nobody later relaxes that guard on the theory that the app degrades
+    gracefully, because it does not; graceful is only the missing case.
     """
     if not hasattr(app.state, "log"):
         app.state.log = EventLog(session_id="admin-api")
@@ -263,6 +273,7 @@ LeadStatusFilter = Literal["unreviewed", "qualified", "rejected"]
 @app.get("/v1/leads", dependencies=[Depends(require_bearer)])
 async def list_leads(
     lead_status: Annotated[LeadStatusFilter | None, Query(alias="status")] = None,
+    language: Annotated[Language | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[dict[str, Any]]:
@@ -271,9 +282,14 @@ async def list_leads(
     docs/10- keeps buyer words and contact values on the detail page, and the
     list query names its columns rather than selecting everything - so a list
     response cannot leak a transcript it was never handed.
+
+    Filters are typed rather than free strings, so a value outside an enum is
+    refused with a 422 naming the parameter instead of being ignored. A filter
+    the API silently dropped would show an admin the unfiltered list while they
+    believed it was narrowed, and they would act on it.
     """
     return await repository_of(app).list_leads(
-        status=lead_status, limit=limit, offset=offset
+        status=lead_status, language=language, limit=limit, offset=offset
     )
 
 
