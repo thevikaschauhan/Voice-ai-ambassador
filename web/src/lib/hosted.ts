@@ -1,6 +1,8 @@
 import 'server-only'
 
 import { timingSafeEqual } from 'node:crypto'
+import { TALK_LANGUAGES } from '@/lib/livekit/talk.shared'
+import type { TalkLanguage } from '@/lib/livekit/talk.shared'
 
 /**
  * Whether this deployment is the public, client-facing one, and who may in.
@@ -75,6 +77,42 @@ export function checkAccessCode(supplied: unknown): GateResult {
 export function accessCodeIsWeak(): boolean {
   const code = accessCode()
   return code !== null && code.length < MIN_CODE_LENGTH
+}
+
+/**
+ * Which languages the talk page offers, and why an empty answer is not one.
+ *
+ * `DEMO_LANGUAGES` is a comma-separated list of codes. UNSET means all three,
+ * so a laptop is unchanged and nobody has to configure anything to demo in
+ * Hindi at a venue. The hosted service sets it to `en` until the Arabic and
+ * Hindi review packets come back, because offering a language whose copy
+ * nobody has authored is offering a worse demo than not offering it.
+ *
+ * A value that is SET but yields no valid code falls back to ENGLISH ONLY, not
+ * to all three, and the direction is the point. Somebody who typed this
+ * variable meant to RESTRICT; honouring a typo by re-opening Arabic and Hindi
+ * on a public URL would do the exact opposite of what they asked, and it would
+ * do it silently. English is the one language with authored copy throughout, so
+ * it is the safe floor. The mistake is logged, because a narrowed picker with
+ * no explanation is its own small mystery.
+ */
+export function offeredLanguages(): TalkLanguage[] {
+  const raw = process.env.DEMO_LANGUAGES?.trim()
+  if (!raw) return [...TALK_LANGUAGES]
+
+  const asked = raw.split(',').map((code) => code.trim().toLowerCase())
+  // Filtered against the closed list rather than trusted, and ordered by that
+  // list rather than by the variable, so the picker's order is a property of
+  // the product instead of a property of how somebody typed an env var.
+  const offered = TALK_LANGUAGES.filter((code) => asked.includes(code))
+  if (offered.length > 0) return [...offered]
+
+  console.warn(
+    `talk: DEMO_LANGUAGES is set to ${JSON.stringify(raw)} but names no known ` +
+      `language (${TALK_LANGUAGES.join(', ')}); offering English only, because a ` +
+      `variable that was set meant to restrict`,
+  )
+  return ['en']
 }
 
 export function maxRooms(): number {

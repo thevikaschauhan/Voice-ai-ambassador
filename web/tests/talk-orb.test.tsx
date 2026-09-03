@@ -210,3 +210,59 @@ describe('prefers-reduced-motion', () => {
     expect(orb.querySelectorAll('.orb-spin, .orb-spin-slow').length).toBeGreaterThan(0)
   })
 })
+
+describe('the picker offers only what the deployment offers', () => {
+  it('shows a picker when there is a choice to make', () => {
+    render(<TalkCall names={NAMES} offered={['en', 'ar', 'hi']} />)
+    const picker = screen.getByLabelText('Language') as HTMLSelectElement
+    expect(picker.tagName).toBe('SELECT')
+    expect([...picker.options].map((option) => option.value)).toEqual(['en', 'ar', 'hi'])
+  })
+
+  it('renders the offered subset and nothing else', () => {
+    render(<TalkCall names={NAMES} offered={['en', 'hi']} />)
+    const picker = screen.getByLabelText('Language') as HTMLSelectElement
+    expect([...picker.options].map((option) => option.value)).toEqual(['en', 'hi'])
+  })
+
+  it('drops the picker entirely for a single language, and still says which', () => {
+    render(<TalkCall names={NAMES} offered={['en']} />)
+    // One option is not a choice: a select asking a visitor to decide something
+    // already decided is worse than a label.
+    expect(screen.queryByLabelText('Language')).not.toBeInTheDocument()
+    expect(screen.getByText('Language')).toBeInTheDocument()
+    expect(screen.getByText('English')).toBeInTheDocument()
+  })
+
+  it('opens on the first offered language rather than a hardcoded English', () => {
+    render(<TalkCall names={NAMES} offered={['hi']} />)
+    // A deployment offering Hindi only must not open with a selection its own
+    // picker cannot show.
+    expect(screen.getByText('हिन्दी')).toBeInTheDocument()
+  })
+
+  it('sends the offered language to the route', async () => {
+    const sent: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        sent.push(String(JSON.parse(String(init?.body)).language))
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            url: 'wss://x',
+            token: 't',
+            room: 'demo-1',
+            identity: 'visitor-1',
+            language: 'hi',
+          }),
+        } as Response
+      }) as typeof fetch,
+    )
+    render(<TalkCall names={NAMES} offered={['hi']} />)
+    await userEvent.type(screen.getByLabelText('Access code'), 'the-code')
+    await userEvent.click(screen.getByRole('button', { name: 'Start call' }))
+    await waitFor(() => expect(sent).toEqual(['hi']))
+  })
+})

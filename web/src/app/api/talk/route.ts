@@ -1,5 +1,5 @@
 import { RoomUnavailable, liveKitConfig } from '@/lib/livekit/config'
-import { DemoAtCapacity, isTalkLanguage, mintTalkGrant } from '@/lib/livekit/talk'
+import { DemoAtCapacity, isOfferedLanguage, mintTalkGrant } from '@/lib/livekit/talk'
 import { checkAccessCode } from '@/lib/hosted'
 
 export const runtime = 'nodejs'
@@ -44,7 +44,11 @@ export async function POST(request: Request): Promise<Response> {
     return refuse('that access code was not accepted', 403)
   }
 
-  if (!isTalkLanguage(body.language)) {
+  // Offered, not merely valid. A deployment that offers English only must
+  // refuse a request for Hindi even though Hindi is a real language the worker
+  // can speak - and it must refuse it HERE, because the picker is a
+  // convenience and this is the gate.
+  if (!isOfferedLanguage(body.language)) {
     return refuse('pick one of the offered languages', 400)
   }
 

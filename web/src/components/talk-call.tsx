@@ -7,6 +7,7 @@ import type { OrbState } from '@/components/talk-orb'
 import { TalkSubtitles } from '@/components/talk-subtitles'
 import { AMBASSADOR_FALLBACK } from '@/lib/ambassador.shared'
 import type { AmbassadorNames } from '@/lib/ambassador.shared'
+import type { TalkLanguage } from '@/lib/livekit/talk.shared'
 import { SPEAKING_FLOOR } from '@/lib/talk/levels'
 import type { Levels } from '@/lib/talk/levels'
 import { startTalking } from '@/lib/talk/session'
@@ -38,9 +39,23 @@ const LANGUAGES = [
 
 type LanguageCode = (typeof LANGUAGES)[number]['code']
 
-export function TalkCall({ names }: { names: AmbassadorNames }) {
+export function TalkCall({
+  names,
+  offered = ['en', 'ar', 'hi'],
+}: {
+  names: AmbassadorNames
+  /**
+   * The languages this deployment offers, decided on the server. Defaulted so
+   * a test or a future caller that does not care gets all three, which is also
+   * the unset behaviour.
+   */
+  offered?: readonly TalkLanguage[]
+}) {
   const [code, setCode] = useState('')
-  const [language, setLanguage] = useState<LanguageCode>('en')
+  // The first offered language, not a hardcoded 'en': a deployment offering
+  // Hindi only should not open with an English selection its own picker cannot
+  // show.
+  const [language, setLanguage] = useState<LanguageCode>(offered[0] ?? 'en')
   const [phase, setPhase] = useState<TalkPhase | 'idle' | 'starting'>('idle')
   const [refusal, setRefusal] = useState<string | null>(null)
   const [trouble, setTrouble] = useState<string | null>(null)
@@ -57,6 +72,8 @@ export function TalkCall({ names }: { names: AmbassadorNames }) {
    * an open microphone picks her up through the speakers.
    */
   const name = names[language]?.trim() || AMBASSADOR_FALLBACK
+  // The offered set, in the product's order, with the labels the picker shows.
+  const choices = LANGUAGES.filter((option) => offered.includes(option.code))
   const orb: OrbState = useMemo(() => {
     if (!inCallPhases.has(phase)) return 'idle'
     if (levels.agent >= SPEAKING_FLOOR) return 'speaking'
@@ -237,26 +254,42 @@ export function TalkCall({ names }: { names: AmbassadorNames }) {
               className="w-[22ch] border border-ink-700 bg-ink-900 px-4 py-2.5 text-[13px] text-ink-100"
             />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label
-              className="text-[11px] tracking-[0.12em] text-ink-400 uppercase"
-              htmlFor="talk-language"
-            >
-              Language
-            </label>
-            <select
-              id="talk-language"
-              value={language}
-              onChange={(event) => setLanguage(event.target.value as LanguageCode)}
-              className="border border-ink-700 bg-ink-900 px-4 py-2.5 text-[13px] text-ink-100"
-            >
-              {LANGUAGES.map((option) => (
-                <option key={option.code} value={option.code}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* One language is not a choice, so it is not rendered as one: a
+              select with a single option asks the visitor to make a decision
+              that has already been made for them. It still says WHICH language,
+              because a client who expected Arabic should find that out here
+              rather than when the ambassador speaks. */}
+          {choices.length > 1 ? (
+            <div className="flex flex-col gap-1.5">
+              <label
+                className="text-[11px] tracking-[0.12em] text-ink-400 uppercase"
+                htmlFor="talk-language"
+              >
+                Language
+              </label>
+              <select
+                id="talk-language"
+                value={language}
+                onChange={(event) => setLanguage(event.target.value as LanguageCode)}
+                className="border border-ink-700 bg-ink-900 px-4 py-2.5 text-[13px] text-ink-100"
+              >
+                {choices.map((option) => (
+                  <option key={option.code} value={option.code}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[11px] tracking-[0.12em] text-ink-400 uppercase">
+                Language
+              </span>
+              <p className="px-1 py-2.5 text-[13px] text-ink-300">
+                {choices[0]?.label ?? 'English'}
+              </p>
+            </div>
+          )}
           <button
             type="submit"
             disabled={busy || code.trim() === ''}
