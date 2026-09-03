@@ -268,9 +268,20 @@ export default defineRailway(() => {
     replicas: { ams: 1 },
     // No public domain, and none is declared: every route but `/health` is
     // bearer-protected, and the way to keep a private API private is to give
-    // it no ingress rather than to guard one. This endpoint name is the host
-    // in ADMIN_API_URL.
-    networking: { privateNetworkEndpoint: "admin-api" },
+    // it no ingress rather than to guard one.
+    //
+    // No `privateNetworkEndpoint` either, though ADMIN_API_URL's host is
+    // `admin-api.railway.internal`. That endpoint is the platform default -
+    // the service name - and Railway does not store a setting equal to its
+    // default, so after the apply the stored value here is null and declaring
+    // "admin-api" left every later plan reading `1 to change` forever. That
+    // is the `checkSuites` shape #99 removed from `web`, and the cost is the
+    // same: a permanently dirty plan is one that can no longer show drift.
+    // Measured after the apply, not assumed - declaring a DIFFERENT name
+    // plans the same single change, so the field is read rather than ignored;
+    // omitting it plans clean. The worker keeps its own line because there
+    // the stored value differs from the service name by case, and omitting
+    // that one plans a real change.
     // Names only, as everywhere in this file.
     variables: {
       // Shared with `web`, which sends it; this service verifies it.
