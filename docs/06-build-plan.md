@@ -110,7 +110,12 @@ Every implementation card lands as a RED commit containing a test that
 compiles, runs and fails for the intended missing behavior; a GREEN commit with
 the smallest implementation; and an optional refactor commit. The task branch
 keeps those commits unsquashed until god merges, and the PR description names
-all three. A test written after the implementation does not satisfy this wave.
+all three. A test written after the implementation does not satisfy this wave. One
+mechanical rider for the web tier: Vite resolves a **literal** dynamic import at
+transform time, so a vitest file that imports a component which does not exist
+yet fails to LOAD and reports `no tests` - a RED commit with nothing for the
+gate to count. Import through a variable specifier with `@vite-ignore` so each
+case fails on its own.
 
 Every ships row has one first RED test:
 
