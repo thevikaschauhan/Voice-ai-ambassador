@@ -36,7 +36,7 @@ export default defineRailway(() => {
     // the app. With the root set to `/web`, the build context starts inside
     // `web/` and the image build fails on `"/data": not found`
     // (docs/09-deploy.md, "The layout is part of the contract").
-    source: github(REPO, { branch: "main", rootDirectory: null, checkSuites: false }),
+    source: github(REPO, { branch: "main", rootDirectory: null }),
     build: {
       builder: "DOCKERFILE",
       dockerfilePath: "web/Dockerfile",
