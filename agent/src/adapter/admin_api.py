@@ -51,6 +51,7 @@ from typing import Annotated, Any, Final, Literal
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
+from .crypto import EnvelopeError, Sealer
 from .events import EventLog
 from .repository import ConcurrentDecision, Repository
 
@@ -142,6 +143,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not hasattr(app.state, "repository"):
         dsn = os.environ.get(_DSN_ENV)
         app.state.repository = await Repository.connect(dsn) if dsn else None
+    if not hasattr(app.state, "sealer"):
+        # Built once, eagerly, and only when the keys are present. A missing
+        # key is a 503 on the routes that need one rather than a crash at
+        # start-up: `/health` must keep answering so a misconfigured deployment
+        # stays diagnosable instead of restart-looping before anyone can look
+        # at it - the same reason health does not touch the database.
+        try:
+            app.state.sealer = Sealer.from_env()
+        except ValueError:
+            app.state.sealer = None
     probe = asyncio.create_task(_probe_forever(app))
     try:
         yield
@@ -193,6 +204,57 @@ async def ready(response: Response) -> dict[str, str]:
     return {"status": "ready"}
 
 
+# --- opening what the worker sealed --------------------------------------
+#
+# docs/02-: the API returns the ordinary domain shape only after
+# authentication, and the persistence envelope never leaks into the web
+# contract. So this is where an envelope stops being an envelope. Every
+# decrypt goes through dwight's `Sealer` - there is no second envelope format
+# and no second place a key is parsed, because two implementations of an AEAD
+# is one more than anybody can keep correct.
+
+
+def sealer_of(app_: FastAPI) -> Sealer:
+    sealer = getattr(app_.state, "sealer", None)
+    if sealer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="encryption keys are not configured",
+        )
+    return sealer
+
+
+def _log_of(app_: FastAPI) -> EventLog:
+    return app_.state.log
+
+
+def open_field(
+    app_: FastAPI, lead_id: Any, field_path: str, envelope: dict[str, Any] | None
+) -> tuple[str | None, str | None]:
+    """One sealed field as text, or `(None, "unreadable")`.
+
+    Returns rather than raises, and reports rather than omits. A field that
+    silently vanished would make a tampered or wrongly-restored record look
+    like a short call, which is the same confusion `ended_cleanly` exists to
+    prevent one level up. The caller renders the marker.
+
+    A failure is the single most interesting thing this service can observe -
+    it means tampering, a restore across leads, or a key that moved - so it is
+    always audited. The event carries the field PATH, which is structural, and
+    never the value, the ciphertext or the exception, since a decrypt error can
+    quote its inputs.
+    """
+    if envelope is None:
+        return None, None
+    try:
+        return sealer_of(app_).open(lead_id, field_path, envelope).decode("utf-8"), None
+    except (EnvelopeError, KeyError, UnicodeDecodeError):
+        _log_of(app_).emit(
+            "envelope_unreadable", lead_id=str(lead_id), field_path=field_path
+        )
+        return None, "unreadable"
+
+
 # --- leads ---------------------------------------------------------------
 
 LeadStatusFilter = Literal["unreviewed", "qualified", "rejected"]
@@ -217,13 +279,111 @@ async def list_leads(
 
 @app.get("/v1/leads/{lead_id}", dependencies=[Depends(require_bearer)])
 async def get_lead(lead_id: str) -> dict[str, Any]:
+    """The detail page's lead, with every sealed field opened.
+
+    docs/10- puts buyer words here and only here, and this is the route that
+    earns that: the response carries the words, and carries no nonce, no
+    ciphertext and no key version. A web tier should never have to know what
+    an AEAD envelope is in order to render a name.
+    """
     repository = repository_of(app)
     try:
         lead = await repository.get_lead(lead_id)
     except LookupError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such lead") from None
-    lead["turns"] = await repository.get_turns(lead_id)
-    lead["decisions"] = await repository.get_decisions(lead_id)
+
+    lead["brief"], lead["brief_error"] = open_field(
+        app, lead_id, "brief", lead.get("brief")
+    )
+    lead["summary"], lead["summary_error"] = open_field(
+        app, lead_id, "summary", lead.get("summary")
+    )
+
+    # The contact fields become one object rather than five flat columns: the
+    # row shape is dwight's schema and the API owns the domain shape.
+    contact: dict[str, Any] = {
+        "status": lead.pop("contact_status", None),
+        "asked_turn_index": lead.pop("contact_asked_turn_index", None),
+        "source_turn_index": lead.pop("contact_source_turn_index", None),
+        "permission": lead.pop("contact_permission", None),
+        "confirmed": lead.pop("contact_confirmed", None),
+        # Fingerprints are already one-way and are what duplicate detection
+        # compares, so they pass through unopened.
+        "phone_fingerprint": lead.pop("contact_phone_fingerprint", None),
+        "email_fingerprint": lead.pop("contact_email_fingerprint", None),
+    }
+    for field in ("name", "phone", "email"):
+        value, error = open_field(
+            app, lead_id, f"contact.{field}", lead.pop(f"contact_{field}", None)
+        )
+        contact[field] = value
+        if error:
+            contact[f"{field}_error"] = error
+    lead["contact"] = contact
+
+    turns = []
+    for turn in await repository.get_turns(lead_id):
+        index = turn.get("turn_index")
+        payload, error = open_field(
+            app, lead_id, f"turns.{index}.payload", turn.get("payload")
+        )
+        turn["payload"] = payload
+        turn["payload_error"] = error
+        turns.append(turn)
+    lead["turns"] = turns
+
+    decisions = []
+    for decision in await repository.get_decisions(lead_id):
+        note, error = open_field(
+            app,
+            lead_id,
+            f"decisions.{decision.get('sequence')}.note",
+            decision.get("note"),
+        )
+        decision["note"] = note
+        decision["note_error"] = error
+        decisions.append(decision)
+    lead["decisions"] = decisions
+
+    # The audit of the read itself. docs/10- wants every decrypt audited, and
+    # this is one event per READ carrying counts rather than one per field: a
+    # fifty-turn lead would otherwise emit fifty rows for one page view, and an
+    # audit nobody can read is an audit nobody reads. Counts, a lead id and
+    # nothing else - no field values, no field paths of what SUCCEEDED, since
+    # the interesting path is the failure and that has its own event.
+    opened = sum(
+        1
+        for value in (
+            lead["brief"],
+            lead["summary"],
+            contact["name"],
+            contact["phone"],
+            contact["email"],
+            *(turn["payload"] for turn in turns),
+            *(decision["note"] for decision in decisions),
+        )
+        if value is not None
+    )
+    unreadable = sum(
+        1
+        for error in (
+            lead["brief_error"],
+            lead["summary_error"],
+            contact.get("name_error"),
+            contact.get("phone_error"),
+            contact.get("email_error"),
+            *(turn["payload_error"] for turn in turns),
+            *(decision["note_error"] for decision in decisions),
+        )
+        if error is not None
+    )
+    _log_of(app).emit(
+        "lead_detail_read",
+        lead_id=str(lead_id),
+        fields_opened=opened,
+        fields_unreadable=unreadable,
+        turns=len(turns),
+    )
     return lead
 
 

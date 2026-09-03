@@ -139,12 +139,20 @@ async def sealed(database):
 
 @pytest.fixture
 async def client(sealed):
+    """`ASGITransport` does not run the lifespan, so the fixture supplies what
+    the lifespan would: the repository, the Sealer and an event log. Setting
+    only the repository leaves the read path with no keys and every route
+    answering 503, which is the app being right and the test being wrong."""
     from httpx import ASGITransport, AsyncClient
 
     from adapter import admin_api
+    from adapter.crypto import Sealer
+    from adapter.events import EventLog
 
     repository, _, _ = sealed
     admin_api.app.state.repository = repository
+    admin_api.app.state.sealer = Sealer.from_env()
+    admin_api.app.state.log = EventLog(session_id="pii")
     transport = ASGITransport(app=admin_api.app)
     async with AsyncClient(transport=transport, base_url="http://admin") as http:
         yield http
