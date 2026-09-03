@@ -1,5 +1,6 @@
 import { TalkCall } from '@/components/talk-call'
 import { loadAmbassadorNames } from '@/lib/ambassador'
+import { offeredLanguages } from '@/lib/hosted'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,5 +19,8 @@ export const dynamic = 'force-dynamic'
  */
 export default async function TalkPage() {
   const names = await loadAmbassadorNames()
-  return <TalkCall names={names} />
+  // Which languages this deployment offers is an environment fact, so it is
+  // read here rather than in the browser. The route re-checks it anyway: a
+  // picker that renders one option is a convenience, not a gate.
+  return <TalkCall names={names} offered={offeredLanguages()} />
 }

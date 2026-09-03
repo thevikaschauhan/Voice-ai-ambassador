@@ -4,7 +4,9 @@ import { randomUUID } from 'node:crypto'
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk'
 import { RoomUnavailable, liveKitConfig } from '@/lib/livekit/config'
 import type { LiveKitConfig } from '@/lib/livekit/config'
-import { maxRooms } from '@/lib/hosted'
+import { maxRooms, offeredLanguages } from '@/lib/hosted'
+import { TALK_LANGUAGES, isTalkLanguage } from '@/lib/livekit/talk.shared'
+import type { TalkLanguage } from '@/lib/livekit/talk.shared'
 
 /**
  * A token that lets one visitor TALK to the ambassador, and a fresh room to do
@@ -61,22 +63,6 @@ const DEPARTURE_TIMEOUT_S = 20
 
 /** The visitor and the agent. Nobody else belongs in a demo room. */
 const MAX_PARTICIPANTS = 2
-
-/**
- * The languages a visitor may pick.
- *
- * A closed list, checked here rather than trusted from the request: this value
- * is serialised into room metadata that the worker reads and builds a voice and
- * an STT model from, so an unchecked string from a browser would reach the
- * agent's configuration. `data/` is the authority on what is certified to be
- * spoken; this is the authority on what may be asked for.
- */
-export const TALK_LANGUAGES = ['en', 'ar', 'hi'] as const
-export type TalkLanguage = (typeof TALK_LANGUAGES)[number]
-
-export function isTalkLanguage(value: unknown): value is TalkLanguage {
-  return typeof value === 'string' && (TALK_LANGUAGES as readonly string[]).includes(value)
-}
 
 /**
  * The cross-service contract, version 1.
@@ -172,3 +158,17 @@ export async function mintTalkGrant(language: TalkLanguage): Promise<TalkGrant> 
 
 export type { LiveKitConfig }
 export { EMPTY_TIMEOUT_S, DEPARTURE_TIMEOUT_S, MAX_PARTICIPANTS, TOKEN_TTL }
+export { TALK_LANGUAGES, isTalkLanguage, offeredLanguages }
+export type { TalkLanguage }
+
+/**
+ * Is this language one THIS deployment offers?
+ *
+ * Narrower than `isTalkLanguage`, and the route checks this one: a code can be
+ * a real language and still not be on offer here, which is what
+ * `DEMO_LANGUAGES` exists to say. Checked server-side so the restriction holds
+ * whatever the page renders - a picker is a convenience, not a gate.
+ */
+export function isOfferedLanguage(value: unknown): value is TalkLanguage {
+  return isTalkLanguage(value) && offeredLanguages().includes(value)
+}

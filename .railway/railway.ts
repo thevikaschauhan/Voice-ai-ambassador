@@ -82,6 +82,13 @@ export default defineRailway(() => {
       // defaults to 2 in the route when unset, so it is named for the same
       // reason rather than because it has to be set.
       DEMO_ACCESS_CODE: preserve(),
+      // Which languages the talk page offers (#87 follow-on). Set to `en` on
+      // the hosted service until the Arabic and Hindi packets come back; unset
+      // means all three, which is what a laptop wants. Named for the same
+      // reason as the two around it: omit means delete, and an apply from a
+      // file that did not name it would silently re-open two languages whose
+      // copy nobody has authored, on a public URL.
+      DEMO_LANGUAGES: preserve(),
       DEMO_MAX_ROOMS: preserve(),
       LIVEKIT_API_KEY: preserve(),
       LIVEKIT_API_SECRET: preserve(),
