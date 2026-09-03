@@ -27,6 +27,7 @@ export const UPSTREAM_ROUTES = {
   lead: '/v1/leads/:id',
   leadDecisions: '/v1/leads/:id/decisions',
   documents: '/v1/knowledge/documents',
+  documentUpload: '/v1/knowledge/documents',
   document: '/v1/knowledge/documents/:id',
   chunkReviews: '/v1/knowledge/chunks/:id/reviews',
   figureReviews: '/v1/knowledge/figures/:id/reviews',
@@ -60,6 +61,15 @@ export interface ForwardOptions {
   /** Verbatim query string from the caller's URL, keys filtered by the caller. */
   search?: string
   body?: unknown
+  /**
+   * A multipart body to stream through unchanged, for a file upload.
+   *
+   * Separate from `body` because it must NOT be JSON-serialised and its
+   * content-type carries a generated boundary - setting one by hand produces a
+   * request the upstream cannot parse. The bytes are not inspected here: parsing
+   * is the Python adapter's (docs/10- step 2).
+   */
+  form?: FormData
 }
 
 /**
@@ -79,9 +89,15 @@ export async function forward(options: ForwardOptions): Promise<Response> {
     headers: {
       authorization: `Bearer ${token()}`,
       accept: 'application/json',
-      ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+      // No content-type for a multipart body: fetch generates one with the
+      // boundary, and overriding it makes the upstream unable to parse it.
+      ...(options.form !== undefined || options.body === undefined
+        ? {}
+        : { 'content-type': 'application/json' }),
     },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body:
+      options.form ??
+      (options.body === undefined ? undefined : JSON.stringify(options.body)),
     signal: AbortSignal.timeout(TIMEOUT_MS),
     cache: 'no-store',
   })

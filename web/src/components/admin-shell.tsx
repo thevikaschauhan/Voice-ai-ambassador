@@ -23,7 +23,7 @@ const SECTIONS = [
   },
   {
     id: 'knowledge',
-    href: null,
+    href: '/admin/knowledge',
     title: 'Knowledge',
     blurb:
       'Documents the ambassador may draw on, their chunks, and the per-figure approvals that let a value be spoken.',
@@ -168,8 +168,8 @@ export function AdminShell({
       </nav>
 
       <p className="max-w-[74ch] text-[12px] leading-relaxed text-ink-600">
-        Knowledge review is not built yet and says so rather than showing rows that are
-        not real.{' '}
+        Nothing in Knowledge reaches a call until its chunks are scoped and its figures
+        approved one occurrence at a time.{' '}
         <Link className="hover:text-brass-400" href="/">
           Demo surface
         </Link>

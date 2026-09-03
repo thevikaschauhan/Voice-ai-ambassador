@@ -162,6 +162,24 @@ describe('the extracted figure list', () => {
     expect(sent[0].body).toMatchObject({ action: 'revoked' })
   })
 
+  it('says an admin_only chunk is admin-only, not that inventory governs it', async () => {
+    // admin_only is the DEFAULT, so this is the commonest case - and the two
+    // closed reasons are different things to tell a reviewer: one is permanent
+    // and one is an action they can take. Naming the wrong cause points at the
+    // wrong fix. Found by rendering the real page, not by a unit test.
+    await renderFigures({ figures: [UNAPPROVED], chunkScope: 'admin_only' })
+    const row = screen.getByText('AED 2,000,000').closest('li') as HTMLElement
+    expect(within(row).queryByText(/inventory governs/i)).not.toBeInTheDocument()
+    expect(within(row).getByText(/not approved/i)).toBeInTheDocument()
+  })
+
+  it('says an approved figure in an admin_only chunk is still not reachable', async () => {
+    await renderFigures({ figures: [APPROVED], chunkScope: 'admin_only' })
+    const row = screen.getByText('AED 2,000,000').closest('li') as HTMLElement
+    expect(within(row).getByText(/admin-only/i)).toBeInTheDocument()
+    expect(within(row).queryByText(/^speakable$/i)).not.toBeInTheDocument()
+  })
+
   it('never calls an approved figure speakable inside an inventory_governed chunk', async () => {
     await renderFigures({ figures: [APPROVED], chunkScope: 'inventory_governed' })
     const row = screen.getByText('AED 2,000,000').closest('li') as HTMLElement
