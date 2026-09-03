@@ -251,42 +251,6 @@ def main(language: str) -> None:
         "interrupted."
     )
     w("")
-    # Two sentences, two different stakes, and conflating them overstates one
-    # and understates the other. The unnamed sentence is what makes the
-    # language shippable at all; the named one is an improvement whose absence
-    # falls back rather than refusing.
-    w("**We need TWO versions of it, and they are not the same ask.**")
-    w("")
-    w(
-        f"**A. Without the ambassador's name** - required. Until this exists "
-        f"the agent refuses to start a call in {name} at all."
-    )
-    w("")
-    w(f"English: > {disclosures.copy['en']}")
-    w("")
-    w(bullet(f"{name}:"))
-    w("")
-    named = disclosures.named_copy.get("en", "")
-    if named:
-        w(
-            "**B. With the ambassador's name** - wanted, not required. If this "
-            f"is missing, calls in {name} simply open with version A and no "
-            "name, which is what happens today."
-        )
-        w("")
-        w(f"English: > {named}")
-        w("")
-        w(
-            "Keep the placeholder `{name}` exactly as written, wherever the "
-            "name belongs in your sentence. We substitute the ambassador's "
-            "name into it. Where a name sits inside a sentence is an authoring "
-            "question in your language and not something we can derive from "
-            "version A, which is why we are asking for both rather than "
-            "translating one into the other."
-        )
-        w("")
-        w(bullet(f"{name}:"))
-        w("")
     w(
         '"Transcribed" is deliberate and must survive: we keep the text, never '
         "the audio, and the notice has to match that."
@@ -339,8 +303,42 @@ def main(language: str) -> None:
         "reading it."
     )
     w("")
-    w(bullet(f"{name} disclosure:"))
+    # Two sentences, two different stakes, and conflating them overstates one
+    # and understates the other. The unnamed sentence is what makes the
+    # language shippable at all; the named one is an improvement whose absence
+    # falls back rather than refusing.
+    w("**We need TWO versions of it, and they are not the same ask.**")
     w("")
+    w(
+        f"**A. Without the ambassador's name** - required. Until this exists "
+        f"the agent refuses to start a call in {name} at all."
+    )
+    w("")
+    w(f"English: > {disclosures.copy['en']}")
+    w("")
+    w(bullet(f"{name}:"))
+    w("")
+    named = disclosures.named_copy.get("en", "")
+    if named:
+        w(
+            "**B. With the ambassador's name** - wanted, not required. If this "
+            f"is missing, calls in {name} simply open with version A and no "
+            "name, which is what happens today."
+        )
+        w("")
+        w(f"English: > {named}")
+        w("")
+        w(
+            "Keep the placeholder `{name}` exactly as written, wherever the "
+            "name belongs in your sentence. We substitute the ambassador's "
+            "name into it. Where a name sits inside a sentence is an authoring "
+            "question in your language and not something we can derive from "
+            "version A, which is why we are asking for both rather than "
+            "translating one into the other."
+        )
+        w("")
+        w(bullet(f"{name}:"))
+        w("")
     w("## 2. Failure copy (required - this is what speaks when the model fails)")
     w("")
     w("Two different situations, and they must not read the same.")
@@ -719,9 +717,18 @@ def main(language: str) -> None:
         "wrong in their boardroom is the one unrecoverable mistake."
     )
     w("")
-    for entry in lexicon.by_language.get("en", ()):
-        pass
+    # The ambassador's given name is a lexicon term (its respelling has to land
+    # somewhere, and this is the file the TTS path reads), but it is asked for
+    # in 4b rather than here. Two reasons, both visible only in the rendered
+    # document: this list's preamble is about the client's name and Dubai
+    # places, so a person's given name reads as though it were one of them; and
+    # section 4 would be asking how to SAY a name whose written form is still an
+    # open question one section below. Answering that question and pronouncing
+    # its answer belong together.
+    ambassador_name = load_ambassadors().name_for("en")
     for term in _terms():
+        if term == ambassador_name:
+            continue
         w(bullet(f"{term} ->"))
     w("")
     # Wording is pam's (packet owner). The one thing it deliberately does NOT
@@ -743,7 +750,15 @@ def main(language: str) -> None:
     )
     w("")
     w(bullet(f"written in {name} (the form that appears on screen):"))
-    w(bullet("said aloud: see section 4, where the respellings live"))
+    w(bullet("said aloud (respelled so a voice says it right, as in section 4):"))
+    w("")
+    w(
+        "The second one is asked here rather than in section 4 because it "
+        "depends on the first: there is no point respelling a form nobody has "
+        "chosen yet. If your answer to the written form is the English name as "
+        "it stands, the respelling is how a "
+        f"{name} voice should say it."
+    )
     w("")
     w(
         "Then one judgement, the one we most need and cannot get anywhere "

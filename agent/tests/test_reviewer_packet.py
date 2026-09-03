@@ -88,6 +88,36 @@ def test_it_asks_for_every_lexicon_term(arabic):
         assert str(entry["term"]) in arabic
 
 
+def test_the_ambassadors_name_is_asked_for_in_4b_not_the_name_list():
+    """The name is a lexicon term, but section 4 is the wrong place to ask.
+
+    It is exempt from section 4's list on purpose: that list's preamble is
+    about the client's name and Dubai places, and section 4 would be asking
+    how to SAY a name whose written form is still open one section below.
+
+    Without this test that exemption would be a silent loss of coverage,
+    because `test_it_asks_for_every_lexicon_term` is satisfied by the name
+    merely appearing in 4b's prose - it would pass while nothing asked for the
+    respelling at all.
+    """
+    from ambassador.ambassadors import load_ambassadors
+
+    name = load_ambassadors().name_for("en")
+    assert name, "no English ambassador name to check"
+
+    packet = generate("ar")
+    section_4 = packet.split("## 4. How these names should sound")[1]
+    name_list, section_4b = section_4.split("## 4b.")
+
+    assert f"- [ ] {name} ->" not in name_list, (
+        f"{name} is in section 4's list, where it reads as a place and "
+        "presupposes 4b's answer"
+    )
+    assert "said aloud" in section_4b, (
+        f"nothing asks how {name} should be said; the respelling has no ask"
+    )
+
+
 def test_it_asks_for_every_prohibited_category_in_plain_words(arabic):
     """A reviewer cannot read a regular expression, and an uncovered category
     would simply be missing rather than obviously blank."""
