@@ -610,17 +610,64 @@ Python in it and a handshake file the other container owns.
    **deployment trigger**. That is not the same thing as being connected to the
    repository, and the confusion is the trap: `railway status --json` reports
    `source: {"repo": "..."}` identically on a service whose pushes deploy and
-   one whose pushes go nowhere. The trigger is what turns a push into a build,
-   and it is visible in the dashboard under the service's **Settings > Source**,
-   or over the API:
+   one whose pushes go nowhere. The trigger is what turns a push into a build.
+
+   What answers it is the COVERAGE of the deployment list. A service whose
+   trigger works has one record for every push to `main`, not only for the
+   pushes that built something:
+
+   ```
+   svc=Voice-ai-ambassador          # then again for web
+   railway deployment list -s "$svc" --limit 100 --json \
+     | jq -r '.[] | "\(.meta.commitHash[0:9]) \(.status)"' > /tmp/records
+   base=$(tail -1 /tmp/records | cut -d' ' -f1)
+   for c in $(git rev-list --reverse "$base..origin/main"); do
+     s=$(git rev-parse --short=9 "$c")
+     r=$(grep -m1 "^$s " /tmp/records) && echo "  $s  ${r#* }" \
+                                       || echo "  $s  NO RECORD"
+   done
+   ```
+
+   It walks back only as far as the oldest row the list returned, because a
+   list truncated by `--limit` reports every older push as missing, and a
+   check that invents its own failure is worse than no check.
+
+   Three readings, and only the third is a fault:
+
+   - `SUCCESS`, `FAILED`, `CRASHED`, `REMOVED`: the push matched this service's
+     `watchPatterns` and was built.
+   - `SKIPPED`: the push did not match, and the webhook recorded that it looked.
+     This row is the only positive proof a webhook evaluated the push at all,
+     because nothing creates a SKIPPED row by hand.
+   - `NO RECORD`, where the rows around it are dense: nothing evaluated that
+     push. No deploy, no failure, and no skip either.
+
+   Two things the list cannot tell you, and both have already misled somebody
+   on this project. `meta.reason` reads `"deploy"` on a hand-made deployment
+   exactly as it does on a webhook one, so a recent successful deploy of the
+   current commit is not evidence that the trigger lives - somebody may simply
+   have clicked it. And the absence of SKIPPED rows proves nothing by itself,
+   because it is equally what a healthy service looks like when every recent
+   push happened to match its patterns. Only coverage across a window of
+   pushes separates the two, which is why this reconciles pushes against rows
+   instead of querying for a status.
+
+   The lag corroborates. A webhook row appears two to five seconds after its
+   push; a row sitting minutes behind its commit is usually a person, or a
+   variable change redeploying whatever was HEAD at the time. That second kind
+   is what masked the outage recorded in the provenance below, because it kept
+   producing recent successful deploys while no push was being evaluated.
+
+   If the list is inconclusive, the trigger is visible in the dashboard under
+   the service's **Settings > Source**, or over the API, which answers directly
+   and needs an admin-scoped token:
 
    ```
    deploymentTriggers(projectId: ..., environmentId: ..., serviceId: ...)
    ```
 
-   An empty list means no webhook evaluation happens at all, so there is no
-   failed deploy, no skipped deploy, and nothing anywhere that says so. It is
-   the quietest failure on this page.
+   An empty list there means no webhook evaluation happens at all. It is the
+   quietest failure on this page.
 
 1. `railway logs -s agent-worker -d` and find `registered worker`. No line means
    not deployed, whatever the status says. If the deploy is failed or crashed,
