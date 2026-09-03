@@ -108,6 +108,23 @@ def max_source_bytes() -> int:
     return int(loaded["max_source_bytes"])
 
 
+def _check_cap(size: int) -> None:
+    """The one cap, for whichever way the bytes arrived.
+
+    Counted in BYTES, which is the distinction a paste turns into a bug: an
+    upload arrives as bytes already, while pasted text arrives as characters,
+    and Arabic or a curly quote is two or three bytes each - so a cap measured
+    in characters admits several times the configured number.
+
+    It lives here rather than in the routes because it was written down twice
+    before: the upload handler compared lengths itself, which made the paste
+    branch look guarded while it had no check at all. 8388609 bytes of pasted
+    text returned 201 and were chunked into Postgres.
+    """
+    if size > max_source_bytes():
+        raise ParseFailed("limit_exceeded")
+
+
 def parse_document(
     raw: bytes | None,
     filename: str | None,
@@ -117,9 +134,10 @@ def parse_document(
     """Bytes or pasted text in, text out - or `ParseFailed` with a code."""
     if pasted is not None:
         text = pasted.strip()
+        encoded = text.encode("utf-8")
+        _check_cap(len(encoded))
         if not text:
             raise ParseFailed("no_extractable_text")
-        encoded = text.encode("utf-8")
         return ParsedDocument(
             source_type="paste",
             text=text,
@@ -131,8 +149,7 @@ def parse_document(
 
     if raw is None or filename is None:
         raise ParseFailed("unsupported_type")
-    if len(raw) > max_source_bytes():
-        raise ParseFailed("limit_exceeded")
+    _check_cap(len(raw))
 
     suffix = Path(filename).suffix.lower()
     source_type = _EXTENSIONS.get(suffix)
