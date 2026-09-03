@@ -102,8 +102,15 @@ def session_mode_line(dsn: str) -> str:
     """The one startup line. The PORT and nothing else.
 
     Not the host, not the user, and above all not the DSN, which carries the
-    password. The port is the whole of what was wrong and the whole of what a
-    reader needs to confirm it was fixed.
+    password.
+
+    This line is NOT on its own a confirmation that DATABASE_URL is right, and
+    an earlier version of this docstring claimed it was. The 15:22Z
+    misconfiguration was a correct port on the direct host: this line would
+    have printed `database port 5432 (session mode)` and been useless. A reader
+    needs this AND the worker's `lead_store_connected` host:port (docs/09 step
+    3). What this line is for is the port, which is the value the pre-deploy log
+    otherwise cannot show at all.
     """
     port = dsn_port(dsn)
     return f"database port {port if port is not None else 'default'} (session mode)"
