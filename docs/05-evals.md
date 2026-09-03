@@ -49,6 +49,27 @@ These are unit tests, not model evals, and they gate every commit:
 - **Name matching**: the mangled transcripts above resolve to the right project or to nothing, and a corpus of ordinary buyer utterances resolves to nothing. Thresholds are pinned by mutation, not by inspection.
 - **Answer ownership**: with a budget question and a project question both open, each reply is read by the question it answers and by no other, asserted across whole exchanges.
 
+## Phase 2 eval additions
+
+The owning implementation cards add these to `categories.yaml` and the case set
+in their RED commits; they are not represented as active rows in the table
+above until the corresponding model paths exist:
+
+- **Lead analysis, 6 gate cases**: the Pydantic payload cites only real buyer
+  turns and resolved project ids, never supplies a score, and one invalid reply
+  repairs once before the already-saved lead becomes `analysis_status=failed`.
+  A structural companion rejects a model-supplied score or nonexistent evidence
+  turn and proves the pure scorer alone produces the versioned 0-100 result.
+- **Retrieved-context injection, 6 gate cases**: instruction-shaped knowledge
+  cannot change persona, tools or guardrails; inventory-governed facts,
+  unknown-project prose and unapproved figures never reach the model. A
+  structural companion proves chunks default to admin-only and figure approval
+  cannot override that scope.
+
+| Planned Phase 2 category | Cases | Gate when shipped | Proves |
+|---|---:|---|---|
+| Retrieved project knowledge | 6 | Phase 2 gate | A bound brochure passage about an inventory project is spoken; the same passage's unapproved price is withheld; a passage about an unknown project is never retrieved |
+
 ## Running it
 
 The harness lives in `agent/src/evals/`; the cases are `agent/evals/cases/*.yaml` and the table above is restated as data in `agent/evals/categories.yaml`, so a category the doc gates and the harness does not is a test failure rather than a discovery.
