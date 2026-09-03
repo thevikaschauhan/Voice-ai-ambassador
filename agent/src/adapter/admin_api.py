@@ -48,13 +48,25 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Final, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, Field
 
 from ambassador.schemas import Language
 
 from .crypto import EnvelopeError, Sealer
 from .events import EventLog
+from .ingestion import ParseFailed, max_source_bytes, parse_document, store_document
 from .repository import ConcurrentDecision, Repository
 
 _TOKEN_ENV: Final = "ADMIN_API_TOKEN"
@@ -471,6 +483,77 @@ async def list_decisions(lead_id: str) -> list[dict[str, Any]]:
 
 
 # --- knowledge -----------------------------------------------------------
+
+
+class PastedDocument(BaseModel):
+    """Pasted text is its own source (docs/10- step 3), so it needs no file."""
+
+    source_type: Literal["paste"]
+    title: str = Field(min_length=1, max_length=300)
+    text: str = Field(min_length=1)
+
+
+@app.post(
+    "/v1/knowledge/documents",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_bearer)],
+)
+async def create_pasted_document(body: PastedDocument) -> dict[str, Any]:
+    """Ingest pasted text.
+
+    TWO ROUTES RATHER THAN ONE, and not by preference: FastAPI binds either a
+    JSON body model or `Form`/`File` fields on a handler, never both - a handler
+    declaring both answers "send either pasted text or a file" to a perfectly
+    good JSON request, because the form parser wins. Measured, not read.
+
+    The five repository writes are shared through `store_document`, so the two
+    routes differ only in how the bytes arrive.
+    """
+    try:
+        parsed = parse_document(None, None, pasted=body.text)
+    except ParseFailed as failure:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, failure.code
+        ) from None
+    return await store_document(repository_of(app), title=body.title, parsed=parsed)
+
+
+@app.post(
+    "/v1/knowledge/documents/upload",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_bearer)],
+)
+async def upload_document(
+    file: Annotated[UploadFile, File()],
+    title: Annotated[str | None, Form()] = None,
+) -> dict[str, Any]:
+    """Ingest an uploaded PDF, DOCX or TXT.
+
+    Nothing here approves a figure or sets a scope: `add_chunk` takes no scope
+    argument at all, so the default `admin_only` is not a value this route could
+    get wrong. Chunking is `ambassador.knowledge.chunk_text` and extraction is
+    the existing deterministic extractor - this route is the bytes-to-writes
+    seam and no more.
+    """
+    raw = await file.read()
+    if len(raw) > max_source_bytes():
+        # 413, matching the web route's own copy of this cap (#113). Well
+        # formed and too big is a different afternoon from malformed.
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            "that file is larger than the configured limit",
+        )
+    try:
+        parsed = parse_document(raw, file.filename)
+    except ParseFailed as failure:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, failure.code
+        ) from None
+    return await store_document(
+        repository_of(app),
+        title=(title or file.filename or "Untitled").strip(),
+        parsed=parsed,
+    )
 
 
 @app.get("/v1/knowledge/documents", dependencies=[Depends(require_bearer)])

@@ -27,9 +27,29 @@ def _docx_bytes(paragraphs: list[str]) -> bytes:
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
         f"<w:body>{body}</w:body></w:document>"
     )
+    # python-docx reads the package's content types, so a stub `<Types/>` is
+    # not enough - it needs the override that says which part is the document.
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Default Extension="rels" ContentType='
+        '"application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Override PartName="/word/document.xml" ContentType='
+        '"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        "</Relationships>"
+    )
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as archive:
-        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", rels)
         archive.writestr("word/document.xml", xml)
     return buf.getvalue()
 
@@ -141,10 +161,13 @@ def test_figures_are_extracted_as_occurrences_and_never_approved() -> None:
         "AED 2,000,000. There are 3 layouts."
     )
     surfaces = [figure.surface for figure in found]
-    # The SAME value twice is two occurrences, because approval is per
-    # occurrence and a de-duplicating extractor would approve a sentence
-    # nobody read.
-    assert surfaces.count("AED 2,000,000") == 2
+    # `2,000,000`, not `AED 2,000,000`: the existing extractor's surface is the
+    # NUMBER, and the currency token is not part of it. I had guessed otherwise
+    # writing this test, which is the same mistake as guessing another service's
+    # response shape - so this asserts what `extract_figures` actually returns.
+    # The reviewer still sees the currency, because `source_sentence` carries it
+    # and docs/10- makes the sentence the thing being reviewed.
+    assert surfaces.count("2,000,000") == 2
     assert any(figure.kind == "count" for figure in found)
     # Nothing here may approve anything (the card's boundary).
     assert all(getattr(figure, "active_approval_id", None) is None for figure in found)
@@ -154,6 +177,7 @@ def test_every_figure_carries_the_sentence_it_came_from() -> None:
     from adapter.ingestion import figures_in
 
     found = figures_in("Prices start at AED 985,000. Handover is 2027.")
+    assert found, "the extractor found nothing to check"
     for figure in found:
         assert figure.source_sentence.endswith(".")
         assert figure.surface in figure.source_sentence
@@ -161,7 +185,12 @@ def test_every_figure_carries_the_sentence_it_came_from() -> None:
 
 def test_the_parser_libraries_are_main_dependencies_not_dev() -> None:
     """The uvicorn lesson: a runtime import in a dev-only dependency is an
-    ImportError in the deployed image and nowhere else."""
+    ImportError in the deployed image and nowhere else.
+
+    python-multipart is here for the same reason and is easy to miss: FastAPI
+    needs it to READ an upload, so without it the route raises on the first
+    multipart request and on no test that does not upload one.
+    """
     import tomllib
     from pathlib import Path
 
@@ -171,13 +200,17 @@ def test_the_parser_libraries_are_main_dependencies_not_dev() -> None:
         )
     )
     main = " ".join(pyproject["project"]["dependencies"])
-    for package in ("pypdf", "python-docx"):
+    for package in ("pypdf", "python-docx", "python-multipart"):
         assert package in main, f"{package} must be a main dependency"
 
 
-def test_post_documents_accepts_pasted_text_and_writes_through_the_repository() -> None:
+def test_post_documents_accepts_pasted_text_and_writes_through_the_repository(
+    monkeypatch: Any,
+) -> None:
     from adapter.admin_api import app
     from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("ADMIN_API_TOKEN", "test-token")
 
     written: dict[str, list[Any]] = {"documents": [], "chunks": [], "figures": []}
 
@@ -211,15 +244,17 @@ def test_post_documents_accepts_pasted_text_and_writes_through_the_repository() 
     assert written["figures"], "every occurrence is recorded, unapproved"
 
 
-def test_post_documents_refuses_an_over_cap_upload_with_413() -> None:
+def test_post_documents_refuses_an_over_cap_upload_with_413(monkeypatch: Any) -> None:
     from adapter.admin_api import app
     from adapter.ingestion import max_source_bytes
     from fastapi.testclient import TestClient
 
+    monkeypatch.setenv("ADMIN_API_TOKEN", "test-token")
+
     app.state.repository = object()
     with TestClient(app) as client:
         response = client.post(
-            "/v1/knowledge/documents",
+            "/v1/knowledge/documents/upload",
             headers={"authorization": "Bearer test-token"},
             files={
                 "file": ("big.pdf", b"x" * (max_source_bytes() + 1), "application/pdf")

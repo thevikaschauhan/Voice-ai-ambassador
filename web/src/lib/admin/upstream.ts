@@ -27,7 +27,9 @@ export const UPSTREAM_ROUTES = {
   lead: '/v1/leads/:id',
   leadDecisions: '/v1/leads/:id/decisions',
   documents: '/v1/knowledge/documents',
-  documentUpload: '/v1/knowledge/documents',
+  // A separate path because FastAPI cannot bind a JSON body and a
+  // multipart form on one handler (measured while building the route).
+  documentUpload: '/v1/knowledge/documents/upload',
   document: '/v1/knowledge/documents/:id',
   chunkReviews: '/v1/knowledge/chunks/:id/reviews',
   figureReviews: '/v1/knowledge/figures/:id/reviews',

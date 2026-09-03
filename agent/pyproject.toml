@@ -33,6 +33,11 @@ dependencies = [
     # the deployed image and nowhere else - the uvicorn lesson. A test asserts
     # they are here rather than in a group.
     "pypdf==6.1.1",
+    # Required by FastAPI to read a multipart upload at all: without it the
+    # route raises "Form data requires python-multipart to be installed" on the
+    # first upload, which is a runtime failure in the deployed image and nowhere
+    # in the tests that do not upload. Main, for the same reason as the parsers.
+    "python-multipart==0.0.20",
     "python-docx==1.2.0",
 ]
 

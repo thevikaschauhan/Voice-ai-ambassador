@@ -120,7 +120,11 @@ each test rather than at module level, for the same reason. And a rider about
 what to cover first: **test the DEFAULT branch before the interesting ones.** It
 is the branch every user reaches and the one least likely to feel worth a test,
 and it is where two Phase 2 cards had a defect that only a rendered page or a
-container found.
+container found. And one more, paid for by two web cards:
+**a test written against a shape you invented ahead of its owner proves the
+invention, not the contract** - it makes drift look verified. When the owner
+ships, re-point the test at the real shape and say so in a comment rather than
+deleting it, so the record shows the contract moved.
 
 Every ships row has one first RED test:
 
