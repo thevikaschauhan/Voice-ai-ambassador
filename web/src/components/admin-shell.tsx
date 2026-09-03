@@ -16,12 +16,14 @@ import { useCallback, useState } from 'react'
 const SECTIONS = [
   {
     id: 'leads',
+    href: '/admin/leads',
     title: 'Leads',
     blurb:
       'Every call that finished, with its interest score, the evidence behind it, and the qualify or reject decision history.',
   },
   {
     id: 'knowledge',
+    href: null,
     title: 'Knowledge',
     blurb:
       'Documents the ambassador may draw on, their chunks, and the per-figure approvals that let a value be spoken.',
@@ -149,17 +151,25 @@ export function AdminShell({
           <section key={section.id} className="border border-ink-800 px-5 py-4">
             <h2 className="text-[13px] tracking-[0.06em] text-ink-100">{section.title}</h2>
             <p className="mt-1.5 text-[12px] leading-relaxed text-ink-500">{section.blurb}</p>
-            <p className="mt-3 text-[11px] tracking-[0.12em] text-ink-600 uppercase">
-              Not built yet
-            </p>
+            {section.href === null ? (
+              <p className="mt-3 text-[11px] tracking-[0.12em] text-ink-600 uppercase">
+                Not built yet
+              </p>
+            ) : (
+              <Link
+                className="mt-3 inline-block text-[11px] tracking-[0.12em] text-ink-300 uppercase hover:text-brass-400"
+                href={section.href}
+              >
+                Open
+              </Link>
+            )}
           </section>
         ))}
       </nav>
 
       <p className="max-w-[74ch] text-[12px] leading-relaxed text-ink-600">
-        This is the shell only: the access gate, the signed session and the server-side
-        proxy to the admin API. The two sections above are named so the frame is legible,
-        and say they are empty rather than showing rows that are not real.{' '}
+        Knowledge review is not built yet and says so rather than showing rows that are
+        not real.{' '}
         <Link className="hover:text-brass-400" href="/">
           Demo surface
         </Link>
