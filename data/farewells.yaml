@@ -63,6 +63,25 @@ phrases:
     - "that'll be all"
     - "nothing further"
     - "all done"
+    # How a buyer closes an INFORMATION call, and the shape a hosted call
+    # missed entirely: it carried no phrase, so it was invisible to the
+    # detector and to the telemetry meant to tune the detector. Only the long
+    # forms are listed: "further questions" alone is a question ("can I ask
+    # any further questions later"), which is why the phrase has to carry the
+    # "no"/"any" that makes it a closing.
+    - "no further questions"
+    - "that answers everything"
+    - "that answers it"
+    # The NEGATION has to live inside the phrase. "any further questions" on
+    # its own was tried and rejected: it is exactly what an agent asks and a
+    # buyer can hand back - "do you have any further questions for me?" would
+    # have read as a closing and hung up on someone asking a question. The
+    # tokeniser splits on apostrophes, so "don't" is don + t and these entries
+    # match the same way the utterance does.
+    - "don't have any further questions"
+    - "do not have any further questions"
+    - "don't have any more questions"
+    - "don't have any other questions"
 
   # VERIFY: native-authored Arabic closing phrases. Left EMPTY rather than
   # machine-translated, and empty is SAFE here in a way it is not for the
@@ -141,6 +160,15 @@ courtesies:
     - "been"
     - "will"
     - "do"
+    # "that's it FROM MY END" - people mark a closing as their own, and the
+    # client did. Read as a courtesy run rather than added to the phrases,
+    # because "from my end" closes nothing on its own.
+    - "from"
+    - "on"
+    - "end"
+    - "side"
+    - "me"
+    - "am"
   ar: []
   hi: []
 

@@ -64,6 +64,7 @@ from livekit.plugins import silero
 from ambassador.budget import BudgetPolicy, Decision, load_currency_vocabulary
 from ambassador.confirmation import ConfirmationCoordinator, Step
 from ambassador.farewell import (
+    FarewellReading,
     contains_closing_phrase,
     load_farewells,
     read_farewell,
@@ -411,6 +412,12 @@ class AmbassadorAgent(Agent):
         # strict rule. Read at the seal, when the model's own reply is
         # known, never before.
         self._candidate_turn: int | None = None
+        # A near miss the buyer was cut off in the middle of, carried forward
+        # for exactly one turn. Both hosted near misses were interrupted, so
+        # the hybrid never reached the seal and the call ran on.
+        self._interrupted_candidate_turn: int | None = None
+        self._candidate_is_tail = False
+        self._interrupted_candidate_was_tail = False
         # Held so a close cannot be garbage-collected while it waits.
         self._closing_task: asyncio.Task[None] | None = None
 
@@ -526,13 +533,7 @@ class AmbassadorAgent(Agent):
         if reading.closes:
             self._closing_turn = tracker.turn_index
         elif reading.has_phrase and self._candidate_turn != tracker.turn_index:
-            self._candidate_turn = tracker.turn_index
-            self._log.emit(
-                "farewell_candidate",
-                turn=tracker.turn_index,
-                unexplained=reading.unexplained,
-                named_ambassador=reading.named_ambassador,
-            )
+            self._note_candidate(tracker.turn_index, reading)
 
     def _ensure_tracker(self, chat_ctx: lk_llm.ChatContext) -> TurnTracker:
         """The turn `llm_node` is running for, opening one if nothing has yet.
@@ -786,14 +787,45 @@ class AmbassadorAgent(Agent):
         if reading.closes:
             return True
         if reading.has_phrase:
-            self._candidate_turn = tracker.turn_index
-            self._log.emit(
-                "farewell_candidate",
-                turn=tracker.turn_index,
-                unexplained=reading.unexplained,
-                named_ambassador=reading.named_ambassador,
-            )
+            self._note_candidate(tracker.turn_index, reading)
         return False
+
+    # A near miss this size is a MISSING COURTESY; wider than this and the
+    # utterance is carrying content, which on this path means a question. Not a
+    # guess: the real tail misses read 1-2 ("that's it from my end" reads 2),
+    # while the two NOT_ENDINGS entries that are themselves candidates read 4
+    # and 6 ("before we say goodbye, what about the payment plan"). The pair
+    # rule below would hang up on a repeated question without this line.
+    _TAIL_MISS: Final = 2
+
+    def _note_candidate(self, turn: int, reading: FarewellReading) -> None:
+        self._candidate_turn = turn
+        self._candidate_is_tail = reading.unexplained <= self._TAIL_MISS
+        self._log.emit(
+            "farewell_candidate",
+            turn=turn,
+            unexplained=reading.unexplained,
+            named_ambassador=reading.named_ambassador,
+        )
+
+    def _repeats_an_interrupted_closing(self, turn: int) -> bool:
+        """Is this the same goodbye, said again after being cut off?
+
+        Two closing phrases in two consecutive buyer turns, where the first was
+        talked over, is a buyer trying to leave and being interrupted - a
+        stronger signal than either turn alone. Both hosted near misses were
+        sealed interrupted, which is why neither reached the hybrid.
+
+        Both turns must be TAIL misses. A buyer who twice embeds a closing
+        phrase in a question is asking twice, and `_TAIL_MISS` is what tells
+        those apart.
+        """
+        return (
+            self._interrupted_candidate_turn == turn - 1
+            and self._candidate_turn == turn
+            and self._candidate_is_tail
+            and self._interrupted_candidate_was_tail
+        )
 
     def _agent_said_goodbye(self, tracker: TurnTracker) -> bool:
         """Did the model answer this turn with a closing of its own?
@@ -1544,9 +1576,22 @@ class AmbassadorAgent(Agent):
             # closing, two independent readings agree and the call ends on the
             # goodbye the buyer already heard. Nothing further is spoken - the
             # model's own farewell was the farewell.
+            turn = pending.tracker.turn_index
+            repeats = self._repeats_an_interrupted_closing(turn)
             self._candidate_turn = None
-            if not interrupted and self._agent_said_goodbye(pending.tracker):
-                self._closing_turn = pending.tracker.turn_index
+            if interrupted:
+                # Cut off mid-reply, so the model's half of the hybrid never
+                # happened. Carried for exactly one turn: if they say it again,
+                # the repeat is the second signal instead.
+                self._interrupted_candidate_turn = turn
+                self._interrupted_candidate_was_tail = self._candidate_is_tail
+            elif repeats:
+                self._closing_turn = turn
+                self._close_after_farewell_turn(
+                    interrupted=False, reason="buyer_farewell_repeated"
+                )
+            elif self._agent_said_goodbye(pending.tracker):
+                self._closing_turn = turn
                 self._close_after_farewell_turn(
                     interrupted=False, reason="agent_farewell"
                 )

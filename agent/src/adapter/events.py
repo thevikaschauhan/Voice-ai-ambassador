@@ -200,11 +200,12 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "language_selected": "two language codes, an enum source and an enum reason",
     "call_duration_cap_armed": "one integer, the configured cap in seconds",
     "call_duration_cap": "one integer and a fixed literal action",
-    # One of four fixed reasons - buyer_farewell, agent_farewell, duration_cap,
+    # One of five fixed reasons - buyer_farewell, buyer_farewell_repeated,
+    # agent_farewell, duration_cap,
     # buyer_left - and never the utterance that triggered it. The buyer's
     # closing words are their own text and stay in the TurnRecord like
     # every other utterance.
-    "call_ended": "one of four fixed reasons",
+    "call_ended": "one of five fixed reasons",
     # Counts and booleans about a near miss, never the utterance. The
     # buyer's closing words are their own text; what tuning needs is how
     # many tokens were in the way and whether one was the ambassador's

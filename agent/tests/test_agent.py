@@ -4191,18 +4191,24 @@ async def test_a_near_miss_repeated_after_an_interruption_ends_the_call():
         [HealthyStream(["Anything else? "]), HealthyStream(["Anything else? "])]
     )
 
-    # Turn one: a tails-only near miss, talked over.
+    # A tails-only near miss that SURVIVES the widening - "really" is not a
+    # courtesy and will not become one, so this stays a near miss and the pair
+    # rule is what has to close it. ("that's it from my end", the shape the
+    # client used, now closes strictly on its own; the widening subsumed it,
+    # which is why this rule is for the residual rather than for that call.)
     handle = await preemptive_turn(
         agent,
-        partial="that's it from my",
-        final="that's it from my end",
+        partial="Thanks Jane that was really",
+        final="Thanks Jane that was really helpful, goodbye",
         interrupted=True,
     )
     assert handle.interrupted is True
 
     # Turn two: they say it again.
     await preemptive_turn(
-        agent, partial="that's it from my", final="that's it from my end"
+        agent,
+        partial="Thanks Jane that was really",
+        final="Thanks Jane that was really helpful, goodbye",
     )
     await log.aclose()
 
@@ -4227,3 +4233,30 @@ async def test_a_repeated_question_is_not_a_repeated_goodbye():
     await log.aclose()
 
     assert "call_ended" not in buf.getvalue()
+
+
+async def test_the_tail_threshold_is_what_separates_the_two_pair_cases():
+    """The boundary itself, so a later widening cannot move it by accident.
+
+    A tail miss is a missing courtesy; anything wider is an utterance carrying
+    content, which on this path means a question. The real misses read 1-2 and
+    the question-shaped NOT_ENDINGS candidates read 4 and 6, so the line sits
+    between - and both sides of it are asserted here rather than in a comment.
+    """
+    from adapter.agent import AmbassadorAgent as _Agent
+    from ambassador.ambassadors import load_ambassadors
+    from ambassador.farewell import load_farewells, read_farewell
+
+    farewells = load_farewells()
+    names = frozenset(
+        load_ambassadors().name_for(language) for language in load_ambassadors().named
+    )
+
+    tail = read_farewell(
+        "Thanks Jane that was really helpful, goodbye", farewells, "en", names=names
+    )
+    question = read_farewell(
+        "before we say goodbye, what about the payment plan", farewells, "en"
+    )
+    assert tail.unexplained <= _Agent._TAIL_MISS
+    assert question.unexplained > _Agent._TAIL_MISS
