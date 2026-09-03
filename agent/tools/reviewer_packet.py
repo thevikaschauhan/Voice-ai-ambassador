@@ -321,9 +321,11 @@ def main(language: str) -> None:
     named = disclosures.named_copy.get("en", "")
     if named:
         w(
-            "**B. With the ambassador's name** - wanted, not required. If this "
-            f"is missing, calls in {name} simply open with version A and no "
-            "name, which is what happens today."
+            "**B. With the ambassador's name** - wanted, not required. If "
+            f"this is missing, calls in {name} open with version A and no "
+            "name, so the ambassador goes unnamed rather than the call "
+            "failing. Version A is the one that decides whether a call can "
+            f"happen in {name} at all."
         )
         w("")
         w(f"English: > {named}")
@@ -785,12 +787,20 @@ def main(language: str) -> None:
     )
     w("")
     subject = theirs or "an unfamiliar given name"
+    # Deliberately not "does it sound foreign". That was the right question
+    # when every language was being offered the English name; the client has
+    # since chosen a name per language, so the interesting judgement is
+    # register rather than nativeness - and the wording has to keep working if
+    # that changes back, so it asserts neither.
     w(
         "Then one judgement, the one we most need and cannot get anywhere "
-        f"else: does {subject} land naturally on {article(name)} {name} "
-        "buyer's ear for a brand's ambassador, or does it read as foreign, "
-        "hard to say, or simply odd? Say so plainly if it does not, and say "
-        "why."
+        f"else: is {subject} the right name for a Binghatti ambassador "
+        f"speaking to {article(name)} {name} buyer? Whether it sounds native "
+        "or foreign is only part of it. We also need the register: how formal "
+        "it sounds, what age or background it suggests, whether a different "
+        "spelling would read better, and whether anything about it would sit "
+        "oddly on a property consultant. Say so plainly if something does, "
+        "and say what."
     )
     w("")
     w(
