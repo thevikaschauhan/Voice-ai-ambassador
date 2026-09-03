@@ -213,9 +213,7 @@ async def test_migrations_round_trip_every_phase_2_contract(database: str) -> No
         assert use["chunk_refs"][0]["document_revision"] == 1
         assert use["elapsed_ms"] == 120
 
-        await repo.add_audit_event(
-            lead_id, event="lead_persisted", detail={"turns": 1}
-        )
+        await repo.add_audit_event(lead_id, event="lead_persisted", detail={"turns": 1})
         assert [e["event"] for e in await repo.get_audit_events(lead_id)] == [
             "lead_persisted"
         ]
@@ -231,4 +229,270 @@ def _envelope(plaintext: bytes) -> dict[str, object]:
         "key_version": "v1",
         "nonce": b"0" * 12,
         "ciphertext": plaintext,
+    }
+
+
+async def test_applying_twice_changes_nothing(database: str) -> None:
+    """The migration runner is the admin-api's preDeployCommand, so it runs on
+    every deploy whether or not anything changed."""
+    from adapter.migrations import apply_migrations, latest_version
+
+    assert await apply_migrations(database) == [], "already applied by the fixture"
+    connection = await asyncpg.connect(database)
+    try:
+        from adapter.migrations import assert_schema_current
+
+        assert await assert_schema_current(connection) == latest_version()
+    finally:
+        await connection.close()
+
+
+async def test_a_worker_on_an_old_schema_refuses_rather_than_migrating(
+    database: str,
+) -> None:
+    """Both processes CHECK the version; neither applies it. A worker that
+    migrated on startup would race the admin-api's pre-deploy run."""
+    from adapter.migrations import SchemaOutOfDate, assert_schema_current
+
+    connection = await asyncpg.connect(database)
+    try:
+        await connection.execute("DELETE FROM schema_migrations")
+        with pytest.raises(SchemaOutOfDate, match="preDeployCommand"):
+            await assert_schema_current(connection)
+    finally:
+        await connection.close()
+
+
+async def test_one_call_cannot_become_two_leads(database: str) -> None:
+    """`session_id` is the idempotency key: a persist retried after a
+    half-finished shutdown must not produce a second lead."""
+    from adapter.repository import Repository
+
+    repo = await Repository.connect(database)
+    try:
+        first = await repo.start_lead(**_lead_kwargs("sess_same"))
+        again = await repo.start_lead(**_lead_kwargs("sess_same"))
+        assert first == again
+    finally:
+        await repo.close()
+
+
+async def test_a_decision_on_a_stale_revision_is_refused(database: str) -> None:
+    """Two admins deciding at once. The second must fail rather than quietly
+    overwrite the first, and the failure must leave nothing appended."""
+    from adapter.repository import ConcurrentDecision, Repository
+
+    repo = await Repository.connect(database)
+    try:
+        lead_id = await repo.start_lead(**_lead_kwargs("sess_race"))
+        await repo.record_decision(
+            lead_id,
+            new_status="qualified",
+            reason_code="ready",
+            note=None,
+            actor_kind="admin",
+            actor_id=None,
+            expected_lead_revision=0,
+        )
+        with pytest.raises(ConcurrentDecision):
+            await repo.record_decision(
+                lead_id,
+                new_status="rejected",
+                reason_code="duplicate",
+                note=None,
+                actor_kind="admin",
+                actor_id=None,
+                expected_lead_revision=0,
+            )
+        assert len(await repo.get_decisions(lead_id)) == 1
+        assert (await repo.get_lead(lead_id))["status"] == "qualified"
+    finally:
+        await repo.close()
+
+
+async def test_a_decision_cannot_be_edited_or_deleted(database: str) -> None:
+    """Append-only is a property of the TABLE, not of the code that happens to
+    write it: a future route with a stray UPDATE has to fail loudly."""
+    from adapter.repository import Repository
+
+    repo = await Repository.connect(database)
+    try:
+        lead_id = await repo.start_lead(**_lead_kwargs("sess_append"))
+        await repo.record_decision(
+            lead_id,
+            new_status="qualified",
+            reason_code="ready",
+            note=None,
+            actor_kind="admin",
+            actor_id=None,
+            expected_lead_revision=0,
+        )
+        connection = await asyncpg.connect(database)
+        try:
+            for statement in (
+                "UPDATE admin_decisions SET reason_code = 'other'",
+                "DELETE FROM admin_decisions",
+            ):
+                with pytest.raises(asyncpg.exceptions.RaiseError, match="append-only"):
+                    await connection.execute(statement)
+        finally:
+            await connection.close()
+    finally:
+        await repo.close()
+
+
+async def test_a_half_captured_contact_is_rejected_by_the_schema(
+    database: str,
+) -> None:
+    """A contact marked captured with no phone and no email looks like a lead
+    somebody can call. docs/02- forbids it, so the table does."""
+    from adapter.repository import Repository
+
+    repo = await Repository.connect(database)
+    try:
+        lead_id = await repo.start_lead(**_lead_kwargs("sess_contact"))
+        with pytest.raises(asyncpg.exceptions.CheckViolationError):
+            await repo.put_contact(
+                lead_id,
+                status="captured",
+                asked_turn_index=2,
+                source_turn_index=3,
+                name=_envelope(b"name"),
+                phone=None,
+                email=None,
+                phone_fingerprint=None,
+                email_fingerprint=None,
+                contact_permission=True,
+                confirmed=True,
+            )
+    finally:
+        await repo.close()
+
+
+async def test_an_unreviewed_chunk_can_never_reach_a_prompt(database: str) -> None:
+    """The gate the whole knowledge design rests on. Scope is a review, and an
+    admin-only chunk carrying prompt text would bypass it."""
+    from adapter.repository import Repository
+
+    repo = await Repository.connect(database)
+    try:
+        document_id = await repo.add_document(**_document_kwargs())
+        chunk_id = await repo.add_chunk(
+            document_id,
+            document_revision=1,
+            ordinal=0,
+            heading=None,
+            body="Something unreviewed.",
+            content_sha256="d" * 64,
+        )
+        connection = await asyncpg.connect(database)
+        try:
+            with pytest.raises(asyncpg.exceptions.CheckViolationError):
+                await connection.execute(
+                    "UPDATE knowledge_chunks SET prompt_body = body WHERE id = $1",
+                    chunk_id,
+                )
+        finally:
+            await connection.close()
+    finally:
+        await repo.close()
+
+
+async def test_revoking_a_figure_clears_the_projection_and_keeps_the_history(
+    database: str,
+) -> None:
+    """Archiving or revoking must affect new turns without erasing what a
+    historic turn was allowed to see (docs/02-)."""
+    from adapter.repository import Repository
+
+    repo = await Repository.connect(database)
+    try:
+        document_id = await repo.add_document(**_document_kwargs())
+        chunk_id = await repo.add_chunk(
+            document_id,
+            document_revision=1,
+            ordinal=0,
+            heading=None,
+            body="A studio starts at AED 985,000.",
+            content_sha256="e" * 64,
+        )
+        figure_id = await repo.add_figure(
+            document_id,
+            document_revision=1,
+            chunk_id=chunk_id,
+            value="985000",
+            kind="amount",
+            currency="AED",
+            surface="AED 985,000",
+            source_sentence="A studio starts at AED 985,000.",
+        )
+        await repo.review_figure(figure_id, action="approved", actor_kind="admin")
+        await repo.review_figure(figure_id, action="revoked", actor_kind="admin")
+
+        assert (await repo.get_figure(figure_id))["active_approval_id"] is None
+        connection = await asyncpg.connect(database)
+        try:
+            history = await connection.fetch(
+                "SELECT action FROM knowledge_figure_reviews WHERE figure_id = $1"
+                " ORDER BY created_at, id",
+                figure_id,
+            )
+        finally:
+            await connection.close()
+        assert [row["action"] for row in history] == ["approved", "revoked"]
+    finally:
+        await repo.close()
+
+
+async def test_the_search_vector_uses_the_simple_configuration(database: str) -> None:
+    """A stemmer would have to be chosen per document, and this corpus is Gulf
+    real estate in three languages where the load-bearing terms - project
+    names, unit types, AED - are the ones a stemmer damages."""
+    from adapter.repository import Repository
+
+    repo = await Repository.connect(database)
+    try:
+        document_id = await repo.add_document(**_document_kwargs())
+        await repo.add_chunk(
+            document_id,
+            document_revision=1,
+            ordinal=0,
+            heading="Binghatti Skyrise",
+            body="Studios face the Burj Khalifa.",
+            content_sha256="f" * 64,
+        )
+        connection = await asyncpg.connect(database)
+        try:
+            hits = await connection.fetchval(
+                "SELECT count(*) FROM knowledge_chunks"
+                " WHERE search_vector @@ to_tsquery('simple', 'skyrise')"
+            )
+        finally:
+            await connection.close()
+        assert hits == 1
+    finally:
+        await repo.close()
+
+
+def _lead_kwargs(session_id: str) -> dict[str, object]:
+    return {
+        "session_id": session_id,
+        "language": "en",
+        "requested_language": "en",
+        "uncertified_fallback": False,
+        "inventory_version": "10-records",
+        "started_at": datetime.now(timezone.utc),
+    }
+
+
+def _document_kwargs() -> dict[str, object]:
+    return {
+        "revision": 1,
+        "title": "Brochure",
+        "source_type": "pdf",
+        "original_filename": "b.pdf",
+        "mime_type": "application/pdf",
+        "source_bytes": 10,
+        "source_sha256": "0" * 64,
+        "extracted_text": "text",
     }

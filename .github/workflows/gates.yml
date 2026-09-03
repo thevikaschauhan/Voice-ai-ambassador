@@ -10,6 +10,17 @@
 #   5. `uv run eval`                           offline: no key, no network, no spend
 #   6. 100% branch coverage on guardrail and derivation code
 #
+# The agent job also runs a postgres:16 service container and sets
+# DATABASE_URL_TEST at it, so the Phase 2 adapter tests run against a REAL
+# database (ADR-018). Without it they SKIP rather than fail, which is what
+# keeps gate 2 and a laptop checkout honest. To run them locally:
+#
+#   docker run --rm -e POSTGRES_PASSWORD=x -p 5433:5432 -d postgres:16
+#   export DATABASE_URL_TEST=postgresql://postgres:x@localhost:5433/postgres
+#
+# Each test builds and drops its own temporary database, so nothing it does
+# survives the run and nothing it finds was left by an earlier one.
+#
 # Gate 4 arrived last and is why the numbers shifted. It is separate from gate 3
 # because the two fail apart: `check` is lint rules, `format` is layout, and a
 # tree can satisfy either while breaking the other.
