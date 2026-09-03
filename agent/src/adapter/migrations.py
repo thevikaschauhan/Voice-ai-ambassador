@@ -24,6 +24,13 @@ from pathlib import Path
 
 import asyncpg
 
+from .session_mode import (
+    DirectConnectionRefused,
+    TransactionPoolerRefused,
+    assert_session_mode,
+    session_mode_line,
+)
+
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 # `0001_phase2.sql` -> version `0001`. The number orders the run; the rest of
@@ -57,7 +64,13 @@ def latest_version(directory: Path | None = None) -> str:
 
 
 async def apply_migrations(dsn: str, directory: Path | None = None) -> list[str]:
-    """Apply what has not been applied. Returns the versions it ran."""
+    """Apply what has not been applied. Returns the versions it ran.
+
+    Refuses transaction mode BEFORE connecting: this runner is exactly the
+    thing that survives port 6543 - short, simple-protocol statements - so it
+    is the one place a wrong port could report success.
+    """
+    assert_session_mode(dsn)
     connection = await asyncpg.connect(dsn)
     try:
         await connection.execute(
@@ -154,6 +167,20 @@ def _main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Checked BEFORE the line is printed. Printing first labelled a refused
+    # 6543 as "(session mode)", which is worse than saying nothing: it is the
+    # exact claim the guard exists to disprove.
+    try:
+        assert_session_mode(dsn)
+    except (TransactionPoolerRefused, DirectConnectionRefused) as refused:
+        # One line, naming the port rather than the DSN.
+        print(str(refused), file=sys.stderr)
+        return 1
+
+    # The pre-deploy has no `lead_store_connected`, so this is the only place
+    # the port is visible in that log - and the port is what was wrong.
+    print(session_mode_line(dsn))
 
     try:
         applied = asyncio.run(apply_migrations(dsn))

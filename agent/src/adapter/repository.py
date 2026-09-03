@@ -30,6 +30,7 @@ from typing import Any
 import asyncpg
 
 from .migrations import assert_schema_current
+from .session_mode import assert_session_mode
 
 # Five is the ADR-018 number. It is a ceiling on this process, not a target.
 MAX_POOL_SIZE = 5
@@ -62,6 +63,11 @@ class Repository:
 
     @classmethod
     async def connect(cls, dsn: str, *, check_schema: bool = True) -> "Repository":
+        # Before the pool, not after a failed handshake: an unreachable
+        # transaction-mode host would otherwise fail as a connection error and
+        # hide the reason. No second startup line here - the runtime already
+        # logs host:port once from the lead store.
+        assert_session_mode(dsn)
         pool = await asyncpg.create_pool(
             dsn,
             min_size=1,
