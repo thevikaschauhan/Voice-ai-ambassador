@@ -1140,6 +1140,21 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    exits and the start command runs, so `Application startup complete` from
    `uvicorn` is a third fact and not a restatement of either.
 
+   The very next deploy, thirteen minutes later at 19:34:17Z, carried no new
+   migration and printed the other branch:
+
+   ```
+   database port 5432 (session mode)
+   schema is up to date at version 0003
+   ```
+
+   Both shapes of the migration line are therefore observed, on consecutive
+   deployments. Worth having the pair, because it shows what actually differs
+   between them: whether anything was **outstanding**, not whether the runner
+   worked. Both prove it reached the database, so a reader who sees only one of
+   them has lost nothing - and a deploy that prints NEITHER has not "kept the
+   old schema", it has failed before the runner spoke.
+
    **The second line is still expected and not yet observed**, and the reason
    is worth keeping until it is: the worker builds its writer lazily, so this
    line appears on the first write and its absence means no call has stored a
