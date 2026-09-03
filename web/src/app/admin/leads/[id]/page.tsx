@@ -1,13 +1,18 @@
 import Link from 'next/link'
+import { headers } from 'next/headers'
 import { LeadDetail } from '@/components/admin/lead-detail'
-import { readForPage } from '@/lib/admin/read'
-import type { LeadDetailRecord } from '@/lib/admin/leads'
+import { readLead } from '@/lib/admin/leads.server'
 
 export const dynamic = 'force-dynamic'
 
 export default async function LeadPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const read = await readForPage<LeadDetailRecord>({ route: 'lead', id })
+  const read = await readLead(
+    new Request(`https://admin.local/admin/leads/${id}`, {
+      headers: { cookie: (await headers()).get('cookie') ?? '' },
+    }),
+    id,
+  )
 
   return (
     <main className="mx-auto flex min-h-screen max-w-[1000px] flex-col gap-6 px-4 py-6 sm:px-6">

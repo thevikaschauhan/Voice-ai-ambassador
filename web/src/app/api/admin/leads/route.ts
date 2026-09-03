@@ -11,7 +11,11 @@ export const dynamic = 'force-dynamic'
  * the contract names: an unfiltered pass-through would let a browser send
  * anything to a private service, which is the relay this design refuses to be.
  */
-const ALLOWED_FILTERS = ['status', 'language', 'project_id', 'limit', 'cursor'] as const
+// Exactly what `admin_api.list_leads` declares today, plus the two docs/10-
+// names that his `task-p2-admin-list-filters` will add. Forwarding `cursor`
+// was a silent no-op: the API paginates on `offset`, and an unknown query
+// parameter is ignored rather than refused, so the filter simply never applied.
+const ALLOWED_FILTERS = ['status', 'language', 'project_id', 'limit', 'offset'] as const
 
 export async function GET(request: Request): Promise<Response> {
   const asked = new URL(request.url).searchParams

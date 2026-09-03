@@ -3,7 +3,6 @@ import 'server-only'
 import { readAdminSession } from '@/lib/admin/session'
 import { UpstreamNotConfigured, forward } from '@/lib/admin/upstream'
 import type { ForwardOptions } from '@/lib/admin/upstream'
-import { headers } from 'next/headers'
 
 /**
  * What an admin PAGE does to read from the API.
@@ -23,8 +22,13 @@ export type PageRead<T> =
   | { state: 'unauthenticated' }
   | { state: 'unavailable'; reason: string }
 
-export async function readForPage<T>(options: ForwardOptions): Promise<PageRead<T>> {
-  const cookie = (await headers()).get('cookie')
+export async function readForPage<T>(
+  cookie: string | null,
+  options: ForwardOptions,
+): Promise<PageRead<T>> {
+  // The cookie is a PARAMETER, not read from Next's ambient request store.
+  // `headers()` throws outside a request scope, so a reader that called it was
+  // untestable and hid its own dependency; the caller has the header anyway.
   if (readAdminSession(cookie) === null) return { state: 'unauthenticated' }
 
   try {

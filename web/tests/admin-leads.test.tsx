@@ -233,8 +233,27 @@ describe('qualifying and rejecting', () => {
       new_status: 'qualified',
       reason_code: expect.any(String),
       note: 'looks ready',
-      revision: 3,
+      // Corrected, not deleted: this case asserted `revision` in #109, which
+      // was this tier's guess at a field the API had not shipped yet. The
+      // guess was wrong, and a test that encodes a wrong contract is worse
+      // than no test - it makes the drift look verified.
+      expected_lead_revision: 3,
     })
+  })
+
+  it('names the revision field the API actually validates', async () => {
+    // Drift found against toby's merged admin_api.py: DecisionRequest declares
+    // `expected_lead_revision` (docs/02- names it that too), and this component
+    // was sending `revision`. The proxy forwards bodies verbatim, so the route
+    // could not catch it - every decision would have 422'd, which reads as a
+    // haunted failure rather than a field name.
+    const sent = stubDecision(201, { revision: 4 })
+    await renderDetail(DETAIL)
+    await userEvent.click(screen.getByRole('button', { name: /qualify/i }))
+    await userEvent.click(screen.getByRole('button', { name: /save decision/i }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0].body).toMatchObject({ expected_lead_revision: 3 })
+    expect(sent[0].body).not.toHaveProperty('revision')
   })
 
   it('tells the reviewer to reload when the revision has moved under them', async () => {
