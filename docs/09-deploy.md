@@ -81,6 +81,12 @@ railway config apply    # shows the same plan, then asks before writing
 Both walk up from the working directory to find `.railway/railway.ts`, so
 either runs from the repository root. `plan` redacts variable values by default.
 
+**After every `apply`, re-check that both services still have a deployment
+trigger** (step 0 of the verification section says how). The worker's trigger
+disappeared inside the window of two applies on 2026-09-02 and nothing reported
+it; whether the engine removed it is unproven, and until it is known this check
+costs one query and the alternative is a service that silently stops deploying.
+
 Two things about the file are easy to trip over. **Omit means delete**: it
 describes the whole environment, so removing a service or a variable name from
 it is a request to remove that thing from Railway, and `apply` marks those as
@@ -521,6 +527,35 @@ Python in it and a handshake file the other container owns.
 
 ### The whole check, in order
 
+0. **Confirm both services are running the commit you merged**, before asking
+   whether they are healthy. One command, and it is the only step here that
+   catches a deploy that never happened:
+
+   ```
+   railway status --json | jq -r '.environments.edges[].node.serviceInstances.edges[].node
+     | "\(.serviceName)  \(.activeDeployments[0].meta.commitHash[0:12])"'
+   ```
+
+   Both lines must show the head of `main`. A service sitting on an older
+   commit has not deployed your change, and every step below will pass anyway,
+   because they all test the deployment that IS running.
+
+   If one is behind, check that the service still has a **deployment trigger**.
+   This is not the same thing as being connected to the repository, and that
+   distinction is the whole trap: `railway status --json` reports
+   `source: {"repo": "..."}` identically on a service whose pushes deploy and
+   one whose pushes go nowhere. The trigger is what turns a push into a build,
+   and it is visible in the dashboard under the service's **Settings > Source**,
+   or over the API:
+
+   ```
+   deploymentTriggers(projectId: ..., environmentId: ..., serviceId: ...)
+   ```
+
+   An empty list means no webhook evaluation happens at all, so there is no
+   failed deploy, no skipped deploy, and nothing anywhere that says so. It is
+   the quietest failure on this page.
+
 1. `railway logs -s agent-worker -d` and find `registered worker`. No line means
    not deployed, whatever the status says. If the deploy is failed or crashed,
    pass the deployment id or the default view will show you the last good one
@@ -612,6 +647,26 @@ in a call` against deployment 53a92ef7. That mattered more than the wording
 suggested, because the string is only reachable *after* `listRooms()` returned,
 so it did not merely mean the three variables were set - it meant LiveKit had
 accepted the key and the secret.
+
+**The worker spent nine hours not deploying, and none of the steps above said
+so.** Recorded because it is the episode that added step 0. Between 2026-09-02
+17:41Z and 2026-09-03 03:51Z the worker service had no GitHub deployment
+trigger: `deploymentTriggers` returned an empty list for it and one trigger for
+`web`. Two merges touching `agent/**` produced no deploy, no failed deploy and
+no skipped deploy, because with no trigger there is no webhook evaluation to
+record anything - which is why querying for SKIPPED deployments returned nothing
+and proved nothing. It was masked as well as silent: two variable changes in
+that window redeployed HEAD, so the service kept showing recent successful
+deploys of code that happened to be current at the time.
+
+What is proven: the trigger was absent, the last push-triggered worker deploy
+was 17:41:45Z on `b3fcfd7`, recreating the trigger and deploying `53d5170`
+worked, and both services now report that commit. What is NOT proven: what
+removed it. It vanished inside the window of two `railway config apply` runs
+(17:44Z and 17:55Z), which makes the IaC engine touching `source` the prime
+suspect and nothing more than that. The re-check after every apply, in the
+configuration section above, exists because the suspicion is unresolved rather
+than because it is established.
 
 **#78 closed that route on the hosted service at 17:55Z**, for the reason in the
 first row of step 3's table, and the observation above now describes laptop mode
