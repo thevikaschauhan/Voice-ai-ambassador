@@ -39,9 +39,10 @@ The `admin-api` is FastAPI in the Python image, started as a third Railway
 application service. It owns ingestion, knowledge CRUD, lead reads and admin
 decisions. The worker and the admin API share Pydantic domain contracts and an
 `asyncpg` repository adapter; only the admin API serves HTTP. Versioned plain
-SQL migrations live under `agent/` and run once as a release step before the
-admin API deploy. Neither process runs migrations at ordinary startup. A
-confirmed incompatible schema is fatal; a connection timeout starts the
+SQL migrations live under `agent/` and run once through Railway's
+`preDeployCommand` on the `admin-api` service, before it receives traffic.
+Neither process runs migrations at ordinary startup. A confirmed incompatible
+schema is fatal; a connection timeout starts the
 admin API not-ready and leaves the worker in an observable base-inventory mode
 so a transient database failure cannot take voice offline.
 
@@ -72,10 +73,11 @@ disabled.
 The free tier's published database cap is 500 MB, which is ample for this lead
 and extracted-text scope; `VERIFY:` confirm that figure in the dashboard at
 creation because another Supabase page describes disk allowance differently.
-The free tier can pause after roughly seven days of low activity. One scheduled
-low-cost `SELECT 1` each day from the deployed admin API is a POC keep-active
-mitigation, not a guarantee; the demo runbook checks the project state before
-doors open.
+The free tier can pause after roughly seven days of low activity. A single
+asyncio lifespan task in the one-replica admin API issues one bounded low-cost
+`SELECT 1` each day; it emits only the clear `database_health_probe` outcome and
+elapsed time. This is a POC keep-active mitigation, not a guarantee; the demo
+runbook checks the project state before doors open.
 Moving to a paid plan is the production answer. A paused or unreachable
 database never blocks the voice path or the authored farewell: lead persistence
 and retrieval fail closed, emit classified clear events, and leave the agent
@@ -212,25 +214,29 @@ At the approved scale of 10-15 documents, ingestion is synchronous and bounded:
    it.
 6. The admin reviews that extracted list. Each checked occurrence gets an
    append-only approval record; unchecking records revocation. Only checked,
-   currently active figures can extend a turn's allowed set, and approving a
-   figure never changes an `inventory_governed` chunk into prompt material.
+   currently active figures in eligible chunks can extend a turn's allowed set,
+   and approving a figure never changes an `inventory_governed` chunk into
+   prompt material.
 7. Every chunk defaults to `admin_only`. The reviewer may mark non-project
-   process and FAQ material `general_knowledge`. Project names, locations,
-   prices, sizes, handover, payment structures and amenities are
-   `inventory_governed`: the admin may inspect their source prose, but it never
-   enters a voice prompt. Each scope change is append-only and attributed.
-   Those facts change only through the existing `data/inventory.json` review
-   and deploy.
-8. Publishing makes reviewed `general_knowledge` chunks searchable. Archiving
-   removes them from new retrievals without erasing the revision used by
-   historic turns.
+   process and FAQ material `general_knowledge`, or bind descriptive prose to
+   an existing inventory project as `project_knowledge`. The latter requires a
+   project id at publish time. Structured prices, sizes, payment plans,
+   handover, status, unit types and the amenities enumeration are
+   `inventory_governed`; conflicts are flagged and remain admin-only, while an
+   unknown project is never publishable. Scope changes are append-only and
+   attributed. Structured facts change only through the existing
+   `data/inventory.json` review and deploy.
+8. Publishing makes reviewed general/project chunks searchable. When project
+   context is known, project chunks rank first; general knowledge is always
+   eligible. Archiving removes chunks from new retrievals without erasing the
+   revision used by historic turns.
 
 Postgres full-text search uses the `simple` configuration so English stemming
 does not corrupt Arabic, Hindi or mixed-language terms. It searches published
-`general_knowledge` chunks only and returns at most four ranked chunks. Ten to
-fifteen documents do not justify embeddings, a vector service or an ingestion
-queue. Embeddings become a new ADR only after measured retrieval quality or
-corpus size proves full-text search inadequate.
+`general_knowledge` and bound `project_knowledge` chunks only and returns at
+most four ranked chunks. Ten to fifteen documents do not justify embeddings, a
+vector service or an ingestion queue. Embeddings become a new ADR only after
+measured retrieval quality or corpus size proves full-text search inadequate.
 
 ## Retrieval and the figures gate
 
@@ -253,7 +259,7 @@ Figure handling has no source-based bypass:
 
 - An approved `KnowledgeFigure` remains in the excerpt. Its typed value is
   added to a copy of the base `AllowedFigures` for this turn only, and only when
-  the occurrence belongs to a retrieved chunk.
+  the occurrence belongs to a retrieved general or bound project chunk.
 - An unapproved or revoked figure occurrence is replaced with a
   `[figure withheld pending verification]` marker before the excerpt reaches
   the model. It never joins the allowed set.
@@ -273,11 +279,12 @@ the turn. A retrieval miss therefore fails closed. Revocation affects the next
 turn; a turn already spoken keeps its immutable document revision and approval
 ids in the audit.
 
-Descriptive prose from an eligible published `general_knowledge` chunk may be
-spoken without figure approval. Inventory-governed project facts remain out of
-that path. The audit proves which chunks were supplied, not that every adjective
-in a sentence is entailed by one. The numeric guarantee is stronger and remains
-the one stated in `docs/03-`.
+Descriptive prose from an eligible published `general_knowledge` or bound
+`project_knowledge` chunk may be spoken without figure approval. Structured
+inventory-governed facts, conflict-marked prose and unknown projects remain out
+of that path. The audit proves which chunks were supplied, not that every
+adjective in a sentence is entailed by one. The numeric guarantee is stronger
+and remains the one stated in `docs/03-`.
 
 ## Admin HTTP and web surface
 
@@ -289,7 +296,7 @@ surface is deliberately small:
 | `/v1/leads` | List/filter leads; fetch detail with turns, brief, summary and score breakdown; retry failed analysis |
 | `/v1/leads/{id}/decisions` | Append qualify or reject decisions with optimistic revision checking |
 | `/v1/knowledge/documents` | Create from paste/upload; list; fetch parse result, chunks and extracted figures; publish, revise or archive |
-| `/v1/knowledge/chunks/{id}/reviews` | Append a general-knowledge, inventory-governed or reset-to-admin-only scope review |
+| `/v1/knowledge/chunks/{id}/reviews` | Append a general-knowledge, bound project-knowledge, inventory-governed or reset-to-admin-only scope review; project scope requires an inventory id |
 | `/v1/knowledge/figures/{id}/reviews` | Append approval or revocation |
 | `/health` | Unauthenticated process liveness only; remains 200 during a database pause so Railway does not restart-loop |
 | `/ready` | Bearer-protected database and schema readiness; no record counts or secrets |
@@ -352,7 +359,7 @@ description names those commits and they are not squashed before god merges.
 | Suggested owner | Card | First RED test |
 |---|---|---|
 | toby/core | Phase 2 Pydantic contracts and score rubric | `test_every_rubric_signal_contributes_only_its_documented_points` fails because the models and scorer do not exist |
-| toby/core | Deterministic knowledge chunking, closed-by-default scope and figure context | `test_revoked_unretrieved_or_inventory_governed_figures_never_extend_allowed_figures` fails on the missing pure context builder |
+| toby/core | Deterministic knowledge chunking, closed-by-default scope and figure context | `test_revoked_unretrieved_or_inventory_governed_facts_and_unbound_project_prose_never_extend_allowed_figures` fails on the missing pure context builder |
 | dwight/adapter | Postgres migrations and async repository | `test_migrations_round_trip_every_phase_2_contract` fails against an empty temporary Postgres schema |
 | dwight/adapter | Persist every call from `shutdown_session` | `test_buyer_left_persists_after_brief_drain_with_incomplete_audit_flag` fails because shutdown has no repository hook |
 | dwight/adapter | Structured summary analysis and scoring finaliser | `test_invalid_analysis_keeps_the_lead_and_never_accepts_a_model_score` fails because no finaliser exists |

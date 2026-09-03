@@ -61,9 +61,14 @@ above until the corresponding model paths exist:
   A structural companion rejects a model-supplied score or nonexistent evidence
   turn and proves the pure scorer alone produces the versioned 0-100 result.
 - **Retrieved-context injection, 6 gate cases**: instruction-shaped knowledge
-  cannot change persona, tools or guardrails; inventory-governed prose and
-  unapproved figures never reach the model. A structural companion proves
-  chunks default to admin-only and figure approval cannot override that scope.
+  cannot change persona, tools or guardrails; inventory-governed facts,
+  unknown-project prose and unapproved figures never reach the model. A
+  structural companion proves chunks default to admin-only and figure approval
+  cannot override that scope.
+
+| Planned Phase 2 category | Cases | Gate when shipped | Proves |
+|---|---:|---|---|
+| Retrieved project knowledge | 6 | Phase 2 gate | A bound brochure passage about an inventory project is spoken; the same passage's unapproved price is withheld; a passage about an unknown project is never retrieved |
 
 ## Running it
 

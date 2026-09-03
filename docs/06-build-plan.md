@@ -72,8 +72,8 @@ score. The tables below are therefore decisions, not a menu.
 | P2-S04 | Manual qualify/reject with audit | Score is guidance; append-only decisions update status transactionally with optimistic revision checks |
 | P2-S05 | One-time contact capture | Name plus phone or email, declinable; first goodbye may be intercepted once; second goodbye closes; phone digits are read back deterministically |
 | P2-S06 | Knowledge paste and upload | Synchronous bounded parsing for PDF, DOCX, TXT and pasted text; scanned PDFs fail visibly as no extractable text |
-| P2-S07 | Deterministic chunks, scope review and per-figure review | Paragraph-aware chunks default admin-only; inventory-governed project prose stays out of prompts; extracted occurrence list shows value, unit/currency, source sentence and page; only individually approved figures in eligible chunks are active |
-| P2-S08 | Full-text retrieval in the voice path | Published `general_knowledge` chunks only; inventory-governed brochure prose excluded; Postgres `simple` search; at most four chunks; once per final turn, cached across repeat `llm_node` calls, at most 250ms before `llm_ttft` |
+| P2-S07 | Deterministic chunks, four-way scope review and per-figure review | Paragraph-aware chunks default admin-only; bound `project_knowledge` descriptive prose may retrieve only for an inventory project; conflicts/unknown projects stay closed; structured inventory facts remain `inventory_governed`; extracted occurrence list shows value, unit/currency, source sentence and page; only individually approved figures in eligible chunks are active |
+| P2-S08 | Full-text retrieval in the voice path | Published `general_knowledge` and bound `project_knowledge` chunks; known project chunks rank first, general knowledge always eligible; at most four chunks; once per final turn, cached across repeat `llm_node` calls, at most 250ms before `llm_ttft` |
 | P2-S09 | Retrieved-figure guardrail extension | Approved figures from retrieved chunks extend that turn's set; withheld/revoked values are removed before prompting; no validator bypass |
 | P2-S10 | Python admin API | Private FastAPI service from the same Python image; bearer-protected lead, decision and knowledge routes; only health is unauthenticated |
 | P2-S11 | Protected `/admin` web surface | Shared code, unset-closed and rate-limited; signed HttpOnly session; fixed server proxy routes add the bearer; lead/detail/decision and knowledge-review UI |
@@ -122,13 +122,13 @@ Every ships row has one first RED test:
 | P2-S04 | route test | `test_a_decision_appends_history_and_rejects_a_stale_lead_revision` fails because no decision route or transaction exists |
 | P2-S05 | pytest adapter | `test_first_goodbye_asks_once_second_goodbye_closes_and_decline_is_valid` fails because the contact policy does not exist |
 | P2-S06 | route test | `test_pdf_docx_txt_and_paste_parse_while_a_scanned_pdf_reports_no_text` fails because the ingestion route and adapters do not exist |
-| P2-S07 | pytest core | `test_chunks_default_closed_and_inventory_governed_prose_never_enters_prompt_context` fails because the chunk/scope builder does not exist |
+| P2-S07 | pytest core | `test_chunks_default_closed_and_inventory_governed_facts_and_unbound_project_prose_never_enter_prompt_context` fails because the chunk/scope builder does not exist |
 | P2-S08 | pytest adapter | `test_retrieval_runs_once_per_final_turn_and_is_reused_by_repeat_llm_nodes` fails because the model path has no retrieval seam |
 | P2-S09 | pytest core | `test_only_approved_figures_from_retrieved_chunks_extend_the_turn_set` fails because the dynamic figure context does not exist |
 | P2-S10 | route test | `test_every_non_health_admin_route_refuses_a_missing_or_wrong_bearer` fails before FastAPI is mounted |
 | P2-S11 | vitest | `admin stays closed when ADMIN_ACCESS_CODE is absent and never serialises the upstream token` fails before the admin gate and proxy exist |
 | P2-S12 | pytest adapter | `test_buyer_payloads_encrypt_while_phase_2_events_contain_no_buyer_words` fails because the encryption and classified projections do not exist |
-| P2-S13 | live smoke | `disconnect_upload_retrieve_revoke_decide_survive_restart` fails on the undeployed two-host topology |
+| P2-S13 | live smoke | `disconnect_upload_retrieve_revoke_decide_survive_restart` fails on the undeployed two-host topology; the smoke includes the daily probe and paused-project restore check |
 
 ### Phase 2 gates
 

@@ -264,8 +264,10 @@ the Python repository uses `asyncpg`; the admin API and worker are the only
 database clients. The store can move to another Postgres host without changing
 the domain contracts or web UI.
 
-Migrations run once as a release step before the admin API deploy, not from the
-voice worker. Both Python processes check the schema version. The Supabase
+Migrations run once as a Railway `preDeployCommand` on the `admin-api` service,
+before that service receives traffic, not from the voice worker or ordinary
+startup. The command is idempotent; both Python processes only check the schema
+version at startup. The Supabase
 project is created in `eu-central-1` Frankfurt, the closest offered region to
 the Railway services in Amsterdam; `VERIFY:` Supabase does not state whether a
 project region can later change, so creation treats it as irreversible. The
@@ -298,18 +300,29 @@ A local durable retry queue and at-least-once delivery are deferred.
 DOCX and TXT files plus pasted text. Deterministic adapters extract text;
 `ambassador/knowledge.py` performs deterministic heading/paragraph chunking;
 Postgres full-text search with the `simple` configuration retrieves published
-chunks. A scanned PDF with no text fails visibly and asks for a text-bearing
-file. OCR, images, legacy DOC, XLSX, URLs, embeddings and an ingestion queue are
-deferred.
+`general_knowledge` and bound `project_knowledge` chunks. A scanned PDF with no
+text fails visibly and asks for a text-bearing file. OCR, images, legacy DOC,
+XLSX, URLs, embeddings and an ingestion queue are deferred.
 
-The inventory boundary does not move. Project names, locations, prices, unit
-sizes, handover dates, payment structures and amenities still come only from
-`data/inventory.json`. Ingestion may retain brochure passages about those
-fields for admin review, but marks them `inventory_governed` and never supplies
-their prose to the model. A correction or addition to a protected project fact
-goes through the existing inventory review and deploy. Only reviewed
-`general_knowledge` chunks, such as process and non-project FAQs, are eligible
-for voice retrieval.
+The inventory boundary does not move. Four chunk scopes make the distinction
+explicit: `admin_only` (the default), `general_knowledge` (process and FAQ),
+`project_knowledge` (descriptive prose about a project that exists in
+`data/inventory.json`), and `inventory_governed` (structured project facts,
+including figure-bearing fields, owned by the inventory). Project knowledge is eligible for retrieval only
+when a reviewer binds it to an inventory project id. A passage about an unknown
+project is `unknown_project` and cannot publish; it offers an inventory-review
+pointer, not an admin shortcut. Prices, sizes, payment plans, handover, status,
+unit types and the amenities enumeration remain inventory-governed. A brochure
+may add reviewed location, design, developer-story, lifestyle or amenity
+description detail, but it cannot contradict a structured inventory field.
+Conflicts are flagged and remain admin-only until the inventory is corrected
+through its existing review and deploy. Figures in either eligible prose scope
+still require per-occurrence approval and the numeric guardrail.
+
+When the turn's project context is known from deterministic name matching or
+the accepted brief, matching `project_knowledge` chunks rank ahead of general
+knowledge; general knowledge remains eligible on every turn. The result is
+still capped at four chunks.
 
 The small corpus is why full-text search comes before embeddings. It is local
 to the system of record, inspectable, fast enough for the voice budget and has

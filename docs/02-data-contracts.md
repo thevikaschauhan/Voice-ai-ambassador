@@ -275,9 +275,12 @@ KnowledgeChunk
   ordinal               int
   heading               str | null
   body                  str
-  retrieval_scope       "admin_only" | "general_knowledge" | "inventory_governed"
+  retrieval_scope       "admin_only" | "general_knowledge" |
+                        "project_knowledge" | "inventory_governed"
+  project_id            str | null        inventory id; required for project knowledge
   scope_review_id       UUID | null       null means closed `admin_only`
-  prompt_body           str | null       null unless reviewed general knowledge;
+  conflict_code         "conflicts_with_inventory" | "unknown_project" | null
+  prompt_body           str | null       null unless reviewed general/project knowledge;
                                             unapproved occurrences replaced
   page_start/page_end   int | null
   content_sha256        str
@@ -308,7 +311,9 @@ KnowledgeFigureReview
 KnowledgeChunkReview
   id                    UUID
   chunk_id              UUID
-  action                "general_knowledge" | "inventory_governed" | "admin_only"
+  action                "general_knowledge" | "project_knowledge" |
+                        "inventory_governed" | "admin_only"
+  project_id            str | null       required for `project_knowledge`
   actor_kind            "admin" | "user"
   actor_id              UUID | null
   created_at            datetime
@@ -316,15 +321,25 @@ KnowledgeChunkReview
 
 Parsing creates figures but never approves them. `active_approval_id` is a
 projection of the append-only review history. A chunk defaults to `admin_only`.
-Project names, locations, prices, sizes, handover, payment structures and
-amenities are `inventory_governed`: they can be inspected in admin, but their
-document prose never becomes `prompt_body`; the canonical value continues to
-come from `data/inventory.json`. Publishing controls retrieval of reviewed
-`general_knowledge` chunks; the current `scope_review_id` is a projection of an
-append-only review history. Figure approval controls only whether an occurrence
-remains in their `prompt_body` and can join a turn's allowed set, and cannot
-override chunk scope. Archiving a document or revoking a figure affects new
-turns without erasing the revision cited by historic turns.
+`project_knowledge` requires a bound `project_id` that resolves through the
+inventory loader; it covers reviewed descriptive location, design, developer,
+lifestyle and amenity detail. `inventory_governed` covers prices, sizes, payment
+plans, handover, status, unit types and the amenities enumeration, whose
+canonical values continue to come from `data/inventory.json`. A sentence that
+conflicts with those structured fields carries `conflicts_with_inventory` and
+stays admin-only. A project not present in inventory carries `unknown_project`
+and cannot publish. Publishing controls retrieval of reviewed general/project
+chunks; the current `scope_review_id` is a projection of an append-only review
+history. Figure approval controls only whether an occurrence remains in their
+`prompt_body` and can join a turn's allowed set, and cannot override chunk
+scope. Archiving a document or revoking a figure affects new turns without
+erasing the revision cited by historic turns.
+
+For `general_knowledge`, `project_id` is null. For either project scope,
+`project_id` is a logical foreign key to an inventory record and is required at
+publish time. `inventory_governed` chunks are never prompt-eligible; a
+`project_knowledge` review with no resolvable project, or with
+`conflict_code=unknown_project`, remains closed.
 
 ```
 RetrievedKnowledge
@@ -339,13 +354,15 @@ RetrievedChunk
   chunk_id              UUID
   document_id           UUID
   document_revision     int
+  retrieval_scope       "general_knowledge" | "project_knowledge"
+  project_id            str | null
   rank                  float
   prompt_body           str
 
 KnowledgeUseAudit
   turn_index            int
   query_fingerprint     str              keyed digest; never the buyer query
-  chunk_refs            [(chunk_id, document_id, document_revision)]
+  chunk_refs            [(chunk_id, document_id, document_revision, retrieval_scope, project_id)]
   figure_review_ids     [UUID]
   withheld_figure_match bool
   elapsed_ms            int
@@ -353,11 +370,11 @@ KnowledgeUseAudit
 
 The prompt builder accepts `RetrievedKnowledge`, appends one delimited
 reference-data message to a copy of the chat context, and extends a copy of the
-base `AllowedFigures` only with approved occurrences in eligible
-`general_knowledge` chunks. The query and excerpts never enter the emitted
-event stream. `KnowledgeUseAudit` freezes only the ids, immutable revisions and
-figure-review ids used by a turn, so later revocation cannot rewrite what the
-agent had been allowed to see.
+base `AllowedFigures` only with approved occurrences in eligible general or
+project knowledge chunks. The query and excerpts never enter the emitted event
+stream. `KnowledgeUseAudit` freezes the ids, immutable revisions, scopes,
+project binding and figure-review ids used by a turn, so later revocation cannot
+rewrite what the agent had been allowed to see.
 
 ## Events and audit
 
@@ -402,6 +419,7 @@ below are forbidden on the clear stream.
 | `knowledge_chunk_reviewed` | opaque document/chunk/review ids, scope enum, revision | heading, body, prompt body, reviewer note |
 | `knowledge_figure_reviewed` | opaque document/figure/review ids, action enum, revision | value, surface, source sentence, page |
 | `knowledge_retrieval` | turn index, outcome enum, chunk/approved/withheld counts, elapsed milliseconds | query, titles, filenames, excerpts, figure values |
+| `database_health_probe` | outcome enum, elapsed milliseconds | exception/detail, connection string, record counts |
 | `admin_decision_recorded` | opaque lead/decision ids, previous/new status, actor kind, revision | reason note, contact, summary, transcript |
 
 The admin API persists an audit copy of these classified records. It does not
