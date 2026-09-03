@@ -227,3 +227,64 @@ def test_the_agents_own_goodbye_is_read_loosely():
     assert not contains_closing_phrase(
         "A studio at Skyrise is AED 985,000.", FAREWELLS, "en"
     )
+
+
+# --- the two the human actually said --------------------------------------
+#
+# Hosted call, turns 13 and 15: `farewell_candidate` fired with unexplained=1
+# and unexplained=3, both `named_ambassador=false`, both then interrupted, so
+# the hybrid never reached the seal and the call ran on until a third, cleaner
+# goodbye. Asked what they said, the client gave two shapes:
+#
+#   (A) "that's it from my end, thank you so much"
+#   (B) "I don't have any further question(s)"
+#
+# Neither reproduces 1 or 3 against the tables at fa78c90 - (A) reads 2 and (B)
+# carries no closing phrase AT ALL, so it could not have produced a candidate
+# event. The recogniser's words were not the remembered words. What the two
+# shapes do establish is the two holes, and those are what these cases pin.
+
+SHAPE_A = "that's it from my end, thank you so much"
+SHAPE_B = "I don't have any further questions"
+
+
+def test_a_closing_that_says_where_it_comes_from():
+    """(A). "that's it" has been a phrase since #95, so the miss is the tail:
+    "from my end" is how people mark a closing as their own."""
+    assert is_farewell(SHAPE_A, FAREWELLS, "en", names=NAMES)
+
+
+def test_the_same_tail_in_its_other_spellings():
+    for utterance in (
+        "that's it from my side, thanks",
+        "that is all from my end, thank you",
+        "that's it on my end",
+    ):
+        assert is_farewell(utterance, FAREWELLS, "en", names=NAMES), utterance
+
+
+def test_running_out_of_questions_is_a_closing():
+    """(B), and the more important half: it carries no closing phrase at all
+    today, so it is invisible - no close, and no `farewell_candidate` either.
+    A shape the telemetry cannot see is a shape nobody can tune."""
+    assert is_farewell(SHAPE_B, FAREWELLS, "en", names=NAMES)
+
+
+def test_the_other_ways_of_running_out_of_questions():
+    for utterance in (
+        "no further questions, thanks",
+        "no further questions from my end",
+        "that answers everything, thank you",
+        "I have no more questions",
+    ):
+        assert is_farewell(utterance, FAREWELLS, "en", names=NAMES), utterance
+
+
+def test_asking_about_questions_is_still_a_question():
+    """The reason "further questions" is only safe as part of a longer phrase:
+    a buyer who asks whether they may come back later has not closed."""
+    for utterance in (
+        "can I ask any further questions later",
+        "who do I send further questions to",
+    ):
+        assert not is_farewell(utterance, FAREWELLS, "en", names=NAMES), utterance

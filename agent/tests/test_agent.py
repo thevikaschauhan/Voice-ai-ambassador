@@ -2786,14 +2786,22 @@ async def preemptive_turn(
     *,
     partial: str,
     final: str,
+    interrupted: bool = False,
 ) -> SpeechHandle:
-    """One buyer turn in the order the framework actually produces it."""
+    """One buyer turn in the order the framework actually produces it.
+
+    `interrupted` marks the turn's audio as cut off, which is what the buyer
+    talking over the reply produces - and the state both hosted near misses
+    were sealed in.
+    """
     ctx = user_ctx(partial)
     await run_llm_node(agent, ctx)  # the preemptive generation, on the partial
     message = lk_llm.ChatMessage(role="user", content=[final])
     await agent.on_user_turn_completed(ctx, message)
     agent.note_metrics(eou())
     handle = SpeechHandle.create()
+    if interrupted:
+        handle.interrupt()
     agent.note_speech_handle(handle)
     agent.finish_turn(ctx)
     handle._mark_done()
@@ -4162,3 +4170,60 @@ async def test_one_goodbye_is_recorded_once_however_often_it_is_asked_for():
     spoken_events = [e for e in json_lines(buf) if e["event"] == "farewell_spoken"]
     assert len(spoken_events) == 1
     assert len(agent._tracker.spoken_chunks) == 1
+
+
+# --- a goodbye the buyer had to say twice ---------------------------------
+#
+# Both hosted near misses were INTERRUPTED - the client talked over Jane's
+# reply - so the hybrid never reached the seal. A near miss the buyer then
+# repeats is a buyer trying to leave and being cut off, and two closing phrases
+# in two consecutive buyer turns is a stronger signal than either alone.
+#
+# It needs a bound, and the bound is not a guess: two NOT_ENDINGS entries are
+# themselves candidates ("before we say goodbye, what about the payment plan"
+# reads unexplained=6, "that is all I need for now, what about Skyrise" reads
+# 4), while the real tail misses read 1-2. A pair rule with no threshold would
+# hang up on a repeated question.
+
+
+async def test_a_near_miss_repeated_after_an_interruption_ends_the_call():
+    agent, log, buf, spy = make_agent(
+        [HealthyStream(["Anything else? "]), HealthyStream(["Anything else? "])]
+    )
+
+    # Turn one: a tails-only near miss, talked over.
+    handle = await preemptive_turn(
+        agent,
+        partial="that's it from my",
+        final="that's it from my end",
+        interrupted=True,
+    )
+    assert handle.interrupted is True
+
+    # Turn two: they say it again.
+    await preemptive_turn(
+        agent, partial="that's it from my", final="that's it from my end"
+    )
+    await log.aclose()
+
+    reasons = [e["reason"] for e in json_lines(buf) if e["event"] == "call_ended"]
+    assert reasons == ["buyer_farewell_repeated"]
+
+
+async def test_a_repeated_question_is_not_a_repeated_goodbye():
+    """The regression this rule could cause, asserted rather than hoped for. A
+    buyer who twice embeds a closing phrase in a question is asking twice."""
+    agent, log, buf, spy = make_agent(
+        [HealthyStream(["The plan is 40/60. "]), HealthyStream(["The plan is 40/60. "])]
+    )
+
+    for _ in range(2):
+        await preemptive_turn(
+            agent,
+            partial="before we say goodbye",
+            final="before we say goodbye, what about the payment plan",
+            interrupted=True,
+        )
+    await log.aclose()
+
+    assert "call_ended" not in buf.getvalue()
