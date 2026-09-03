@@ -377,7 +377,7 @@ class Repository:
             """
             SELECT id, document_id, document_revision, ordinal, heading, body,
                    retrieval_scope, project_id, scope_review_id, conflict_code,
-                   prompt_body, page_start, page_end, content_sha
+                   prompt_body, page_start, page_end, content_sha256
             FROM knowledge_chunks
             WHERE document_id = $1 AND document_revision = $2
             ORDER BY ordinal
