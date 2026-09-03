@@ -34,7 +34,7 @@ English: > You are speaking with Binghatti's AI ambassador. This conversation is
 
 - [ ] Hindi:
 
-**B. With the ambassador's name** - wanted, not required. If this is missing, calls in Hindi simply open with version A and no name, which is what happens today.
+**B. With the ambassador's name** - wanted, not required. If this is missing, calls in Hindi open with version A and no name, so the ambassador goes unnamed rather than the call failing. Version A is the one that decides whether a call can happen in Hindi at all.
 
 English: > You are speaking with {name}, Binghatti's AI ambassador. This conversation is transcribed so our team can assist you. You can ask for a person at any time.
 
@@ -276,7 +276,7 @@ What we cannot answer is how it should be written and said to a Hindi buyer. Two
 
 The second one is asked here rather than in section 4 because it depends on the first: there is no point respelling a form nobody has chosen yet. If your answer to the written form is the name as it stands in Latin letters, the respelling is how a Hindi voice should say it.
 
-Then one judgement, the one we most need and cannot get anywhere else: does Maya land naturally on a Hindi buyer's ear for a brand's ambassador, or does it read as foreign, hard to say, or simply odd? Say so plainly if it does not, and say why.
+Then one judgement, the one we most need and cannot get anywhere else: is Maya the right name for a Binghatti ambassador speaking to a Hindi buyer? Whether it sounds native or foreign is only part of it. We also need the register: how formal it sounds, what age or background it suggests, whether a different spelling would read better, and whether anything about it would sit oddly on a property consultant. Say so plainly if something does, and say what.
 
 We are deliberately NOT asking you to choose a different name. If your answer is that Maya does not land, that goes to the client as a question, because the name is theirs. Your reading is what they need in order to decide; a name picked in this room would be the wrong way round.
 
