@@ -58,6 +58,12 @@ def only(signal: str, *, turns: list[int] | None = None, seconds: int = 0):
 
     The scorer's whole job is that a signal contributes its own points and no
     others', so every case here turns on one thing at a time.
+
+    `seconds` applies ONLY when the signal under test is `call_length`. That is
+    not a convenience: the first version of this helper passed a duration
+    through for every signal, so a nine-minute call added five points to each
+    of the other six and the isolation the parametrised test claims was never
+    there. Every non-length case is scored on a zero-length call.
     """
     from ambassador.leads import ScoringInputs
     from ambassador.schemas import ContactCapture, LeadAnalysisDraft, SignalEvidence
@@ -90,11 +96,12 @@ def only(signal: str, *, turns: list[int] | None = None, seconds: int = 0):
         else ContactCapture(status="not_asked")
     )
     started = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+    duration = seconds if signal == "call_length" else 0
     return ScoringInputs(
         draft=draft,
         contact=contact,
         started_at=started,
-        ended_at=started + timedelta(seconds=seconds),
+        ended_at=started + timedelta(seconds=duration),
         buyer_turn_indexes=[1, 2, 3, 4],
         project_ids_in_inventory=["binghatti-skyrise"],
     )
@@ -466,3 +473,125 @@ def test_contact_without_permission_or_a_value_scores_nothing():
         )
         == 0
     )
+
+
+# --- guards the implementation added, which the 100% gate requires covered --
+#
+# These were not in the RED commit: they are defensive checks written while
+# implementing, and the Phase 2 coverage gate is what forces each to be
+# exercised rather than merely present. Each is still a way the input can be
+# wrong while looking plausible.
+
+
+@pytest.mark.parametrize("body", ["- a list\n", "just a string\n", "42\n"])
+def test_a_rubric_that_is_not_a_mapping_is_refused(tmp_path, body):
+    from ambassador.leads import load_rubric
+
+    path = tmp_path / "interest-score.yaml"
+    path.write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_rubric(path)
+
+
+def test_weights_that_are_not_a_mapping_are_refused(tmp_path):
+    """`weights: [15, 15, 10]` is the shape somebody reaches for when they
+    think of the rubric as an ordered table, and it would silently name no
+    signals at all."""
+    from ambassador.leads import load_rubric
+
+    with pytest.raises(ValueError, match="'weights' must be a mapping"):
+        load_rubric(write_rubric(tmp_path, a_rubric(weights=[15, 15, 10])))
+
+
+def test_evidence_on_an_unobserved_signal_is_refused():
+    """The other direction of the evidence rule. Indexes attached to a signal
+    nobody observed point at a claim that was never made, and they would show
+    up in the admin UI as the reason for points that were not awarded."""
+    from ambassador.schemas import SignalEvidence
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="turn_indexes must be empty"):
+        SignalEvidence(observed=False, turn_indexes=[1])
+
+
+def test_a_captured_contact_with_no_reachable_value_is_refused():
+    """A name is not a way to reach anyone, and `status=captured` is what the
+    admin surface reads as "we can follow this up"."""
+    from ambassador.schemas import ContactCapture
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="phone or an email"):
+        ContactCapture(status="captured", name="A Buyer", contact_permission=True)
+
+
+def test_a_declined_contact_may_not_retain_a_value():
+    """Declining is the buyer's instruction, and keeping the number anyway
+    while recording the refusal is the worst of both."""
+    from ambassador.schemas import ContactCapture
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="retain no phone or email"):
+        ContactCapture(status="declined", phone="+971500000000")
+
+
+def test_the_snapshot_reports_the_turns_a_model_may_cite():
+    """`buyer_turn_indexes` is derived from the saved turns rather than passed
+    alongside them, so evidence is always checked against the record that was
+    actually persisted."""
+    from ambassador.schemas import LeadSnapshot
+
+    snapshot = LeadSnapshot(
+        session_id="sess_1",
+        started_at="2026-09-03T12:00:00+00:00",
+        ended_at="2026-09-03T12:05:00+00:00",
+        call_end_reason="buyer_farewell",
+        ended_cleanly=True,
+        language="en",
+        requested_language="en",
+        uncertified_fallback=False,
+        inventory_version="4-records",
+    )
+    assert snapshot.buyer_turn_indexes == []
+    assert snapshot.analysis_status == "pending"
+    assert snapshot.status == "unreviewed"
+    assert snapshot.contact.status == "not_asked"
+
+
+def test_a_decision_must_change_the_status():
+    """An append-only history whose rows can record no change is a history that
+    cannot be read: "qualified -> qualified" is either a mistake or a
+    concurrent write nobody noticed."""
+    from ambassador.schemas import AdminDecision
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="must change the status"):
+        AdminDecision(
+            lead_id="lead-1",
+            sequence=1,
+            previous_status="qualified",
+            new_status="qualified",
+            reason_code="ready",
+            created_at="2026-09-03T12:00:00+00:00",
+            expected_lead_revision=0,
+        )
+
+
+def test_a_decision_records_what_it_changed_from_and_the_revision_it_saw():
+    """The two fields that make the audit answer "what happened" rather than
+    "what is true now"."""
+    from ambassador.schemas import AdminDecision
+
+    decision = AdminDecision(
+        lead_id="lead-1",
+        sequence=1,
+        previous_status="unreviewed",
+        new_status="qualified",
+        reason_code="ready",
+        created_at="2026-09-03T12:00:00+00:00",
+        expected_lead_revision=3,
+    )
+    assert decision.previous_status == "unreviewed"
+    assert decision.expected_lead_revision == 3
+    # The shared-code POC records an honest actor rather than a person.
+    assert decision.actor_kind == "admin"
+    assert decision.actor_id is None

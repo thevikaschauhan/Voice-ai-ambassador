@@ -150,6 +150,17 @@ EncryptedEnvelope
   ciphertext            bytes
 ```
 
+`LeadRecord` above is the DURABLE row. Its in-process counterpart is
+`LeadSnapshot` in `schemas.py`, which is what `shutdown_session` freezes before
+anything is written: the same call facts, the full-fidelity turns and the last
+accepted brief, and none of the persistence concerns (no UUID, no revision, no
+retention date, no encryption envelope). They are two types on purpose. The
+snapshot is pure core with no database in scope, so a core card can build and
+test it under ADR-002; the record is its projection once a row exists.
+`LeadSnapshot.buyer_turn_indexes` is derived from the saved turns rather than
+carried beside them, so evidence is always validated against the transcript
+that was actually persisted.
+
 `LeadTurn.payload`, `brief`, `summary`, contact values and admin notes bind the
 lead id plus field path as authenticated associated data. The API returns their
 ordinary domain shape only after authentication; the persistence envelope never

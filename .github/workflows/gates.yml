@@ -119,6 +119,14 @@ jobs:
       #                           claim rests on lives here, not in guardrails/
       #   ambassador.inventory    the derived figures, invariant 2's "the model
       #                           never does arithmetic" in code
+      #   ambassador.leads        the interest score - the same invariant on a
+      #                           second surface, and a sharper case: an invented
+      #                           price can be checked against inventory, an
+      #                           invented score against nothing (ADR-020)
+      #   ambassador.schemas      the Phase 2 contracts. Their validators are
+      #                           the only thing standing between a model's
+      #                           output and a durable lead record
+      # docs/06-'s Phase 2 gates require the first two by name.
       # Widening it (budget.py, confirmation.py, verbalise.py) is a deliberate
       # decision, not an oversight: those are deterministic policy rather than
       # guardrail or derivation, and adding one here without its tests turns
@@ -142,6 +150,8 @@ jobs:
             --cov=ambassador.guardrails \
             --cov=ambassador.figures \
             --cov=ambassador.inventory \
+            --cov=ambassador.leads \
+            --cov=ambassador.schemas \
             --cov-branch \
             --cov-report=term-missing \
             --cov-fail-under=100 \
