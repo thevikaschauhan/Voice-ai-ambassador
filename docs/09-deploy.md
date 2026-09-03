@@ -600,7 +600,7 @@ Python in it and a handshake file the other container owns.
    because this document has three instances of it. A signal that cannot tell
    **broken** from **nothing to do** is not a check, because the false alarms
    teach people to stop reading it - which is exactly how the outage recorded in
-   the provenance below lasted nine hours. The other two instances: a
+   the provenance below went unnoticed for at least fifteen hours. The other two instances: a
    `mergeable: CONFLICTING` pull request may merely be behind its base rather
    than in conflict (`git merge-tree --write-tree main <branch>` separates
    them), and `source: {"repo": "..."}` below reads the same on a service that
@@ -761,25 +761,43 @@ suggested, because the string is only reachable *after* `listRooms()` returned,
 so it did not merely mean the three variables were set - it meant LiveKit had
 accepted the key and the secret.
 
-**The worker spent nine hours not deploying, and none of the steps above said
-so.** Recorded because it is the episode that added step 0. Between 2026-09-02
-17:41Z and 2026-09-03 03:51Z the worker service had no GitHub deployment
-trigger: `deploymentTriggers` returned an empty list for it and one trigger for
-`web`. Two merges touching `agent/**` produced no deploy, no failed deploy and
-no skipped deploy, because with no trigger there is no webhook evaluation to
-record anything - which is why querying for SKIPPED deployments returned nothing
-and proved nothing. It was masked as well as silent: two variable changes in
-that window redeployed HEAD, so the service kept showing recent successful
-deploys of code that happened to be current at the time.
+**The worker spent at least fifteen hours not deploying, and none of the steps
+above said so.** Recorded because it is the episode that added step 0. The
+worker stopped recording pushes no later than 2026-09-02 12:22Z, where the
+first unrecorded push is `54636500e`, and the absence of the trigger was proven
+at 17:41Z or later, when `deploymentTriggers` returned an empty list for it and
+one trigger for `web`. It was recreated at 2026-09-03 03:51Z and the first
+clean worker row is `7abf49c2` at 04:01Z. Merges touching `agent/**` produced
+no deploy, no failed deploy and no skipped deploy, because with no trigger
+there is no webhook evaluation to record anything - which is why querying for
+SKIPPED deployments returned nothing and proved nothing. It was masked as well
+as silent: variable changes in that window redeployed HEAD, so the service kept
+showing recent successful deploys of code that happened to be current at the
+time.
 
-What is proven: the trigger was absent, the last push-triggered worker deploy
-was 17:41:45Z on `b3fcfd7`, recreating the trigger and deploying `53d5170`
-worked, and both services now report that commit. What is NOT proven: what
-removed it. It vanished inside the window of two `railway config apply` runs
-(17:44Z and 17:55Z), which makes the IaC engine touching `source` the prime
-suspect and nothing more than that. The re-check after every apply, in the
-configuration section above, exists because the suspicion is unresolved rather
-than because it is established.
+**Fifteen hours is a lower bound, not a duration.** It is what the deployment
+list can still see: the walk stops at the oldest row the list returns, and the
+worker's gap was already open there. The honest statement is "at least fifteen
+hours, start unknown".
+
+What is proven: the trigger was absent when it was queried, recreating it and
+deploying `53d5170` worked, and every push since 04:01Z is recorded on both
+services. What is NOT proven, and is now unlikely ever to be: what removed it.
+The cause is unknown.
+
+The two `railway config apply` runs at 17:44Z and 17:55Z were the prime suspect
+for a day, and the coverage check retired them. The worker had already stopped
+recording pushes at 12:22Z, more than five hours before the first of those
+applies, so neither can have caused this outage. That clears them of THIS
+episode and of nothing else. It also withdraws a claim this section used to
+make: "the last push-triggered worker deploy was 17:41:45Z on `b3fcfd7`" cannot
+be right, because the trigger was already not recording pushes five hours
+earlier, so that row is one of the masking deploys rather than a triggered one.
+Its 67-second lag was the tell, and `meta.reason` said `"deploy"` either way.
+
+The re-check after every apply, in the configuration section above, stays. It
+is insurance on a failure that took fifteen hours to notice and costs one
+command, and it is explicitly NOT a causal claim about apply.
 
 **#78 closed that route on the hosted service at 17:55Z**, for the reason in the
 first row of step 3's table, and the observation above now describes laptop mode
