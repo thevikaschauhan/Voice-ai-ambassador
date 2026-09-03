@@ -604,6 +604,7 @@ Python in it and a handshake file the other container owns.
 
    ```
    for spec in "Voice-ai-ambassador:^(agent/|data/|Dockerfile$|\.dockerignore$)" \
+               "admin-api:^(agent/|data/|Dockerfile$|\.dockerignore$)" \
                "web:^(web/|data/)"; do
      name=${spec%%:*}; pattern=${spec#*:}
      expected=$(git rev-list -50 origin/main | while read -r c; do
@@ -617,9 +618,21 @@ Python in it and a handshake file the other container owns.
    current, whatever `main` says. **Only a service behind its OWN expected
    commit has missed a deploy**, and that is the one case worth investigating.
 
-   The two pattern sets in that command are copies of the `watchPatterns` in
+   The pattern sets in that command are copies of the `watchPatterns` in
    `.railway/railway.ts`, and copies drift: if that file's patterns change, this
    command changes with them, or it starts quietly expecting the wrong commit.
+   It has drifted once already - the list held two services for a day after
+   `admin-api` became the third, so the new service was the one thing the step
+   could not report on. `admin-api` and the worker share a pattern set because
+   they share the image.
+
+   Two readings of this step are wrong in opposite directions. A service AHEAD
+   of its expected commit has not failed: setting a variable redeploys a service
+   at whatever `main` then points to, so a provisioning pass leaves every
+   service it touched sitting on a commit that changed nothing they build. And
+   for `admin-api`, a deployment reading `SUCCESS` is not a running process -
+   its start command can fail on loop while the deployment stays green, so read
+   its logs and not its status.
 
    The distinction matters more than it looks, and it is worth naming once
    because this document has three instances of it. A signal that cannot tell
@@ -1018,10 +1031,33 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    `docs/10-admin.md`: the free direct endpoint is IPv6-only while Railway's
    outbound IPv6 is off per service, and transaction mode does not support
    prepared statements.
+
+   **The dialog defaults to transaction mode on 6543, and the session URI is
+   the same string with `5432` in place of `6543`.** So the wrong value is the
+   one a copy-paste produces, and it differs from the right one by four
+   characters. This instruction was already in this document, worded as the
+   requirement above, and the port still went in as 6543 - naming the value to
+   use is not enough when the value to avoid is the default sitting beside it.
+
+   Worse, the mistake survives the step that ought to catch it. Migrations
+   **pass** on 6543: the runner opens one short-lived connection, so
+   `applied 1 migration(s): 0001` says the URL reaches the database and says
+   nothing about the port being right. The runtime pool is where it breaks -
+   `adapter/repository.py` keeps `statement_cache_size` at its default, which
+   transaction mode would require to be 0, and its own docstring says so. A
+   green provisioning run is therefore compatible with a URL that every
+   runtime query will fail against.
 4. **Set the values as Railway service variables**, using the table below. They
    move from the Supabase dashboard into Railway directly. A connection string
    contains the database password, so it never goes into a commit, a ticket, a
    terminal transcript, a chat message or this file.
+
+   **A variable write is a deploy.** Every service written to redeploys at
+   whatever `main` then points to, so provisioning restarts the live voice
+   worker: it drains for `drainingSeconds` (600) and re-registers with LiveKit
+   about twenty seconds later. Provision when a dropped call is acceptable, and
+   confirm the worker came back by its `registered worker` log line rather than
+   by the deployment turning green.
 
    One of those values is not a secret and is fixed by the configuration rather
    than chosen: `ADMIN_API_URL` on `web` is
@@ -1086,6 +1122,21 @@ shows up as a change, and one removed from the file shows up as a destroy.
 If you doubt the plan is reading the field you care about, use the positive
 control from the configuration section above: declare the opposite and confirm
 the plan answers.
+
+The plan says nothing about the database itself, though, and `preserve()` is
+why: it asserts a name and never a value, so a clean plan holds with a
+connection string that points anywhere. The schema is confirmed from the
+`admin-api` pre-deploy log instead, which prints one of two lines:
+
+```
+applied 1 migration(s): 0001        # first run against an empty database
+schema is up to date at version 0001   # every run after
+```
+
+Either line proves the service reached Postgres and the schema is at the
+version this build expects. Neither proves the port is 5432 - see step 3.
+A pre-deploy that instead exits non-zero with `DATABASE_URL is not set` has
+done its job: the deployment fails, and the previous version keeps serving.
 
 ### The pre-demo check
 
