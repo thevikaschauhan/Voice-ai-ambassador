@@ -94,11 +94,28 @@ Code-switched English matters here: a Dubai buyer may well end an Arabic call wi
 
 Also: please quote every entry when you write them down. A bare `no` or `ok` loads as a yes/no value rather than a word and becomes something that can never match, a trap two other files here already walked into.
 
-(For reference, English uses 20 closing phrases and 32 courtesy words. Detection in Arabic is off entirely, so nothing here is being reviewed - it is all being written for the first time.)
+(For reference, English uses 34 closing phrases and 64 courtesy words. Detection in Arabic is off entirely, so nothing here is being reviewed - it is all being written for the first time.)
 
 - [ ] Arabic closing phrases (err short):
 - [ ] Arabic courtesy words:
 - [ ] code-switched English closings that really occur in Arabic calls:
+
+## 2e. Asking for a name and a number
+
+One request, once per call, and the buyer may decline. This is the only moment the ambassador asks the buyer to hand something over, which is why it is not translated from English: an ask in the wrong language reads as a script rather than a person, so the Arabic policy stays SILENT until you write this line.
+
+English (a draft, not yet through legal): > If you would like a member of the team to follow up, may I take your name and either a callback number or email address? You can decline.
+
+- [ ] Arabic ask - name plus a callback number or an email, and that they may decline:
+
+Two smaller things follow from it. The number is read back before it is accepted, because one misheard digit is worse than no number - and the read-back is rendered from data, never by the model.
+
+- [ ] Arabic read-back, with a slot for the number:
+- [ ] Arabic line for when the read-back was wrong (it must NOT ask again):
+
+And the digits themselves. Left as digits today, which the voice reads acceptably; if they should be spoken as words in Arabic, give the ten forms and they will be used instead.
+
+- [ ] how the digits 0-9 should be spoken in Arabic (leave blank to keep digits):
 
 ## 3. Money, percentages and dates spoken aloud
 

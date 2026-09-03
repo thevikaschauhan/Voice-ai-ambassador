@@ -1,0 +1,48 @@
+# The one contact ask, per language.
+#
+# ASKED ONCE, AND DECLINABLE. The policy in `ambassador/contact.py` owns whether
+# a request is still owed; the model may prompt for it but never decides it, and
+# the speech below is fixed copy rather than something a model composes. A
+# second goodbye is honoured immediately, whatever happened to the first.
+#
+# A LANGUAGE WITH NO `ask` IS DISABLED, not defaulted to English. Asking a Hindi
+# speaker for their number in English is worse than not asking: it is the one
+# moment in the call where the buyer is being asked to hand something over, and
+# doing it in the wrong language reads as a script rather than a person. The
+# policy checks for the line and stays silent without it.
+en:
+  # DRAFT - VERIFY with Binghatti and legal before this is enabled. The wording
+  # is from docs/10- and has not been through legal: it asks for a name plus one
+  # of two contact routes, and it says the buyer may decline, which is the part
+  # legal will care about.
+  ask: >-
+    If you would like a member of the team to follow up, may I take your name
+    and either a callback number or email address? You can decline.
+  # The read-back. `{digits}` is the normalised number rendered from the digit
+  # forms below - never a model's rendering of it, because a model that
+  # "corrects" a digit is the failure this echo exists to catch.
+  confirm_phone: "{digits} - have I got that right?"
+  # The buyer said the read-back was wrong. Deliberately does NOT re-ask: one
+  # request is one request, and a wrong number is recorded as unconfirmed.
+  correction_failed: >-
+    Not to worry - I will leave it there rather than risk the wrong number.
+  # Spoken after a decline or a capture, before the authored farewell takes the
+  # turn. Short on purpose: the buyer is leaving.
+  thanks: "Thank you."
+  # How each digit is spoken back. EMPTY means the digits go to TTS as digits,
+  # which the voice reads acceptably - the same fail-towards-digits posture
+  # `verbalise.py` takes for money.
+  # VERIFY: native-authored, if a reviewer wants the digits spoken as words.
+  digit_forms: {}
+
+# VERIFY: native-authored. No Arabic ask is drafted here: this line is native-
+# review data (docs/review-packet-ar.md) and the policy stays disabled without
+# it. Do not translate the English.
+ar:
+  ask: ""
+  digit_forms: {}
+
+# VERIFY: native-authored. No Hindi ask is drafted here, for the same reason.
+hi:
+  ask: ""
+  digit_forms: {}
