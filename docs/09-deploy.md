@@ -1044,19 +1044,39 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    project its host is IPv6-only while Railway's outbound IPv6 is off per
    service, so it cannot connect at all. The discriminator is the HOST:
 
+   | | user | host | port | reachable from Railway |
+   |---|---|---|---|---|
+   | **session pooler** | `postgres.<ref>` | `aws-<region>.pooler.supabase.com` | **5432** | yes, IPv4 |
+   | transaction pooler | `postgres.<ref>` | `aws-<region>.pooler.supabase.com` | 6543 | yes, IPv4 |
+   | direct connection | `postgres` | `db.<ref>.supabase.co` | **5432** | **no** - IPv6 only on Free |
+
+   Read that table by columns rather than by rows, because it says which check
+   catches which mistake, and **no single field catches both**:
+
+   - the **user** separates pooler from direct - `postgres.<ref>` against a
+     bare `postgres` - and it is the field a human cannot misread;
+   - the **port** separates session from transaction, and only that, since
+     both pooler modes share one host;
+   - the **host** confirms the first of those and is the longest to eyeball.
+
+   So a correct URI passes three shape checks: user starts with `postgres.`,
+   host contains `pooler.supabase.com`, port is 5432. `VERIFY:` these shapes
+   are from Supabase's connection guide, read 2026-09-03; the dashboard is the
+   authority if it disagrees.
+
+   Which makes the rule not "use 5432" but **take the pooler URI you already
+   have and change only its port**. Asking for "the port on 5432" produced the
+   direct URI on the first attempt here, because the dialog offers one. Its
+   signature in the `admin-api` pre-deploy log is:
+
    ```
-   ...pooler.supabase.com:5432   session pooler   <- this one
-   ...pooler.supabase.com:6543   transaction pooler
-   db.<project-ref>.supabase.co:5432   direct, IPv6-only, unusable here
+   migrations failed: OSError: [Errno 101] Network is unreachable
    ```
 
-   So the rule is not "use 5432". It is **take the pooler URL you already have
-   and change only its port**, because the pooler host is the part that has to
-   survive. Asking for "the port on 5432" produced the direct URL on the first
-   attempt here, and the failure is `OSError: [Errno 101] Network is
-   unreachable` in the `admin-api` pre-deploy log - `ENETUNREACH`, which is
-   what an IPv6-only host looks like from a service with IPv6 egress off. It is
-   never a Supabase outage and never a password problem.
+   That is `ENETUNREACH`, which is what an IPv6-only host looks like from a
+   service with IPv6 egress off. It is never a Supabase outage and never a
+   password problem, and it is the one failure here that says nothing about
+   credentials at all.
 
    Worse, the mistake survives the step that ought to catch it. Migrations
    **pass** on 6543: the runner opens one short-lived connection, so its
