@@ -115,7 +115,12 @@ mechanical rider for the web tier: Vite resolves a **literal** dynamic import at
 transform time, so a vitest file that imports a component which does not exist
 yet fails to LOAD and reports `no tests` - a RED commit with nothing for the
 gate to count. Import through a variable specifier with `@vite-ignore` so each
-case fails on its own.
+case fails on its own. The Python equivalent is an import inside
+each test rather than at module level, for the same reason. And a rider about
+what to cover first: **test the DEFAULT branch before the interesting ones.** It
+is the branch every user reaches and the one least likely to feel worth a test,
+and it is where two Phase 2 cards had a defect that only a rendered page or a
+container found.
 
 Every ships row has one first RED test:
 
