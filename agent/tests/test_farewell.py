@@ -13,7 +13,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ambassador.farewell import is_farewell, load_farewells  # noqa: E402
+from ambassador.farewell import (  # noqa: E402
+    contains_closing_phrase,
+    is_farewell,
+    load_farewells,
+    read_farewell,
+)
 from ambassador.schemas import Language  # noqa: E402
 
 FAREWELLS = load_farewells()
@@ -143,3 +148,82 @@ def test_a_longer_phrase_is_consumed_whole(tmp_path):
     )
     table = load_farewells(path)
     assert is_farewell("that is all", table, "en")
+
+
+# --- what the hosted call actually said -----------------------------------
+#
+# A real client said goodbye, the model answered with a goodbye of its own, and
+# the call stayed open. The utterance is redacted in the log, so the tables were
+# widened against the SHAPES a real goodbye takes - the ambassador's name and
+# the tails people trail - and `read_farewell` now reports how close a miss came
+# so the next widening comes from evidence rather than guesses.
+
+NAMES = frozenset({"Jane", "Nora", "Maya"})
+
+REAL_GOODBYES = [
+    "Thanks Jane, that is all for today, goodbye",
+    "goodbye Jane",
+    "ok thanks Jane, take care",
+    "that is all, thank you so much for your help today",
+    "thanks for your time, bye now",
+    "no more questions, have a good day",
+    "that's it for now, thanks",
+]
+
+
+@pytest.mark.parametrize("utterance", REAL_GOODBYES)
+def test_the_shapes_a_real_goodbye_takes(utterance):
+    assert is_farewell(utterance, FAREWELLS, "en", names=NAMES), utterance
+
+
+@pytest.mark.parametrize("utterance", NOT_ENDINGS)
+def test_widening_did_not_loosen_the_dangerous_cases(utterance):
+    """The whole point of the rule is that it cannot hang up on a live buyer.
+    Widening the courtesies must not buy a goodbye at that cost."""
+    assert not is_farewell(utterance, FAREWELLS, "en", names=NAMES), utterance
+
+
+def test_the_ambassadors_name_is_a_courtesy_only_when_it_is_passed():
+    """The name lives in data/ambassadors.yaml, not in farewells.yaml: one name
+    in two files is a name that can disagree with itself."""
+    assert not is_farewell("goodbye Jane", FAREWELLS, "en")
+    assert is_farewell("goodbye Jane", FAREWELLS, "en", names=NAMES)
+
+
+def test_a_near_miss_reports_its_shape_and_not_its_words():
+    """What `farewell_candidate` carries. The buyer's words are theirs; a count
+    and a boolean are what tuning actually needs."""
+    reading = read_farewell(
+        "Thanks Jane that was really helpful, goodbye", FAREWELLS, "en", names=NAMES
+    )
+    assert reading.closes is False
+    assert reading.has_phrase is True
+    assert reading.unexplained == 1
+    assert reading.named_ambassador is True
+
+
+def test_a_question_around_a_goodbye_is_a_wide_miss_not_a_near_one():
+    reading = read_farewell(
+        "before we say goodbye, what about the payment plan", FAREWELLS, "en"
+    )
+    assert reading.closes is False
+    assert reading.has_phrase is True
+    assert reading.unexplained > 3
+
+
+def test_an_ordinary_turn_carries_no_phrase_at_all():
+    reading = read_farewell("what does a studio cost", FAREWELLS, "en")
+    assert reading.has_phrase is False
+    assert reading.unexplained == 0
+
+
+def test_the_agents_own_goodbye_is_read_loosely():
+    """The second signal in the hybrid. The model writes prose, so the strict
+    rule would never match it - and it does not have to: the buyer's turn has
+    already had to carry a closing phrase before this is consulted."""
+    assert contains_closing_phrase(
+        "Thank you for your time today. Goodbye.", FAREWELLS, "en"
+    )
+    assert not contains_closing_phrase(
+        "A studio at Skyrise is AED 985,000.", FAREWELLS, "en"
+    )

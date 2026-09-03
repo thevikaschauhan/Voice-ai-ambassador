@@ -3973,3 +3973,192 @@ async def test_a_farewell_the_buyer_talked_over_is_audited_as_incomplete():
     agent._tracker.mark_interrupted()
 
     assert agent._tracker.spoken_chunks[-1].completed is False
+
+
+# --- the hosted goodbye that did not end the call -------------------------
+#
+# A real client, first hosted call: "Jane does the warm farewell but the call
+# didn't auto-end." The log had six ordinary model turns, no farewell_spoken,
+# and call_ended reason=buyer_left when they pressed the button. Two defects,
+# and the tests below are one each.
+
+
+async def test_a_near_miss_is_recorded_without_the_buyers_words():
+    """The tuning signal the hosted call did not leave behind. The utterance is
+    redacted on that stream, so what has to survive is the SHAPE of the miss."""
+    agent, log, buf, spy = make_agent([HealthyStream(["Anything else? "])])
+
+    await run_llm_node(agent, user_ctx("Thanks Jane that was really helpful, goodbye"))
+    await log.aclose()
+
+    events = [e for e in json_lines(buf) if e["event"] == "farewell_candidate"]
+    assert len(events) == 1
+    assert events[0]["unexplained"] == 1
+    assert events[0]["named_ambassador"] is True
+    # The words themselves are the buyer's and do not go on this stream.
+    assert "helpful" not in buf.getvalue()
+
+
+async def test_the_ambassadors_name_no_longer_costs_a_goodbye():
+    """The likeliest single reason a real goodbye missed: people say the name
+    they were introduced to."""
+    agent, log, buf, spy = make_agent([HealthyStream(["Anything else? "])])
+
+    chunks = await run_llm_node(agent, user_ctx("Thanks Jane, that is all, goodbye"))
+
+    assert "ambassador can pick this up" in spoken(chunks)
+    assert spy.chat_ctxs == []
+
+
+async def test_a_near_miss_the_model_answered_with_a_goodbye_ends_the_call():
+    """The hybrid. The buyer's turn carried a closing phrase but not cleanly
+    enough for the strict rule, so the model got the turn - and answered with a
+    goodbye of its own. Two independent readings agree, so the call ends on the
+    goodbye the buyer already heard, and nothing further is spoken."""
+    agent, log, buf, spy = make_agent(
+        [HealthyStream(["Thank you for your time. ", "Goodbye. "])]
+    )
+
+    await preemptive_turn(
+        agent,
+        partial="Thanks Jane that was really",
+        final="Thanks Jane that was really helpful, goodbye",
+    )
+    await log.aclose()
+
+    events = [e for e in json_lines(buf)]
+    reasons = [e["reason"] for e in events if e["event"] == "call_ended"]
+    assert reasons == ["agent_farewell"]
+    # The model's farewell WAS the farewell; the authored copy is not added.
+    assert "farewell_spoken" not in [e["event"] for e in events]
+
+
+async def test_a_near_miss_the_model_answered_normally_does_not_end_the_call():
+    """The other half, and the one that keeps the no-false-hang-up rule: a
+    goodbye inside a question is a question, and the model answering it is the
+    proof."""
+    agent, log, buf, spy = make_agent(
+        [HealthyStream(["The down payment is AED 197,000. "])]
+    )
+
+    await preemptive_turn(
+        agent,
+        partial="before we say goodbye",
+        final="before we say goodbye, what is the down payment",
+    )
+    await log.aclose()
+
+    assert "call_ended" not in buf.getvalue()
+
+
+async def test_the_model_cannot_end_a_call_the_buyer_did_not_close():
+    """The model's own goodbye is never enough on its own. Without a closing
+    phrase in the BUYER's turn there is no candidate, so a chatty sign-off in
+    the middle of a call cannot hang up on anyone."""
+    agent, log, buf, spy = make_agent(
+        [HealthyStream(["Thank you for your time. ", "Goodbye. "])]
+    )
+
+    await preemptive_turn(
+        agent, partial="what does a studio", final="what does a studio cost"
+    )
+    await log.aclose()
+
+    assert "call_ended" not in buf.getvalue()
+    assert agent._candidate_turn is None
+
+
+async def test_ending_a_call_deletes_the_room_not_just_the_job():
+    """The second half of the hosted defect. `ctx.shutdown()` ends the JOB; a
+    room with a browser still in it lives on, because `departureTimeout` only
+    starts once the LAST participant has gone - so the page, which ends on
+    ROOM_DELETED, saw nothing and the client pressed the button themselves.
+    The local runs could not show it: buyer_publisher disconnects itself."""
+    from adapter import agent as adapter_agent
+
+    deleted: list[str] = []
+    shutdowns: list[str] = []
+
+    class _Room:
+        name = "room-1"
+
+    class _RoomService:
+        async def delete_room(self, request):  # noqa: ANN001
+            deleted.append(request.room)
+
+    class _Api:
+        room = _RoomService()
+
+    class _Ctx:
+        room = _Room()
+        api = _Api()
+
+        def shutdown(self, reason: str) -> None:
+            shutdowns.append(reason)
+
+    buf = StringIO()
+    log = EventLog("sess_test", stream=buf, verbose=False)
+    await adapter_agent.end_call(_Ctx(), log, "buyer_farewell")
+    await log.aclose()
+
+    assert deleted == ["room-1"]
+    assert shutdowns == ["buyer_farewell"]
+    events = [e["event"] for e in json_lines(buf)]
+    # Deleted BEFORE the shutdown, because deletion is the signal the other
+    # participant is waiting for.
+    assert events.index("room_deleted") < len(events)
+
+
+async def test_a_room_that_will_not_delete_still_ends_the_call():
+    """A transient API error must not leave the call up with nobody able to end
+    it. The failure is recorded and the job still shuts down."""
+    from adapter import agent as adapter_agent
+
+    shutdowns: list[str] = []
+
+    class _RoomService:
+        async def delete_room(self, request):  # noqa: ANN001
+            raise RuntimeError("boom")
+
+    class _Api:
+        room = _RoomService()
+
+    class _Room:
+        name = "room-1"
+
+    class _Ctx:
+        room = _Room()
+        api = _Api()
+
+        def shutdown(self, reason: str) -> None:
+            shutdowns.append(reason)
+
+    buf = StringIO()
+    log = EventLog("sess_test", stream=buf, verbose=False)
+    await adapter_agent.end_call(_Ctx(), log, "duration_cap")
+    await log.aclose()
+
+    assert shutdowns == ["duration_cap"]
+    events = [e["event"] for e in json_lines(buf)]
+    assert "room_delete_failed" in events
+    # The error text goes to the process log, not the redacted stream.
+    assert "boom" not in buf.getvalue()
+
+
+async def test_one_goodbye_is_recorded_once_however_often_it_is_asked_for():
+    """A live run recorded two `farewell_spoken` for one goodbye. The farewell
+    check sits above the observed-turn gate so an invalidated preemptive
+    generation cannot hand the goodbye back to the model - which means
+    `llm_node` can legitimately ask for the same farewell twice. The buyer
+    heard one; the audit has to say one."""
+    agent, log, buf, spy = make_agent(
+        [HealthyStream(["Anything else? "]), HealthyStream(["Anything else? "])]
+    )
+
+    await run_llm_node(agent, user_ctx("Thanks, that is all. Goodbye."))
+    await run_llm_node(agent, user_ctx("Thanks, that is all. Goodbye."))
+    await log.aclose()
+
+    spoken_events = [e for e in json_lines(buf) if e["event"] == "farewell_spoken"]
+    assert len(spoken_events) == 1
+    assert len(agent._tracker.spoken_chunks) == 1

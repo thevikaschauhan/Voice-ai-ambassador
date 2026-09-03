@@ -52,6 +52,17 @@ phrases:
     - "have a good day"
     - "speak soon"
     - "talk soon"
+    # Added after a hosted call ended with the buyer saying goodbye and the
+    # call staying open. Still err-short: every one of these is a closing and
+    # nothing else. "thanks for your time" is deliberately NOT here - it is a
+    # thing people say mid-call after a good answer.
+    - "take care"
+    - "that is it"
+    - "that's it"
+    - "that will be all"
+    - "that'll be all"
+    - "nothing further"
+    - "all done"
 
   # VERIFY: native-authored Arabic closing phrases. Left EMPTY rather than
   # machine-translated, and empty is SAFE here in a way it is not for the
@@ -97,6 +108,39 @@ courtesies:
     - "that"
     - "lovely"
     - "perfect"
+    # The tails a real goodbye trails, added after a hosted call missed. The
+    # ambassador's NAME is not listed here on purpose: it lives in
+    # data/ambassadors.yaml and is passed in, because one name in two files is
+    # a name that can disagree with itself.
+    - "for"
+    - "today"
+    - "tonight"
+    - "now"
+    - "day"
+    - "evening"
+    - "have"
+    - "a"
+    - "nice"
+    - "take"
+    - "care"
+    - "speaking"
+    - "chat"
+    - "chatting"
+    - "talking"
+    - "everything"
+    - "appreciate"
+    - "appreciated"
+    - "kind"
+    - "helpful"
+    - "we"
+    - "my"
+    - "the"
+    - "of"
+    - "to"
+    - "this"
+    - "been"
+    - "will"
+    - "do"
   ar: []
   hi: []
 
