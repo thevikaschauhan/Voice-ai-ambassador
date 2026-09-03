@@ -68,6 +68,7 @@ from ambassador.projects import (
     agreement_words,
     build_name_index,
 )
+from ambassador.ambassadors import Ambassadors, load_ambassadors
 from ambassador.prompts import REGENERATION_INSTRUCTION, build_ambassador_prompt
 from ambassador.recognition import RecognitionMonitor, load_noise_words
 from ambassador.schemas import (
@@ -101,6 +102,7 @@ class Harness:
     vocabulary: CurrencyVocabulary
     confirmations: ConfirmationCopy
     fallbacks: FallbackCopy
+    ambassadors: Ambassadors
     inventory_block: str
 
     @classmethod
@@ -114,6 +116,7 @@ class Harness:
             vocabulary=load_currency_vocabulary(),
             confirmations=load_confirmations(),
             fallbacks=load_fallback_copy(),
+            ambassadors=load_ambassadors(),
             inventory_block=serialise_for_prompt(projects),
         )
 
@@ -146,11 +149,22 @@ class Harness:
         )
 
     def prompt(self, language: Language) -> str:
+        """The prompt the ADAPTER builds, argument for argument.
+
+        `ambassador_name` is in here for the reason the fingerprint below
+        exists at all. Naming the ambassador changes the English prompt, and a
+        harness that left the name out would keep reporting the digest of a
+        prompt nobody ships - which is the exact shape of the regeneration
+        fixture this repository has already been caught by once. Any future
+        argument to `build_ambassador_prompt` has to be added in both places or
+        the report becomes a claim about something else.
+        """
         return build_ambassador_prompt(
             self.inventory_block,
             language,
             system_confirms_budget=self.policy_runs(language),
             system_confirms_project=self.name_policy_runs(language),
+            ambassador_name=self.ambassadors.name_for(language),
         )
 
     def prompt_fingerprint(self, language: Language = "en") -> str:
