@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from io import StringIO
 
 import pytest
@@ -76,7 +76,9 @@ def _snapshot(session_id: str):
             timestamp="2026-09-04T12:00:0%d+00:00" % index,
             buyer_utterance="My budget is about two million dirhams.",
             generated_sentences=["A studio is AED 985,000."],
-            spoken_chunks=[SpokenChunk(text="A studio is AED 985,000.", completed=True)],
+            spoken_chunks=[
+                SpokenChunk(text="A studio is AED 985,000.", completed=True)
+            ],
             guardrail_decisions=[],
             actions=[],
             timings_ms=Timings(total=4000.0),
@@ -312,9 +314,7 @@ async def test_the_failure_event_names_a_stage_and_no_buyer_words(
     written = log[1].getvalue()
     assert "two million dirhams" not in written
     assert "upstream said no" not in written
-    failure = [
-        line for line in written.splitlines() if "analysis_failed" in line
-    ]
+    failure = [line for line in written.splitlines() if "analysis_failed" in line]
     assert failure, written
 
 
@@ -350,6 +350,36 @@ async def test_the_project_ids_reach_a_column_the_list_can_read(
         await writer.close()
 
     assert lead["project_ids"] == [known]
+
+
+async def test_two_named_projects_both_reach_the_column(database: str) -> None:
+    """The list has to show both, not the first."""
+    from adapter.analysis import finalise_analysis
+    from ambassador.inventory import load_inventory
+    from ambassador.schemas import SignalEvidence
+
+    projects = [project.id for project in load_inventory()[:2]]
+    writer, lead_id = await _persisted(database, "sess_" + uuid.uuid4().hex[:8])
+    log = _log()
+    try:
+        await finalise_analysis(
+            snapshot=_snapshot("ignored"),
+            lead_id=lead_id,
+            writer=writer,
+            ask=_answers(
+                _draft(
+                    project_named=SignalEvidence(observed=True, turn_indexes=[1, 2]),
+                    project_ids=projects,
+                )
+            ),
+            log=log[0],
+        )
+        lead = await writer.repository.get_lead(lead_id)
+    finally:
+        await writer.close()
+
+    assert lead["project_ids"] == projects
+    assert len(projects) == 2
 
 
 async def test_a_project_id_that_is_not_in_inventory_fails_the_analysis(
