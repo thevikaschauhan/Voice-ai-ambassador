@@ -1039,6 +1039,25 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    requirement above, and the port still went in as 6543 - naming the value to
    use is not enough when the value to avoid is the default sitting beside it.
 
+   **`5432` alone does not identify the right URL, because two entries in that
+   dialog carry it.** The direct connection is also on 5432, and on a free
+   project its host is IPv6-only while Railway's outbound IPv6 is off per
+   service, so it cannot connect at all. The discriminator is the HOST:
+
+   ```
+   ...pooler.supabase.com:5432   session pooler   <- this one
+   ...pooler.supabase.com:6543   transaction pooler
+   db.<project-ref>.supabase.co:5432   direct, IPv6-only, unusable here
+   ```
+
+   So the rule is not "use 5432". It is **take the pooler URL you already have
+   and change only its port**, because the pooler host is the part that has to
+   survive. Asking for "the port on 5432" produced the direct URL on the first
+   attempt here, and the failure is `OSError: [Errno 101] Network is
+   unreachable` in the `admin-api` pre-deploy log - `ENETUNREACH`, which is
+   what an IPv6-only host looks like from a service with IPv6 egress off. It is
+   never a Supabase outage and never a password problem.
+
    Worse, the mistake survives the step that ought to catch it. Migrations
    **pass** on 6543: the runner opens one short-lived connection, so its
    `applied ... migration(s)` line says the URL reaches the database and says
