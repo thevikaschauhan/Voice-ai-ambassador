@@ -200,11 +200,18 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "language_selected": "two language codes, an enum source and an enum reason",
     "call_duration_cap_armed": "one integer, the configured cap in seconds",
     "call_duration_cap": "one integer and a fixed literal action",
-    # One of three fixed reasons - buyer_farewell, duration_cap,
+    # One of four fixed reasons - buyer_farewell, agent_farewell, duration_cap,
     # buyer_left - and never the utterance that triggered it. The buyer's
     # closing words are their own text and stay in the TurnRecord like
     # every other utterance.
-    "call_ended": "one of three fixed reasons",
+    "call_ended": "one of four fixed reasons",
+    # Counts and booleans about a near miss, never the utterance. The
+    # buyer's closing words are their own text; what tuning needs is how
+    # many tokens were in the way and whether one was the ambassador's
+    # name, which is the likeliest single reason a real goodbye misses.
+    "farewell_candidate": "a token count and a boolean",
+    "room_deleted": "the same fixed reason",
+    "room_delete_failed": "the same fixed reason; the error goes to the log, not here",
     "farewell_spoken": "a turn index; the copy itself is authored, not buyer-derived",
     "farewell_interrupted": "the same fixed reason, for a close the buyer talked over",
     "disclosure": (

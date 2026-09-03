@@ -25,6 +25,7 @@ Run it:
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -33,7 +34,7 @@ from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any, Final, Literal, get_args
 
-from livekit import rtc
+from livekit import api, rtc
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -62,7 +63,11 @@ from livekit.plugins import silero
 
 from ambassador.budget import BudgetPolicy, Decision, load_currency_vocabulary
 from ambassador.confirmation import ConfirmationCoordinator, Step
-from ambassador.farewell import is_farewell, load_farewells
+from ambassador.farewell import (
+    contains_closing_phrase,
+    load_farewells,
+    read_farewell,
+)
 from ambassador.guardrails.prohibited import languages_covered, load_patterns
 from ambassador.inventory import (
     build_allowed_figures,
@@ -380,6 +385,13 @@ class AmbassadorAgent(Agent):
         # spoken, so a degraded call validates the line it will really use
         # rather than one for a language it is not speaking.
         self._farewells = load_farewells()
+        # Every ambassador's given name counts as a courtesy, not just this
+        # call's: a buyer types or says whichever name they saw. They are
+        # passed in rather than copied into farewells.yaml, because one name in
+        # two files is a name that can disagree with itself.
+        self._ambassador_names = frozenset(
+            self._ambassadors.name_for(language) for language in self._ambassadors.named
+        )
         # Detection is per requested language and may simply be off: a
         # language with no authored closing phrases ends its calls the way it
         # did before this existed, which is the safe direction. The farewell
@@ -395,6 +407,10 @@ class AmbassadorAgent(Agent):
         # The turn whose audio, once over, ends the call. Set when the farewell
         # is handed the turn; read in `_seal`.
         self._closing_turn: int | None = None
+        # A turn whose utterance carried a closing phrase but failed the
+        # strict rule. Read at the seal, when the model's own reply is
+        # known, never before.
+        self._candidate_turn: int | None = None
         # Held so a close cannot be garbage-collected while it waits.
         self._closing_task: asyncio.Task[None] | None = None
 
@@ -478,8 +494,45 @@ class AmbassadorAgent(Agent):
         tracker = self._tracker
         if tracker is not None and tracker.opened_on_partial and not tracker.adopted:
             tracker.adopt_final_utterance(text)
+            self._note_closing_from_final(text, tracker)
             return
         self._start_tracker(text)
+
+    def _note_closing_from_final(self, text: str, tracker: TurnTracker) -> None:
+        """Read the FINAL transcript for a closing, after the model has the turn.
+
+        `_deterministic_turn` reads whatever the tracker held when `llm_node`
+        ran, and on the voice path that is the PARTIAL. If the framework judges
+        the final equivalent it reuses that generation and never calls
+        `llm_node` again - so a goodbye that only appears in the final was
+        never read at all. That is the likeliest reading of the hosted call
+        where six turns went to the model and no candidate was ever recorded.
+
+        The turn is not taken back. The model is already answering, and
+        cancelling its speech to insert our own is the double-goodbye this
+        policy exists to prevent. What this does is arm the close, so the call
+        ends after the reply the buyer is about to hear.
+        """
+        if self._closing or self._closing_turn == tracker.turn_index:
+            return
+        if not self._farewell_detects:
+            return
+        reading = read_farewell(
+            text,
+            self._farewells,
+            self._settings.language,
+            names=self._ambassador_names,
+        )
+        if reading.closes:
+            self._closing_turn = tracker.turn_index
+        elif reading.has_phrase and self._candidate_turn != tracker.turn_index:
+            self._candidate_turn = tracker.turn_index
+            self._log.emit(
+                "farewell_candidate",
+                turn=tracker.turn_index,
+                unexplained=reading.unexplained,
+                named_ambassador=reading.named_ambassador,
+            )
 
     def _ensure_tracker(self, chat_ctx: lk_llm.ChatContext) -> TurnTracker:
         """The turn `llm_node` is running for, opening one if nothing has yet.
@@ -708,20 +761,58 @@ class AmbassadorAgent(Agent):
                 "the copy in data/farewells.yaml."
             ) from exc
 
-    def _is_closing_line(self, utterance: str) -> bool:
+    def _is_closing_line(self, utterance: str, tracker: TurnTracker) -> bool:
         """Has the buyer ended the conversation?
 
         Off entirely for a language with no authored closing phrases, which is
         the safe direction: the call then ends the way it did before this
         existed, rather than on a guessed phrase list.
-        """
-        if self._closing:
-            return False
-        if not self._farewell_detects:
-            return False
-        return is_farewell(utterance, self._farewells, self._settings.language)
 
-    def _close_after_farewell_turn(self, interrupted: bool) -> None:
+        A NEAR MISS IS RECORDED. The first hosted call ended with the buyer
+        saying goodbye, the model answering with a goodbye of its own, and the
+        call staying open - and nothing on the stream said how close the rule
+        came or what was in the way, because the utterance itself is redacted.
+        `farewell_candidate` carries the shape of the miss and none of the
+        words, so the tables can be widened from evidence instead of guesses.
+        """
+        if self._closing or not self._farewell_detects:
+            return False
+        reading = read_farewell(
+            utterance,
+            self._farewells,
+            self._settings.language,
+            names=self._ambassador_names,
+        )
+        if reading.closes:
+            return True
+        if reading.has_phrase:
+            self._candidate_turn = tracker.turn_index
+            self._log.emit(
+                "farewell_candidate",
+                turn=tracker.turn_index,
+                unexplained=reading.unexplained,
+                named_ambassador=reading.named_ambassador,
+            )
+        return False
+
+    def _agent_said_goodbye(self, tracker: TurnTracker) -> bool:
+        """Did the model answer this turn with a closing of its own?
+
+        The second signal in the hybrid, and it is never trusted alone. The
+        buyer's turn must already have carried a closing PHRASE - that is what
+        `_candidate_turn` records - so this only decides between "they said
+        goodbye and the model agreed" and "they said goodbye inside a question
+        the model then answered". A model that decides to hang up by itself is
+        the failure this whole policy is built to avoid.
+        """
+        return any(
+            contains_closing_phrase(sentence, self._farewells, self._settings.language)
+            for sentence in tracker.generated_sentences
+        )
+
+    def _close_after_farewell_turn(
+        self, interrupted: bool, reason: str = "buyer_farewell"
+    ) -> None:
         """End the call now that the farewell turn's audio is over.
 
         Called from `_seal`, which is the framework's own "this turn's audio is
@@ -738,14 +829,14 @@ class AmbassadorAgent(Agent):
         """
         self._closing_turn = None
         if interrupted:
-            self._log.emit("farewell_interrupted", reason="buyer_farewell")
+            self._log.emit("farewell_interrupted", reason=reason)
             return
         if self._closing:
             return
         self._closing = True
-        self._log.emit("call_ended", reason="buyer_farewell")
+        self._log.emit("call_ended", reason=reason)
         if self._close_call is not None:
-            self._closing_task = asyncio.create_task(self._close_call("buyer_farewell"))
+            self._closing_task = asyncio.create_task(self._close_call(reason))
 
     async def say_farewell_and_close(self, reason: str) -> None:
         """Say goodbye, wait for it to be HEARD, then end the call.
@@ -811,7 +902,7 @@ class AmbassadorAgent(Agent):
         # model's own reply played instead, and the call still ended. Re-asking
         # costs nothing: the question is idempotent and spends none of the
         # buyer's policy attempts, which is the only thing the gate protects.
-        if self._is_closing_line(tracker.buyer_utterance):
+        if self._is_closing_line(tracker.buyer_utterance, tracker):
             # Ahead of the policies too: a buyer who has said goodbye is not
             # owed a budget question, and asking one would be the agent talking
             # past the end of the conversation.
@@ -1068,7 +1159,15 @@ class AmbassadorAgent(Agent):
         owed = self._deterministic_turn(tracker)
         if owed is not None:
             if owed.policy == "farewell":
-                tracker.record_farewell(owed.text)
+                # Recorded ONCE per turn. The check that hands the farewell the
+                # turn sits above the observed-turn gate so an invalidated
+                # preemptive generation cannot give the goodbye back to the
+                # model - which means `llm_node` can legitimately ask for the
+                # same farewell twice, and a live run recorded two
+                # `farewell_spoken` for one goodbye that way. The buyer heard
+                # one; the audit has to say one.
+                if self._closing_turn != tracker.turn_index:
+                    tracker.record_farewell(owed.text)
                 # Armed, not fired. The close happens when this turn's audio is
                 # over, which is `_seal` - the framework's own signal, and the
                 # only place that knows whether the farewell played out or was
@@ -1435,10 +1534,22 @@ class AmbassadorAgent(Agent):
         pending.tracker.finish(audit_incomplete=audit_incomplete)
         # After the record is written, so `turn_complete` precedes `call_ended`
         # and the audit keeps the farewell turn even as the call ends.
+        interrupted = handle is not None and handle.interrupted
         if self._closing_turn == pending.tracker.turn_index:
-            self._close_after_farewell_turn(
-                interrupted=handle is not None and handle.interrupted
-            )
+            self._close_after_farewell_turn(interrupted=interrupted)
+        elif self._candidate_turn == pending.tracker.turn_index:
+            # The hybrid, resolved here because the model's reply is only known
+            # now. The buyer's turn carried a closing phrase but not cleanly
+            # enough for the strict rule; if the model ALSO answered with a
+            # closing, two independent readings agree and the call ends on the
+            # goodbye the buyer already heard. Nothing further is spoken - the
+            # model's own farewell was the farewell.
+            self._candidate_turn = None
+            if not interrupted and self._agent_said_goodbye(pending.tracker):
+                self._closing_turn = pending.tracker.turn_index
+                self._close_after_farewell_turn(
+                    interrupted=False, reason="agent_farewell"
+                )
         if self._pending is pending:
             self._pending = None
         if pending.chat_ctx is None:
@@ -1647,6 +1758,33 @@ def job_room_metadata(ctx: JobContext) -> str:
     return metadata if isinstance(metadata, str) else ""
 
 
+async def end_call(ctx: JobContext, log: EventLog, reason: str) -> None:
+    """Hand the close to the framework once the farewell has been heard.
+
+    THE ROOM IS DELETED, NOT JUST THE JOB, and the difference is the whole
+    of a defect the human hit on the first hosted call. `ctx.shutdown()`
+    ends the JOB: the agent leaves, and a room with a browser still in it
+    lives on, because `departureTimeout` only starts once the LAST
+    participant has gone. The page ends a call on `ROOM_DELETED` /
+    `ROOM_CLOSED` / `PARTICIPANT_REMOVED` (#78), so it saw nothing and the
+    client had to press End call after a perfectly good goodbye. The local
+    runs could not show it: `buyer_publisher` disconnects itself when its
+    script ends, so the room emptied either way.
+
+    Deleting first, then shutting down, because deletion is the signal the
+    other participant is waiting for; a failure to delete must still leave
+    the job shutting down, or a transient API error would leave the call up
+    with nobody able to end it.
+    """
+    try:
+        await ctx.api.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
+        log.emit("room_deleted", reason=reason)
+    except Exception as exc:  # the call must end even if this does not
+        logger.warning("could not delete the room: %s", exc)
+        log.emit("room_delete_failed", reason=reason)
+    ctx.shutdown(reason=reason)
+
+
 def start_call_duration_cap(
     ctx: JobContext,
     log: EventLog,
@@ -1756,19 +1894,11 @@ async def entrypoint(ctx: JobContext) -> None:
         worker_default=worker_default,
     )
 
-    async def _end_call(reason: str) -> None:
-        """Hand the close to the framework once the farewell has been heard.
-
-        `ctx.shutdown` runs the registered shutdown callback, which is what
-        seals the audit - so the agent emits `call_ended` before calling this
-        and the seal stays last. Shutting the job down disconnects the agent,
-        the room closes behind it, and the browser gets LiveKit's own
-        `Disconnected` event, which is the entire contract with the web
-        surface.
-        """
-        ctx.shutdown(reason=reason)
-
-    agent = AmbassadorAgent(settings=settings, log=log, close_call=_end_call)
+    agent = AmbassadorAgent(
+        settings=settings,
+        log=log,
+        close_call=functools.partial(end_call, ctx, log),
+    )
 
     stt_node = build_stt(settings)
     if stt_node is not None:

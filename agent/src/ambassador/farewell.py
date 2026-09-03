@@ -128,18 +128,57 @@ def _match_at(tokens: list[str], index: int, run: tuple[str, ...]) -> bool:
     return tuple(tokens[index : index + len(run)]) == run
 
 
-def is_farewell(utterance: str, farewells: Farewells, language: str) -> bool:
-    """Is this utterance the buyer closing the conversation?
+@dataclass(frozen=True)
+class FarewellReading:
+    """What the closing-line rule saw, not just what it decided.
+
+    The decision alone could not be tuned. A hosted call ended with the buyer
+    saying goodbye, the model answering with a goodbye of its own, and the call
+    staying open - and the log said only that the rule had not matched, not how
+    close it came or what was in the way. `unexplained` and `named_ambassador`
+    are what a `farewell_candidate` event can carry WITHOUT putting the buyer's
+    own words on a redacted stream.
+    """
+
+    closes: bool
+    """The strict rule: a closing phrase, and everything else a courtesy."""
+
+    has_phrase: bool
+    """A closing phrase is present somewhere. True for "goodbye, but first"."""
+
+    unexplained: int
+    """Tokens that were neither part of a phrase nor a courtesy."""
+
+    named_ambassador: bool
+    """The buyer used the ambassador's name, which is the likeliest single
+    reason a real goodbye fails the strict rule."""
+
+
+def read_farewell(
+    utterance: str,
+    farewells: Farewells,
+    language: str,
+    *,
+    names: frozenset[str] = frozenset(),
+) -> FarewellReading:
+    """Read an utterance against the closing rule.
 
     Longest phrase first, so "that is all" is consumed whole rather than
     leaving "is all" to be judged as leftovers.
+
+    `names` are the ambassador's given names, which count as courtesies without
+    living in `farewells.yaml`: they belong to `data/ambassadors.yaml`, and one
+    name in two files is a name that can disagree with itself.
     """
+    nothing = FarewellReading(
+        closes=False, has_phrase=False, unexplained=0, named_ambassador=False
+    )
     text = normalise_digits(utterance)
     if not _CONTENT.search(text):
-        return False
+        return nothing
     runs = farewells.phrases.get(language) or ()
     if not runs:
-        return False
+        return nothing
     tokens = _tokens(text)
     ordered = sorted(runs, key=len, reverse=True)
     matched = False
@@ -155,6 +194,42 @@ def is_farewell(utterance: str, farewells: Farewells, language: str) -> bool:
             leftovers.append(tokens[index])
             index += 1
     if not matched:
+        return nothing
+    lowered = frozenset(name.lower() for name in names)
+    courtesies = (farewells.courtesies.get(language) or frozenset()) | lowered
+    unexplained = [token for token in leftovers if token not in courtesies]
+    return FarewellReading(
+        closes=not unexplained,
+        has_phrase=True,
+        unexplained=len(unexplained),
+        named_ambassador=any(token in lowered for token in leftovers),
+    )
+
+
+def is_farewell(
+    utterance: str,
+    farewells: Farewells,
+    language: str,
+    *,
+    names: frozenset[str] = frozenset(),
+) -> bool:
+    """Is this utterance the buyer closing the conversation?"""
+    return read_farewell(utterance, farewells, language, names=names).closes
+
+
+def contains_closing_phrase(text: str, farewells: Farewells, language: str) -> bool:
+    """Is there a closing phrase anywhere in this text?
+
+    Deliberately loose, and deliberately NOT used on the buyer's turn to end a
+    call on its own - that is what `closes` is for. This reads the AGENT's own
+    reply, where the question is different: the model was given the turn, and
+    if it answered with a goodbye then it recognised an intent the strict rule
+    missed. Two independent signals, neither trusted alone.
+    """
+    runs = farewells.phrases.get(language) or ()
+    if not runs:
         return False
-    courtesies = farewells.courtesies.get(language) or frozenset()
-    return all(token in courtesies for token in leftovers)
+    tokens = _tokens(normalise_digits(text))
+    return any(
+        _match_at(tokens, index, run) for index in range(len(tokens)) for run in runs
+    )
