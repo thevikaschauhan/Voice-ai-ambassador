@@ -221,6 +221,17 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     # invisible one to diagnose without one startup line.
     "lead_store_connected": "a host and port, never the DSN",
     "lead_persist_failed": "an enum stage and an enum code",
+    # A decrypt that failed, from the admin API read path. The field PATH is
+    # structural and safe; the value, the ciphertext and the exception are not,
+    # and none of them is here. It is emitted because a failed open means
+    # tampering, a restore across leads, or a key that moved - the one event
+    # that must never be the one nobody sends.
+    "envelope_unreadable": "a lead id and a structural field path",
+    # The audit of a detail read. Counts and a lead id: how many sealed fields
+    # were opened and how many would not open. One event per READ rather than
+    # one per field, because a fifty-turn lead would otherwise emit fifty rows
+    # for one page view and an audit nobody can read is an audit nobody reads.
+    "lead_detail_read": "a lead id and three counts",
     # Counts and booleans about a near miss, never the utterance. The
     # buyer's closing words are their own text; what tuning needs is how
     # many tokens were in the way and whether one was the ambassador's

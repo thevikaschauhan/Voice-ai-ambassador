@@ -142,6 +142,14 @@ class Sealer:
             # supplied (docs/02-): an envelope naming another one is not
             # something to try, it is something wrong.
             raise EnvelopeError("unexpected envelope algorithm")
+        if envelope["key_version"] != KEY_VERSION:
+            # A rotation writes a new version, and this build holds one key.
+            # Refused AS A VERSION PROBLEM rather than attempted and reported
+            # as a failed decrypt: "I do not hold this key version" and "this
+            # did not open" are different operator problems with different
+            # fixes, and collapsing them costs an hour at the worst moment.
+            # Named without echoing the envelope's value, which is caller data.
+            raise EnvelopeError("envelope key version is not the one held")
         try:
             return self._aead.decrypt(
                 envelope["nonce"],
