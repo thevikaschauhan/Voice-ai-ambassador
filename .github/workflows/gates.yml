@@ -164,6 +164,11 @@ jobs:
       #   ambassador.schemas      the Phase 2 contracts. Their validators are
       #                           the only thing standing between a model's
       #                           output and a durable lead record
+      #   ambassador.knowledge    the four scopes and the per-turn figures gate.
+      #                           Every branch here is a route to speaking a
+      #                           number nobody approved, so a branch nobody
+      #                           tested is a hole nobody has looked at
+      #                           (ADR-019)
       # docs/06-'s Phase 2 gates require the first two by name.
       # Widening it (budget.py, confirmation.py, verbalise.py) is a deliberate
       # decision, not an oversight: those are deterministic policy rather than
@@ -189,6 +194,7 @@ jobs:
             --cov=ambassador.figures \
             --cov=ambassador.inventory \
             --cov=ambassador.leads \
+            --cov=ambassador.knowledge \
             --cov=ambassador.schemas \
             --cov-branch \
             --cov-report=term-missing \
