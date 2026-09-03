@@ -1054,10 +1054,15 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    catches which mistake, and **no single field catches both**:
 
    - the **user** separates pooler from direct - `postgres.<ref>` against a
-     bare `postgres` - and it is the field a human cannot misread;
+     bare `postgres` - and it is the field a human cannot misread. For a
+     human only, though: bare `postgres` is also the ordinary user on
+     localhost and in CI, so code that refused it would fail the gates that
+     protect the code. In a check that runs anywhere, the **host** shape is
+     the unambiguous one;
    - the **port** separates session from transaction, and only that, since
      both pooler modes share one host;
-   - the **host** confirms the first of those and is the longest to eyeball.
+   - the **host** confirms the first of those, and is the longest to eyeball
+     and the only one safe to assert in code.
 
    So a correct URI passes three shape checks: user starts with `postgres.`,
    host contains `pooler.supabase.com`, port is 5432. `VERIFY:` these shapes
