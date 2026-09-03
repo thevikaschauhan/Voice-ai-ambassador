@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ReactElement } from 'react'
 import type { LeadDetailRecord, LeadSummaryRow } from '@/lib/admin/leads'
 
 /**
@@ -21,14 +22,14 @@ async function load(specifier: string): Promise<Record<string, never>> {
 
 async function renderList(rows: LeadSummaryRow[]) {
   const { LeadList } = (await load('@/components/admin/lead-list')) as unknown as {
-    LeadList: (props: { rows: LeadSummaryRow[] }) => JSX.Element
+    LeadList: (props: { rows: LeadSummaryRow[] }) => ReactElement
   }
   return render(<LeadList rows={rows} />)
 }
 
 async function renderDetail(lead: LeadDetailRecord) {
   const { LeadDetail } = (await load('@/components/admin/lead-detail')) as unknown as {
-    LeadDetail: (props: { lead: LeadDetailRecord }) => JSX.Element
+    LeadDetail: (props: { lead: LeadDetailRecord }) => ReactElement
   }
   return render(<LeadDetail lead={lead} />)
 }
@@ -191,8 +192,14 @@ describe('the lead detail', () => {
 
   it('shows the immutable decision history', async () => {
     await renderDetail(DETAIL)
-    expect(screen.getByText(/called back later/)).toBeInTheDocument()
-    expect(screen.getByText(/follow up/i)).toBeInTheDocument()
+    // Scoped to the history, because "Follow up" is also a reason the form
+    // offers - both appearing is correct, so the assertion has to say which
+    // one it means.
+    const history = screen.getByText(/called back later/).closest('li') as HTMLElement
+    expect(within(history).getByText(/rejected/i)).toBeInTheDocument()
+    expect(within(history).getByText(/follow up/i)).toBeInTheDocument()
+    // Append-only in the database (ADR-020), so nothing here is editable.
+    expect(history.querySelectorAll('input, textarea, select, button')).toHaveLength(0)
   })
 })
 
