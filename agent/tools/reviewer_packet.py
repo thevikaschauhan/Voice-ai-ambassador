@@ -25,6 +25,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from adapter.confirmations import load_confirmations  # noqa: E402
@@ -33,6 +35,7 @@ from adapter.fallbacks import load_fallback_copy  # noqa: E402
 from adapter.lexicon import load_lexicon  # noqa: E402
 from adapter.prerolls import load_prerolls  # noqa: E402
 from ambassador.ambassadors import load_ambassadors  # noqa: E402
+from ambassador.contact import load_contact_copy  # noqa: E402
 from ambassador.farewell import load_farewells  # noqa: E402
 from ambassador.figures import load_numerals  # noqa: E402
 from ambassador.guardrails.prohibited import (  # noqa: E402
@@ -71,6 +74,7 @@ NATIVE_COPY_SECTIONS: dict[str, str] = {
     "fallbacks.yaml": "## 2. Failure copy",
     "prerolls.yaml": "## 2b. Short acknowledgments",
     "farewells.yaml": "## 2c. The end of the call",
+    "contact.yaml": "## 2e. Asking for a name and a number",
     "spoken-forms.yaml": "## 3. Money, percentages and dates spoken aloud",
     "numerals.yaml": "### The magnitude words the guardrail has to read",
     "currencies.yaml": "### The currency words a buyer might say",
@@ -223,6 +227,7 @@ def main(language: str) -> None:
     lexicon = load_lexicon()
     prerolls = load_prerolls()
     farewells = load_farewells()
+    contact_copy = load_contact_copy()
     numerals = load_numerals()
     patterns = load_patterns()
     confirmations = load_confirmations()
@@ -474,6 +479,45 @@ def main(language: str) -> None:
     w(bullet(f"{name} closing phrases (err short):"))
     w(bullet(f"{name} courtesy words:"))
     w(bullet(f"code-switched English closings that really occur in {name} calls:"))
+    w("")
+    w("## 2e. Asking for a name and a number")
+    w("")
+    w(
+        "One request, once per call, and the buyer may decline. This is the "
+        "only moment the ambassador asks the buyer to hand something over, "
+        f"which is why it is not translated from English: an ask in the wrong "
+        f"language reads as a script rather than a person, so the {name} "
+        "policy stays SILENT until you write this line."
+    )
+    w("")
+    w(f"English (a draft, not yet through legal): > {contact_copy.ask('en')}")
+    w("")
+    w(
+        bullet(
+            f"{name} ask - name plus a callback number or an email, and that they may decline:"
+        )
+    )
+    w("")
+    w(
+        "Two smaller things follow from it. The number is read back before it "
+        "is accepted, because one misheard digit is worse than no number - and "
+        "the read-back is rendered from data, never by the model."
+    )
+    w("")
+    w(bullet(f"{name} read-back, with a slot for the number:"))
+    w(bullet(f"{name} line for when the read-back was wrong (it must NOT ask again):"))
+    w("")
+    w(
+        "And the digits themselves. Left as digits today, which the voice reads "
+        "acceptably; if they should be spoken as words in "
+        f"{name}, give the ten forms and they will be used instead."
+    )
+    w("")
+    w(
+        bullet(
+            f"how the digits 0-9 should be spoken in {name} (leave blank to keep digits):"
+        )
+    )
     w("")
     w("## 3. Money, percentages and dates spoken aloud")
     w("")
@@ -950,7 +994,6 @@ def _identifier_notes() -> dict[int, str]:
     of that field is the VERIFY: note and the reasoning, which is written for
     us and not for a reviewer.
     """
-    import yaml
 
     path = Path(__file__).resolve().parents[2] / "data" / "whitelist.yaml"
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -967,7 +1010,6 @@ def _identifier_notes() -> dict[int, str]:
 
 def _terms() -> list[str]:
     """Lexicon terms, read from the file so a new one cannot be missed."""
-    import yaml
 
     path = Path(__file__).resolve().parents[2] / "data" / "lexicon.yaml"
     entries = yaml.safe_load(path.read_text(encoding="utf-8")) or []
