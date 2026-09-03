@@ -10,6 +10,17 @@
 #   5. `uv run eval`                           offline: no key, no network, no spend
 #   6. 100% branch coverage on guardrail and derivation code
 #
+# The agent job also runs a postgres:16 service container and sets
+# DATABASE_URL_TEST at it, so the Phase 2 adapter tests run against a REAL
+# database (ADR-018). Without it they SKIP rather than fail, which is what
+# keeps gate 2 and a laptop checkout honest. To run them locally:
+#
+#   docker run --rm -e POSTGRES_PASSWORD=x -p 5433:5432 -d postgres:16
+#   export DATABASE_URL_TEST=postgresql://postgres:x@localhost:5433/postgres
+#
+# Each test builds and drops its own temporary database, so nothing it does
+# survives the run and nothing it finds was left by an earlier one.
+#
 # Gate 4 arrived last and is why the numbers shifted. It is separate from gate 3
 # because the two fail apart: `check` is lint rules, `format` is layout, and a
 # tree can satisfy either while breaking the other.
@@ -61,6 +72,33 @@ jobs:
   agent:
     name: agent gates
     runs-on: ubuntu-latest
+
+    # A REAL Postgres, because the things that break a schema - a composite
+    # type the driver cannot decode, an append-only trigger firing on the wrong
+    # row, a unique index that rejects a legitimate revision - are exactly what
+    # a fake has no opinion about (ADR-018 keeps the store portable, so stock
+    # postgres is the right image and no Supabase image is needed).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        # Without this the job can reach the step before the server accepts
+        # connections, which fails as a flake rather than as a result.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Not a secret and deliberately not one: it addresses a throwaway
+      # container on the runner. The Supabase value is a Railway variable on
+      # the two Python services and never enters this repository (ADR-018).
+      DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5432/postgres
+
     steps:
       - uses: actions/checkout@v7
 
