@@ -213,7 +213,7 @@ def analysis_ask(settings: Any) -> Ask | None:
                 f"{settings.llm_base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
                 json={
-                    "model": settings.brief_model,
+                    "model": settings.analysis_model,
                     "messages": [
                         {"role": "system", "content": instruction},
                         {"role": "user", "content": prompt},

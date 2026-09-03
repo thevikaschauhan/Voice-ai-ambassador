@@ -241,6 +241,12 @@ class Settings:
     # working. A DSN with either key missing is the dangerous half-state and
     # is refused where the writer is built, not here.
     database_url: str
+    # The session-analysis model. Defaults to `brief_model` because both are
+    # the same job - read a transcript, return validated JSON - and one shared
+    # upstream quota took brief extraction down on 2026-09-03. A separate
+    # variable is what lets that be answered by changing a model rather than
+    # by changing code.
+    analysis_model: str
     pii_encryption_key: str
     pii_hash_key: str
     deepgram_api_key: str
@@ -521,6 +527,10 @@ def load_settings(env_path: Path | None = None) -> Settings:
         stt_enabled=_resolve_bool(file_values, "STT_ENABLED", default=False),
         stt_enabled_explicit=_explicit_bool(file_values, "STT_ENABLED"),
         database_url=_resolve(file_values, "DATABASE_URL"),
+        analysis_model=(
+            _resolve(file_values, "ANALYSIS_MODEL")
+            or _resolve(file_values, "BRIEF_MODEL", "qwen/qwen3.7-flash")
+        ),
         pii_encryption_key=_resolve(file_values, "PII_ENCRYPTION_KEY"),
         pii_hash_key=_resolve(file_values, "PII_HASH_KEY"),
         fish_api_key=_resolve(file_values, "FISH_API_KEY"),

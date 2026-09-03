@@ -274,3 +274,50 @@ async def _all_leads(dsn: str) -> list[dict]:
         return [dict(row) for row in await connection.fetch("SELECT * FROM leads")]
     finally:
         await connection.close()
+
+
+async def test_a_hang_up_persists_too_even_though_no_room_was_deleted(
+    database: str,
+) -> None:
+    """The path ryan actually observed, and a GUARD rather than a RED case: it
+    passes on this implementation because persist lives in `shutdown_session`
+    and never consults `end_call`.
+
+    It is worth pinning anyway. `room_deleted` is emitted only inside
+    `end_call`, so a buyer who closes the tab (CLIENT_INITIATED, reason
+    `buyer_left`) never produces that event - and a persist that had been
+    hung off the farewell close would have stored nothing for exactly the
+    calls docs/10- says must still become leads.
+    """
+    from adapter.agent import shutdown_session
+    from adapter.persist import LeadWriter
+
+    writer = await LeadWriter.connect(database, encryption_key=KEY, hash_key=KEY)
+    agent, log, buf, _ = _agent()
+    agent.note_buyer_left()  # the hang-up, without end_call ever running
+    try:
+        await shutdown_session(
+            agent=agent,
+            log=log,
+            llm=_llm(),
+            stt_node=None,
+            lead_writer=writer,
+            ask=_ask(),
+        )
+        leads = await _all_leads(database)
+    finally:
+        await writer.close()
+
+    await log.aclose()
+    assert len(leads) == 1
+    assert leads[0]["call_end_reason"] == "buyer_left"
+    assert "room_deleted" not in buf.getvalue()
+
+
+async def test_the_analysis_model_defaults_to_the_brief_model() -> None:
+    """One shared upstream quota took brief extraction down on 2026-09-03, so
+    the two are separable - but they are the same job, so the default is the
+    same model rather than a second thing to configure."""
+    from test_agent import make_settings
+
+    assert make_settings(analysis_model="x").analysis_model == "x"

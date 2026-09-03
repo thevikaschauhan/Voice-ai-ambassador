@@ -99,6 +99,7 @@ def make_settings(**overrides: Any) -> Settings:
         language="en",
         allow_uncertified_language=False,
         database_url="",
+        analysis_model="qwen/qwen3.7-flash",
         pii_encryption_key="",
         pii_hash_key="",
         demo_max_call_seconds=0,

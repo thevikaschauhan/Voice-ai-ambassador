@@ -199,6 +199,7 @@ def test_arabic_routes_to_the_day_zero_winner_when_it_is_set():
             stt_enabled=False,
             stt_enabled_explicit=True,
             database_url="",
+            analysis_model="qwen/qwen3.7-flash",
             pii_encryption_key="",
             pii_hash_key="",
             deepgram_api_key="",
