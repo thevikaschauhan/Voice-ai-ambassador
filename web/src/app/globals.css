@@ -92,3 +92,61 @@ body {
 .tabular {
   font-variant-numeric: tabular-nums;
 }
+
+/* The orb's movement (`components/talk-orb.tsx`).
+ *
+ * Rotation rather than a colour animation: the corona is one gradient, so
+ * turning it moves every hue past the rim at once, which is what the reference
+ * looks like in motion. The two layers turn at different speeds and in
+ * opposite directions, which is what stops it reading as a spinning wheel.
+ *
+ * Every one of these is inside the component's non-reduced-motion branch, and
+ * the media query below is the second belt: a browser that reports the
+ * preference after hydration gets a still orb without a re-render. */
+@keyframes orb-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+@keyframes orb-spin-reverse {
+  to {
+    rotate: -360deg;
+  }
+}
+@keyframes orb-breathe {
+  0%,
+  100% {
+    scale: 1;
+  }
+  50% {
+    scale: 1.022;
+  }
+}
+
+.orb-spin {
+  animation: orb-spin 26s linear infinite;
+}
+.orb-spin-slow {
+  animation: orb-spin-reverse 44s linear infinite;
+}
+/* Thinking: the same turn, slowed to a drift, so a pause looks like
+ * consideration rather than a stall. */
+.orb-drift {
+  animation: orb-spin 90s linear infinite;
+}
+.orb-drift-slow {
+  animation: orb-spin-reverse 140s linear infinite;
+}
+.orb-breathe {
+  animation: orb-breathe 5.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-spin,
+  .orb-spin-slow,
+  .orb-drift,
+  .orb-drift-slow,
+  .orb-breathe {
+    animation: none;
+  }
+}

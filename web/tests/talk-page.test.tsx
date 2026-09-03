@@ -63,7 +63,7 @@ beforeEach(() => {
   captured = null
   end.mockClear()
   vi.stubGlobal('fetch', mintOk())
-  render(<TalkCall />)
+  render(<TalkCall names={{ en: 'Jane', ar: '', hi: '' }} />)
 })
 
 afterEach(() => {
