@@ -560,22 +560,55 @@ Python in it and a handshake file the other container owns.
 
 ### The whole check, in order
 
-0. **Confirm both services are running the commit you merged**, before asking
-   whether they are healthy. One command, and it is the only step here that
-   catches a deploy that never happened:
+0. **Confirm each service is running the commit it ought to be running**,
+   before asking whether it is healthy. This is the only step here that catches
+   a deploy which never happened, and every step below will pass without it,
+   because they all test the deployment that IS running.
+
+   What each service has deployed:
 
    ```
    railway status --json | jq -r '.environments.edges[].node.serviceInstances.edges[].node
      | "\(.serviceName)  \(.activeDeployments[0].meta.commitHash[0:12])"'
    ```
 
-   Both lines must show the head of `main`. A service sitting on an older
-   commit has not deployed your change, and every step below will pass anyway,
-   because they all test the deployment that IS running.
+   **Not against the head of `main`, though.** A service only deploys when a
+   push touches its own `watchPatterns`, so one that has nothing to build sits
+   behind `main` and is perfectly healthy. Its expected commit is the newest
+   commit on `main` that touched its patterns:
 
-   If one is behind, check that the service still has a **deployment trigger**.
-   This is not the same thing as being connected to the repository, and that
-   distinction is the whole trap: `railway status --json` reports
+   ```
+   for spec in "Voice-ai-ambassador:^(agent/|data/|Dockerfile$|\.dockerignore$)" \
+               "web:^(web/|data/)"; do
+     name=${spec%%:*}; pattern=${spec#*:}
+     expected=$(git rev-list -50 origin/main | while read -r c; do
+       git show --name-only --format= "$c" | grep -Eq "$pattern" && echo "$c" && break
+     done)
+     printf '%-22s expects %s\n' "$name" "${expected:0:12}"
+   done
+   ```
+
+   Compare the two lists per service. A service on its expected commit is
+   current, whatever `main` says. **Only a service behind its OWN expected
+   commit has missed a deploy**, and that is the one case worth investigating.
+
+   The two pattern sets in that command are copies of the `watchPatterns` in
+   `.railway/railway.ts`, and copies drift: if that file's patterns change, this
+   command changes with them, or it starts quietly expecting the wrong commit.
+
+   The distinction matters more than it looks, and it is worth naming once
+   because this document has three instances of it. A signal that cannot tell
+   **broken** from **nothing to do** is not a check, because the false alarms
+   teach people to stop reading it - which is exactly how the outage recorded in
+   the provenance below lasted nine hours. The other two instances: a
+   `mergeable: CONFLICTING` pull request may merely be behind its base rather
+   than in conflict (`git merge-tree --write-tree main <branch>` separates
+   them), and `source: {"repo": "..."}` below reads the same on a service that
+   deploys and one that cannot.
+
+   When a service IS behind its own expected commit, check that it still has a
+   **deployment trigger**. That is not the same thing as being connected to the
+   repository, and the confusion is the trap: `railway status --json` reports
    `source: {"repo": "..."}` identically on a service whose pushes deploy and
    one whose pushes go nowhere. The trigger is what turns a push into a build,
    and it is visible in the dashboard under the service's **Settings > Source**,
