@@ -164,6 +164,11 @@ class LeadWriter:
         )
         return lead_id
 
+    def seal(self, lead_id, field_path: str, plaintext: bytes):
+        """Seal a value for this lead. Public because the analysis finaliser
+        writes the summary, and the alternative was a second sealer."""
+        return self._sealer.seal(lead_id, field_path, plaintext)
+
     def _seal_optional(
         self, lead_id: Any, field_path: str, value: str | None
     ) -> dict[str, Any] | None:

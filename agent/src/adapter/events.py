@@ -220,6 +220,15 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     # and transaction mode (ADR-018) - a real thing to get wrong and an
     # invisible one to diagnose without one startup line.
     "lead_store_connected": "a host and port, never the DSN",
+    # The analysis half of finalisation (docs/10- steps 5-6). Enum stages and
+    # enum codes only: the model reads the transcript, so its errors and its
+    # invalid answers can both quote a buyer, and neither goes on this stream.
+    "analysis_complete": "a computed total and the rubric version",
+    "analysis_attempt_failed": "which attempt, an enum stage and an enum code",
+    "analysis_failed": "an enum stage and an enum code",
+    # The failed MARK could not be written either - the database is usually
+    # why we are here. The lead keeps its transcript and reads `pending`.
+    "analysis_status_unwritten": "an enum stage and an enum code",
     "lead_persist_failed": "an enum stage and an enum code",
     # A decrypt that failed, from the admin API read path. The field PATH is
     # structural and safe; the value, the ciphertext and the exception are not,

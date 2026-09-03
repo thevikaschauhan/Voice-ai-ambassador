@@ -208,6 +208,7 @@ class Repository:
         score_total: int | None,
         score_version: str | None,
         breakdown: list[dict[str, Any]] | None,
+        project_ids: list[str] | None = None,
     ) -> None:
         import json
 
@@ -215,7 +216,8 @@ class Repository:
             """
             UPDATE leads SET analysis_status = $2, summary = $3,
                              score_total = $4, score_version = $5,
-                             score_breakdown = $6::jsonb
+                             score_breakdown = $6::jsonb,
+                             project_ids = coalesce($7, project_ids)
             WHERE id = $1
             """,
             lead_id,
@@ -224,6 +226,7 @@ class Repository:
             score_total,
             score_version,
             json.dumps(breakdown) if breakdown is not None else None,
+            project_ids,
         )
 
     async def get_lead(self, lead_id: Any) -> dict[str, Any]:
