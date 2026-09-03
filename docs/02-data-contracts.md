@@ -330,6 +330,16 @@ KnowledgeChunkReview
   created_at            datetime
 ```
 
+As with `LeadRecord` above, the shapes in this section are the DURABLE rows and
+`ambassador/knowledge.py` carries their pure-core counterparts: `TextChunk`
+(what the chunker produces, before a row exists), `ChunkScope` (a chunk's
+settled scope after the closures below) and `FigureOccurrence` (one extracted
+figure plus whether this occurrence is currently approved). None of them holds a
+UUID, a revision, a search vector or a page range, because a core module has no
+database in scope under ADR-002. `FigureOccurrence.approved` is the projection
+of the append-only review history, so a revocation reads there as `False` and
+the core gate needs no access to the review rows to fail closed.
+
 Parsing creates figures but never approves them. `active_approval_id` is a
 projection of the append-only review history. A chunk defaults to `admin_only`.
 `project_knowledge` requires a bound `project_id` that resolves through the

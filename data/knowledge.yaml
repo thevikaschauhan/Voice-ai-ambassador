@@ -1,0 +1,26 @@
+# Chunking limits for uploaded knowledge documents (docs/10-, ADR-019).
+# Read by agent/src/ambassador/knowledge.py. Tests inject smaller limits rather
+# than restating the algorithm, so these numbers appear in exactly one place.
+#
+# WHY A TARGET AND A MAXIMUM ARE DIFFERENT NUMBERS. The target is where a chunk
+# prefers to end, at a paragraph boundary. The maximum is where it must end,
+# whatever the text is doing. A single number would force one of two bad
+# behaviours: either every chunk breaks mid-paragraph at exactly N characters,
+# or a brochure paragraph longer than N produces a chunk nothing bounds. The
+# loader refuses a maximum below the target, because that collapses the two
+# back into one.
+#
+# THE OVERLAP IS FOR RETRIEVAL, NOT FOR READING. Postgres full-text search
+# matches a chunk or it does not, so a sentence split across a boundary is a
+# sentence neither chunk can be found by. Repeating the previous paragraph
+# keeps the seam retrievable. It costs duplicated text in the index, which at
+# 10-15 documents is not a cost worth optimising.
+#
+# Changing these rechunks every document ingested afterwards and does NOT
+# rechunk the ones already stored: a spoken answer names the document revision
+# it used, and revisions are immutable. Old and new chunks therefore coexist,
+# which is correct and is why the numbers are not tuned casually.
+
+target_chars: 1600
+maximum_chars: 2400
+overlap_paragraphs: 1

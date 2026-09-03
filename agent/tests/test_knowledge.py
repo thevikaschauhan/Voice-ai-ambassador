@@ -147,9 +147,12 @@ def test_prose_that_conflicts_with_inventory_stays_closed_whatever_was_asked_for
     from ambassador.knowledge import is_prompt_eligible, review_scope
 
     for action in ("general_knowledge", "project_knowledge", "inventory_governed"):
+        # Only project_knowledge may name a project; the test asserting that is
+        # one case above, and passing an id here for the others would fail on
+        # that rule rather than on the conflict this case is about.
         decision = review_scope(
             action,
-            project_id="binghatti-skyrise",
+            project_id="binghatti-skyrise" if action == "project_knowledge" else None,
             inventory_project_ids=["binghatti-skyrise"],
             conflicts_with_inventory=True,
         )
@@ -445,25 +448,50 @@ def test_a_new_heading_starts_a_new_chunk_even_mid_target():
     assert "Another" not in chunks[0].body
 
 
+# Short enough that a repeated paragraph plus a new one still fits under the
+# hard maximum. That is the ordinary case at the shipped 1600/2400; the case
+# where it does NOT fit has its own test below.
+SMALL_PARAGRAPHS = [f"Paragraph {n} " + "word " * 8 for n in range(6)]
+
+
 def test_consecutive_chunks_overlap_by_one_paragraph():
     """docs/10-: one-paragraph overlap. A sentence split across a chunk
     boundary is a sentence full-text search cannot find, and the overlap is
     what keeps the seam retrievable."""
     from ambassador.knowledge import chunk_text
 
-    paragraphs = [f"Paragraph {n} " + "word " * 20 for n in range(6)]
-    chunks = chunk_text("\n\n".join(paragraphs), limits())
+    chunks = chunk_text("\n\n".join(SMALL_PARAGRAPHS), limits())
     assert len(chunks) >= 2
     for earlier, later in zip(chunks, chunks[1:]):
         tail = earlier.body.split("\n\n")[-1]
         assert later.body.startswith(tail), (earlier.body, later.body)
 
 
+def test_the_overlap_gives_way_to_the_hard_maximum():
+    """The overlap is a retrieval convenience; the maximum is a bound.
+
+    With paragraphs long enough that repeating one would push the next chunk
+    past the maximum, the overlap is dropped rather than the limit breached -
+    the alternative is a chunk nothing bounds, which is the failure the maximum
+    exists to prevent. Found by the maximum test failing once the overlap was
+    implemented, not by reading the code.
+    """
+    from ambassador.knowledge import chunk_text
+
+    long_paragraphs = [f"Paragraph {n} " + "word " * 20 for n in range(4)]
+    chunks = chunk_text("\n\n".join(long_paragraphs), limits())
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        assert len(chunk.body) <= TINY["maximum_chars"]
+    for earlier, later in zip(chunks, chunks[1:]):
+        assert not later.body.startswith(earlier.body.split("\n\n")[-1])
+
+
 def test_overlap_can_be_switched_off():
     from ambassador.knowledge import chunk_text
 
-    paragraphs = [f"Paragraph {n} " + "word " * 20 for n in range(6)]
-    chunks = chunk_text("\n\n".join(paragraphs), limits(overlap_paragraphs=0))
+    chunks = chunk_text("\n\n".join(SMALL_PARAGRAPHS), limits(overlap_paragraphs=0))
+    assert len(chunks) >= 2
     for earlier, later in zip(chunks, chunks[1:]):
         assert not later.body.startswith(earlier.body.split("\n\n")[-1])
 
@@ -545,3 +573,52 @@ def test_a_missing_limit_is_refused(tmp_path):
     del body["target_chars"]
     with pytest.raises(ValueError, match="target_chars"):
         load_limits(write_limits(tmp_path, body))
+
+
+# --- edges the 100% gate requires covered ---------------------------------
+
+
+@pytest.mark.parametrize("body", ["- a list\n", "just text\n", "1600\n"])
+def test_a_limits_file_that_is_not_a_mapping_is_refused(tmp_path, body):
+    from ambassador.knowledge import load_limits
+
+    path = tmp_path / "knowledge.yaml"
+    path.write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_limits(path)
+
+
+def test_a_single_word_longer_than_the_maximum_is_still_bounded():
+    """No whitespace to split on. A URL, a table row run together by a parser,
+    or a language this splitter does not tokenise all arrive as one long token,
+    and the hard maximum has to hold anyway - a chunk nothing bounds is the one
+    outcome the maximum exists to prevent."""
+    from ambassador.knowledge import chunk_text
+
+    word = "x" * 700
+    chunks = chunk_text(word, limits())
+    assert chunks
+    for chunk in chunks:
+        assert len(chunk.body) <= TINY["maximum_chars"]
+    # Nothing is dropped: the pieces reassemble to the original.
+    assert "".join(c.body for c in chunks).replace("\n\n", "") == word
+
+
+def test_a_heading_with_no_body_produces_no_chunk():
+    """A section heading followed by another heading is ordinary in a brochure
+    table of contents. It must not become an empty chunk that retrieval can
+    match, and it must not swallow the section after it."""
+    from ambassador.knowledge import chunk_text
+
+    chunks = chunk_text("# Contents\n\n# Payment process\n\nHow it works.", limits())
+    assert [c.heading for c in chunks] == ["Payment process"]
+    assert chunks[0].body == "How it works."
+
+
+def test_text_with_no_heading_at_all_still_chunks():
+    """Pasted text usually has no headings. The heading is null rather than
+    invented."""
+    from ambassador.knowledge import chunk_text
+
+    chunks = chunk_text("A paragraph of pasted text.", limits())
+    assert [c.heading for c in chunks] == [None]
