@@ -150,7 +150,12 @@ EncryptedEnvelope
   ciphertext            bytes
 ```
 
-`LeadRecord` above is the DURABLE row. Its in-process counterpart is
+`LeadRecord` above is the DURABLE row, and it reaches Postgres as **numbered
+migrations under `agent/migrations/`**, not as one schema file: each is applied
+in order by the `admin-api` pre-deploy, which logs how many it ran (docs/09-,
+"Verifying the three-service topology"). Read the current version from the
+highest-numbered file in that directory rather than from any document,
+including this one. Its in-process counterpart is
 `LeadSnapshot` in `schemas.py`, which is what `shutdown_session` freezes before
 anything is written: the same call facts, the full-fidelity turns and the last
 accepted brief, and none of the persistence concerns (no UUID, no revision, no

@@ -367,13 +367,20 @@ authenticated application-layer encryption. No Supabase SDK is added.
 Every card follows RED commit, GREEN commit, optional refactor commit. The PR
 description names those commits and they are not squashed before god merges.
 
+The names in the last column must be the names `grep` finds in
+`agent/tests/`. Two of them were not: they were written before the tests
+existed and never reconciled, so the column that exists to point a reader at
+the failing case pointed at nothing. If you add a card here before its test,
+describe the case in prose rather than inventing an identifier - a wrong name
+costs a reader more than no name, because they assume the test is missing.
+
 | Suggested owner | Card | First RED test |
 |---|---|---|
 | toby/core | Phase 2 Pydantic contracts and score rubric | `test_every_rubric_signal_contributes_only_its_documented_points` fails because the models and scorer do not exist |
 | toby/core | Deterministic knowledge chunking, closed-by-default scope and figure context | `test_revoked_unretrieved_or_inventory_governed_facts_and_unbound_project_prose_never_extend_allowed_figures` fails on the missing pure context builder |
 | dwight/adapter | Postgres migrations and async repository | `test_migrations_round_trip_every_phase_2_contract` fails against an empty temporary Postgres schema |
-| dwight/adapter | Persist every call from `shutdown_session` | `test_buyer_left_persists_after_brief_drain_with_incomplete_audit_flag` fails because shutdown has no repository hook |
-| dwight/adapter | Structured summary analysis and scoring finaliser | `test_invalid_analysis_keeps_the_lead_and_never_accepts_a_model_score` fails because no finaliser exists |
+| dwight/adapter | Persist every call from `shutdown_session` | `test_a_call_becomes_a_lead`, `test_a_truncated_call_does_not_read_as_a_complete_one` and `test_per_turn_audit_incomplete_survives_to_the_row` (`agent/tests/test_persist_call.py`) fail because shutdown has no repository hook |
+| dwight/adapter | Structured summary analysis and scoring finaliser | `test_two_invalid_responses_fail_and_keep_the_lead` and `test_the_score_is_computed_here_and_never_taken_from_the_model` (`agent/tests/test_analysis_finaliser.py`) fail because no finaliser exists |
 | dwight/adapter | Knowledge parsers, full-text retrieval and prompt injection | `test_retrieval_runs_once_per_turn_and_reuses_the_same_revision_and_figure_set` fails because `llm_node` has no retrieval seam |
 | toby/adapter | FastAPI admin API and bearer boundary | `test_every_non_health_admin_route_refuses_a_missing_or_wrong_bearer` fails before the API exists |
 | dwight/adapter | Authenticated PII envelopes and classified durable audit | `test_buyer_payloads_encrypt_while_phase_2_events_contain_no_buyer_words` fails before the encryption and event projections exist |
