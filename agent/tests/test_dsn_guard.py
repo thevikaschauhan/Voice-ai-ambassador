@@ -104,3 +104,85 @@ def test_the_success_line_names_the_port_and_nothing_else() -> None:
     assert line == "database port 5432 (session mode)"
     for fragment in ("hunter2", "someone", "pooler.supabase.com"):
         assert fragment not in line
+
+
+# --- and the direct host, which a port-only check waves through ------------
+#
+# The 15:22Z incident was a 5432 URL - compliant by port - on Supabase's DIRECT
+# connection host, which is IPv6-only while the worker's outbound IPv6 is off.
+# The pre-deploy failed with `OSError: [Errno 101] Network is unreachable`,
+# which is loud but says nothing about what to change.
+#
+# Still a deny-list: localhost, 127.0.0.1, CI's postgres service and any pooler
+# host pass, because the same code runs in CI and on a laptop.
+
+DIRECT_DSN = (
+    "postgresql://postgres:hunter2@db.abcdefghijklmnop.supabase.co:5432/postgres"
+)
+POOLER_DSN = (
+    "postgresql://postgres.abcdefghijklmnop:hunter2"
+    "@aws-1-eu-central-1.pooler.supabase.com:5432/postgres"
+)
+
+
+def test_the_direct_connection_host_is_refused_even_on_5432() -> None:
+    from adapter.session_mode import DirectConnectionRefused, assert_session_mode
+
+    with pytest.raises(DirectConnectionRefused):
+        assert_session_mode(DIRECT_DSN)
+
+
+def test_the_direct_refusal_names_the_shape_and_not_the_host() -> None:
+    """A hostname carries the project ref, and the DSN carries a password. The
+    message says what KIND of host it is and what to use instead."""
+    from adapter.session_mode import DirectConnectionRefused, assert_session_mode
+
+    with pytest.raises(DirectConnectionRefused) as raised:
+        assert_session_mode(DIRECT_DSN)
+
+    message = str(raised.value)
+    assert "pooler.supabase.com" in message
+    assert "5432" in message
+    for fragment in ("abcdefghijklmnop", "hunter2", "db.abcdefghijklmnop.supabase.co"):
+        assert fragment not in message, fragment
+    assert len(message.strip().splitlines()) == 1
+
+
+def test_the_pooler_host_passes_on_the_session_port() -> None:
+    from adapter.session_mode import assert_session_mode
+
+    assert assert_session_mode(POOLER_DSN) == 5432
+
+
+def test_the_pooler_host_is_still_refused_on_the_transaction_port() -> None:
+    from adapter.session_mode import TransactionPoolerRefused, assert_session_mode
+
+    with pytest.raises(TransactionPoolerRefused):
+        assert_session_mode(POOLER_DSN.replace(":5432/", ":6543/"))
+
+
+def test_local_and_ci_databases_keep_working() -> None:
+    """The reason this is a deny-list. An allow-list of pooler hosts would
+    refuse every database this repository's own tests use."""
+    from adapter.session_mode import assert_session_mode
+
+    assert assert_session_mode("postgresql://u:p@localhost:5434/postgres") == 5434
+    assert assert_session_mode("postgresql://u:p@127.0.0.1:5435/postgres") == 5435
+    assert assert_session_mode("postgresql://postgres:postgres@postgres:5432/x") == 5432
+
+
+def test_the_cli_refuses_the_direct_host_in_one_value_free_line() -> None:
+    """Discriminating on purpose. Without the pooler-host assertion this test
+    passed BEFORE the guard existed: the CLI reached that hostname, failed on
+    the network, printed one line and exited 1 - all four of the weaker
+    assertions, for none of the right reasons. It must only pass when the
+    REFUSAL is what stopped it."""
+    result = _run_cli(DIRECT_DSN)
+
+    assert result.returncode != 0
+    assert "pooler.supabase.com" in result.stderr
+    assert "Network is unreachable" not in result.stderr
+    assert len(result.stderr.strip().splitlines()) == 1
+    written = result.stdout + result.stderr
+    for fragment in ("abcdefghijklmnop", "hunter2", "postgresql://"):
+        assert fragment not in written, fragment
