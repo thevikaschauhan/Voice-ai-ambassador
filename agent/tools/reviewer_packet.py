@@ -451,10 +451,24 @@ def main(language: str) -> None:
         "walked into."
     )
     w("")
+    # Derived, not asserted. The day somebody authors closing phrases for this
+    # language, an "off entirely" written in prose becomes a lie sitting next
+    # to the list that disproves it.
+    mine = len(farewells.phrases.get(language, ()))
+    state = (
+        f"Detection in {name} is off entirely, so nothing here is being "
+        "reviewed - it is all being written for the first time."
+        if not mine
+        else (
+            f"{name} already has {mine} closing "
+            f"{'phrase' if mine == 1 else 'phrases'}, so please check those as "
+            "well as adding what is missing."
+        )
+    )
     w(
         f"(For reference, English uses {len(farewells.phrases['en'])} closing "
         f"phrases and {len(farewells.courtesies['en'])} courtesy words. "
-        f"Detection in {name} is off entirely today.)"
+        f"{state})"
     )
     w("")
     w(bullet(f"{name} closing phrases (err short):"))
@@ -833,13 +847,24 @@ def main(language: str) -> None:
     w("")
     w("## 5. Things the agent must never be allowed to say")
     w("")
+    # `covered` is resolved before the sentence rather than after it, because
+    # the sentence used to assert what the line below it computes - and an
+    # assertion standing next to the data that contradicts it is worse than
+    # either alone.
+    covered = languages_covered(patterns)
+    blocked_here = language in covered
     w(
-        "Regulatory, not stylistic. We block these in English already; the "
-        f"same promises in {name} currently pass straight through. For each, "
-        "write the phrasings a salesperson would actually use."
+        "Regulatory, not stylistic. We block these in English already; "
+        + (
+            f"the same promises in {name} are blocked too, so please check the "
+            "phrasings we have as well as adding what is missing."
+            if blocked_here
+            else f"the same promises in {name} currently pass straight "
+            "through, so nothing is stopping them today."
+        )
+        + " For each, write the phrasings a salesperson would actually use."
     )
     w("")
-    covered = languages_covered(patterns)
     w(f"(Patterns exist today for: {', '.join(sorted(covered))}.)")
     w("")
     for category in sorted({p.category for p in patterns}):

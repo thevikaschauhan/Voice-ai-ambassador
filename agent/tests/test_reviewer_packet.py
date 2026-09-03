@@ -468,3 +468,29 @@ def test_every_registered_section_is_actually_in_the_generated_packet(language):
             f"{filename} is registered to section {heading!r}, which is not in "
             f"the generated {language} packet"
         )
+
+
+def test_the_packet_does_not_assert_a_coverage_state_it_can_compute(arabic):
+    """Two claims about "today" used to be typed rather than derived.
+
+    Both were true when written and both would have become lies the day
+    somebody authored the copy they describe - one of them sitting directly
+    above the computed line that would have disproved it. They are now branched
+    off `farewells.detects()` and `languages_covered()`, so the document cannot
+    disagree with the loaders.
+
+    This asserts the honest state for the data as it actually stands, which is
+    what makes it fail if either sentence is turned back into a constant.
+    """
+    from ambassador.farewell import load_farewells
+    from ambassador.guardrails.prohibited import languages_covered, load_patterns
+
+    if not load_farewells().detects("ar"):
+        assert "Detection in Arabic is off entirely" in arabic
+    else:
+        assert "already has" in arabic
+
+    if "ar" not in languages_covered(load_patterns()):
+        assert "currently pass straight through" in arabic
+    else:
+        assert "are blocked too" in arabic

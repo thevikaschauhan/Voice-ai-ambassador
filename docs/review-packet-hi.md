@@ -94,7 +94,7 @@ Code-switched English matters here: a Dubai buyer may well end a Hindi call with
 
 Also: please quote every entry when you write them down. A bare `no` or `ok` loads as a yes/no value rather than a word and becomes something that can never match, a trap two other files here already walked into.
 
-(For reference, English uses 20 closing phrases and 32 courtesy words. Detection in Hindi is off entirely today.)
+(For reference, English uses 20 closing phrases and 32 courtesy words. Detection in Hindi is off entirely, so nothing here is being reviewed - it is all being written for the first time.)
 
 - [ ] Hindi closing phrases (err short):
 - [ ] Hindi courtesy words:
@@ -284,7 +284,7 @@ It is spoken in the first sentence of every call. Hindi has no disclosure yet (s
 
 ## 5. Things the agent must never be allowed to say
 
-Regulatory, not stylistic. We block these in English already; the same promises in Hindi currently pass straight through. For each, write the phrasings a salesperson would actually use.
+Regulatory, not stylistic. We block these in English already; the same promises in Hindi currently pass straight through, so nothing is stopping them today. For each, write the phrasings a salesperson would actually use.
 
 (Patterns exist today for: en.)
 
