@@ -233,7 +233,11 @@ describe('qualifying and rejecting', () => {
       new_status: 'qualified',
       reason_code: expect.any(String),
       note: 'looks ready',
-      revision: 3,
+      // Corrected, not deleted: this case asserted `revision` in #109, which
+      // was this tier's guess at a field the API had not shipped yet. The
+      // guess was wrong, and a test that encodes a wrong contract is worse
+      // than no test - it makes the drift look verified.
+      expected_lead_revision: 3,
     })
   })
 
@@ -244,7 +248,7 @@ describe('qualifying and rejecting', () => {
     // could not catch it - every decision would have 422'd, which reads as a
     // haunted failure rather than a field name.
     const sent = stubDecision(201, { revision: 4 })
-    render(<LeadDetail lead={DETAIL} />)
+    await renderDetail(DETAIL)
     await userEvent.click(screen.getByRole('button', { name: /qualify/i }))
     await userEvent.click(screen.getByRole('button', { name: /save decision/i }))
     await waitFor(() => expect(sent).toHaveLength(1))

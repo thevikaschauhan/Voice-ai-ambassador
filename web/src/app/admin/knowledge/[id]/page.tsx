@@ -1,10 +1,10 @@
 import Link from 'next/link'
 import { ChunkScope } from '@/components/admin/chunk-scope'
 import { FigureReview } from '@/components/admin/figure-review'
+import { headers } from 'next/headers'
 import { loadInventory } from '@/lib/inventory'
-import { readForPage } from '@/lib/admin/read'
+import { readDocument } from '@/lib/admin/knowledge.server'
 import { SCOPE_LABELS } from '@/lib/admin/knowledge'
-import type { DocumentDetail } from '@/lib/admin/knowledge'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,7 +22,12 @@ export default async function KnowledgeDocumentPage({
 }) {
   const { id } = await params
   const [read, projects] = await Promise.all([
-    readForPage<DocumentDetail>({ route: 'document', id }),
+    readDocument(
+      new Request(`https://admin.local/admin/knowledge/${id}`, {
+        headers: { cookie: (await headers()).get('cookie') ?? '' },
+      }),
+      id,
+    ),
     loadInventory().catch(() => []),
   ])
   const projectIds = projects.map((project) => project.id)
@@ -53,6 +58,16 @@ export default async function KnowledgeDocumentPage({
               {read.data.status}
             </p>
           </header>
+
+          {read.data.orphanFigures.length > 0 ? (
+            <p className="border border-warn-500/40 px-5 py-3.5 text-[13px] leading-relaxed text-ink-300">
+              {read.data.orphanFigures.length} extracted figure
+              {read.data.orphanFigures.length === 1 ? '' : 's'} could not be matched to a
+              section of this document, so they cannot be reviewed here and stay
+              unapproved. That is safe - an unreviewed figure is never spoken - but it
+              means the document and its figures disagree, which is worth reporting.
+            </p>
+          ) : null}
 
           {read.data.chunks.length === 0 ? (
             <p className="text-[13px] text-ink-500">

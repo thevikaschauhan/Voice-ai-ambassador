@@ -56,10 +56,13 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
           new_status: choice,
           reason_code: reason,
           note: note.trim() === '' ? null : note.trim(),
-          // The revision the reviewer was LOOKING at. That is what makes the
-          // API's optimistic check mean anything: a decision taken against
-          // stale data must be refused, not applied.
-          revision: lead.revision,
+          // The revision the reviewer was LOOKING at, under the name the API
+          // validates: `admin_api.DecisionRequest` declares
+          // `expected_lead_revision`, and docs/02- names it that too. Sending
+          // `revision` 422'd, which reads as a haunted failure rather than a
+          // field name - and the proxy could not catch it, because forwarding a
+          // body verbatim is its job.
+          expected_lead_revision: lead.revision,
         }),
       })
       if (response.status === 409) {

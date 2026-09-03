@@ -149,7 +149,7 @@ describe('the lead list against the real response', () => {
   it('reads a bare list rather than an envelope', async () => {
     stubUpstream([REAL_LEAD_ROW])
     const { readLeadRows } = await import('@/lib/admin/leads.server')
-    const rows = await readLeadRows(new Request('https://demo.example/admin/leads'))
+    const rows = await readLeadRows(new Request('https://demo.example/admin/leads', { headers: { cookie: await session() } }))
     expect(rows.state).toBe('ok')
     if (rows.state !== 'ok') return
     expect(rows.data).toHaveLength(1)
@@ -159,7 +159,7 @@ describe('the lead list against the real response', () => {
   it('derives contact_present from the contact_status the API sends', async () => {
     stubUpstream([REAL_LEAD_ROW, { ...REAL_LEAD_ROW, id: 'b', contact_status: 'declined' }])
     const { readLeadRows } = await import('@/lib/admin/leads.server')
-    const rows = await readLeadRows(new Request('https://demo.example/admin/leads'))
+    const rows = await readLeadRows(new Request('https://demo.example/admin/leads', { headers: { cookie: await session() } }))
     if (rows.state !== 'ok') throw new Error('expected ok')
     // docs/10- asks the list to show contact-PRESENT; the API sends the status,
     // which is strictly more information. Deriving beats asking toby to add a
@@ -189,7 +189,7 @@ describe('the document detail against the real response', () => {
   it('reads a bare list of documents', async () => {
     stubUpstream([{ ...REAL_DOCUMENT, chunks: undefined, figures: undefined }])
     const { readDocumentRows } = await import('@/lib/admin/knowledge.server')
-    const rows = await readDocumentRows(new Request('https://demo.example/admin/knowledge'))
+    const rows = await readDocumentRows(new Request('https://demo.example/admin/knowledge', { headers: { cookie: await session() } }))
     if (rows.state !== 'ok') throw new Error('expected ok')
     expect(rows.data).toHaveLength(1)
     expect(rows.data[0].title).toBe('Skyrise brochure')
@@ -199,7 +199,9 @@ describe('the document detail against the real response', () => {
     stubUpstream(REAL_DOCUMENT)
     const { readDocument } = await import('@/lib/admin/knowledge.server')
     const read = await readDocument(
-      new Request('https://demo.example/admin/knowledge/doc-1'),
+      new Request('https://demo.example/admin/knowledge/doc-1', {
+        headers: { cookie: await session() },
+      }),
       'doc-1',
     )
     if (read.state !== 'ok') throw new Error('expected ok')
@@ -216,7 +218,9 @@ describe('the document detail against the real response', () => {
     })
     const { readDocument } = await import('@/lib/admin/knowledge.server')
     const read = await readDocument(
-      new Request('https://demo.example/admin/knowledge/doc-1'),
+      new Request('https://demo.example/admin/knowledge/doc-1', {
+        headers: { cookie: await session() },
+      }),
       'doc-1',
     )
     if (read.state !== 'ok') throw new Error('expected ok')

@@ -1,14 +1,18 @@
 import Link from 'next/link'
 import { DocumentList } from '@/components/admin/document-list'
 import { KnowledgeIntake } from '@/components/admin/knowledge-intake'
-import { readForPage } from '@/lib/admin/read'
-import type { DocumentRow } from '@/lib/admin/knowledge'
+import { headers } from 'next/headers'
+import { readDocumentRows } from '@/lib/admin/knowledge.server'
 
 export const dynamic = 'force-dynamic'
 
 /** What the ambassador may draw on, and how a document gets here. */
 export default async function KnowledgePage() {
-  const read = await readForPage<{ documents: DocumentRow[] }>({ route: 'documents' })
+  const read = await readDocumentRows(
+    new Request('https://admin.local/admin/knowledge', {
+      headers: { cookie: (await headers()).get('cookie') ?? '' },
+    }),
+  )
 
   return (
     <main className="mx-auto flex min-h-screen max-w-[1080px] flex-col gap-6 px-4 py-6 sm:px-6">
@@ -40,7 +44,7 @@ export default async function KnowledgePage() {
               {read.reason}
             </p>
           ) : (
-            <DocumentList rows={read.data.documents} />
+            <DocumentList rows={read.data} />
           )}
         </>
       )}

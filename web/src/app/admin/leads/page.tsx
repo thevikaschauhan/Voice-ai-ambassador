@@ -1,13 +1,17 @@
 import Link from 'next/link'
+import { headers } from 'next/headers'
 import { LeadList } from '@/components/admin/lead-list'
-import { readForPage } from '@/lib/admin/read'
-import type { LeadSummaryRow } from '@/lib/admin/leads'
+import { readLeadRows } from '@/lib/admin/leads.server'
 
 export const dynamic = 'force-dynamic'
 
 /** Every call that finished, newest first (the API's order). */
 export default async function LeadsPage() {
-  const read = await readForPage<{ leads: LeadSummaryRow[] }>({ route: 'leads' })
+  const read = await readLeadRows(
+    new Request('https://admin.local/admin/leads', {
+      headers: { cookie: (await headers()).get('cookie') ?? '' },
+    }),
+  )
 
   return (
     <main className="mx-auto flex min-h-screen max-w-[1180px] flex-col gap-6 px-4 py-6 sm:px-6">
@@ -36,7 +40,7 @@ export default async function LeadsPage() {
           {read.reason}
         </p>
       ) : (
-        <LeadList rows={read.data.leads} />
+        <LeadList rows={read.data} />
       )}
     </main>
   )
