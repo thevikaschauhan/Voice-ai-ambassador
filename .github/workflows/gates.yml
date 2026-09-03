@@ -61,6 +61,33 @@ jobs:
   agent:
     name: agent gates
     runs-on: ubuntu-latest
+
+    # A REAL Postgres, because the things that break a schema - a composite
+    # type the driver cannot decode, an append-only trigger firing on the wrong
+    # row, a unique index that rejects a legitimate revision - are exactly what
+    # a fake has no opinion about (ADR-018 keeps the store portable, so stock
+    # postgres is the right image and no Supabase image is needed).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        # Without this the job can reach the step before the server accepts
+        # connections, which fails as a flake rather than as a result.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Not a secret and deliberately not one: it addresses a throwaway
+      # container on the runner. The Supabase value is a Railway variable on
+      # the two Python services and never enters this repository (ADR-018).
+      DATABASE_URL_TEST: postgresql://postgres:postgres@localhost:5432/postgres
+
     steps:
       - uses: actions/checkout@v7
 
