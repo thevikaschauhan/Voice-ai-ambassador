@@ -26,6 +26,22 @@ function read(path: string): string {
   return readFileSync(path, 'utf-8')
 }
 
+/**
+ * The file with its comments removed.
+ *
+ * These guards assert things about CODE, and a comment that mentions the
+ * pattern being guarded is not a violation of it - it is usually the
+ * explanation. Twice now a structural grep here has matched prose: a comment
+ * explaining the `NEXT_PUBLIC_` rule, and one cross-referencing this very
+ * guard from `lib/admin/upstream.ts`. Stripping comments first is the fix;
+ * rewording the prose to dodge a regex would be the wrong way round.
+ */
+function code(path: string): string {
+  return read(path)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+}
+
 describe('import boundaries', () => {
   it('keeps livekit-client on the client, where a browser API can actually exist', () => {
     const offenders = sources()
@@ -40,7 +56,7 @@ describe('import boundaries', () => {
   it('keeps the signing secret and the access code on the server', () => {
     const offenders = sources()
       .filter((path) => read(path).startsWith("'use client'"))
-      .filter((path) => /process\.env\.(LIVEKIT_API_SECRET|DEMO_ACCESS_CODE)/.test(read(path)))
+      .filter((path) => /process\.env\.(LIVEKIT_API_SECRET|DEMO_ACCESS_CODE)/.test(code(path)))
     expect(offenders).toEqual([])
   })
 
@@ -54,13 +70,13 @@ describe('import boundaries', () => {
     // pattern flagged the comment in `hosted.ts` that explains this rule,
     // which is a test asserting that nobody may write the word.
     const offenders = sources().filter((path) =>
-      /process\.env\.NEXT_PUBLIC_/.test(read(path)),
+      /process\.env\.NEXT_PUBLIC_/.test(code(path)),
     )
     expect(offenders).toEqual([])
   })
 
   it('mints a publishing token in exactly one place', () => {
-    const publishers = sources().filter((path) => /canPublish:\s*true/.test(read(path)))
+    const publishers = sources().filter((path) => /canPublish:\s*true/.test(code(path)))
     expect(publishers.map((path) => path.replace(`${SRC}/`, ''))).toEqual(['lib/livekit/talk.ts'])
   })
 
@@ -68,7 +84,7 @@ describe('import boundaries', () => {
     // The pair of grants is the design (docs/09-): if an edit ever loosens the
     // viewer grant into a publishing one, this fails rather than a reviewer
     // having to notice.
-    const viewer = read(join(SRC, 'lib/livekit/room.ts'))
+    const viewer = code(join(SRC, 'lib/livekit/room.ts'))
     expect(viewer).toMatch(/canPublish:\s*false/)
     expect(viewer).toMatch(/canPublishData:\s*false/)
     expect(viewer).toMatch(/hidden:\s*true/)

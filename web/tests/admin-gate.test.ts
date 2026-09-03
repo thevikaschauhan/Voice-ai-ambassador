@@ -240,12 +240,90 @@ describe('the admin proxy', () => {
   })
 })
 
+describe('the origin check on mutations', () => {
+  async function decide(headers: Record<string, string>) {
+    process.env.ADMIN_ACCESS_CODE = CODE
+    process.env.ADMIN_SESSION_SECRET = SECRET
+    process.env.ADMIN_API_TOKEN = TOKEN
+    process.env.ADMIN_API_URL = UPSTREAM
+    const forwarded: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      (async (input: RequestInfo | URL) => {
+        forwarded.push(String(input))
+        return new Response('{"revision":2}', { status: 201 })
+      }) as typeof fetch,
+    )
+    const { signAdminSession } = await import('@/lib/admin/session')
+    const cookie = `admin_session=${signAdminSession({ issuedAt: Date.now() })}`
+    const { POST } = await import('@/app/api/admin/leads/[id]/decisions/route')
+    const response = await POST(
+      new Request('http://internal-host:8060/api/admin/leads/lead-1/decisions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie, ...headers },
+        body: JSON.stringify({ decision: 'qualify', revision: 1 }),
+      }),
+      { params: Promise.resolve({ id: 'lead-1' }) },
+    )
+    return { status: response.status, forwarded }
+  }
+
+  it('accepts a same-origin mutation even when request.url is the internal address', async () => {
+    // The case the unit tests originally missed and the container caught: on
+    // Railway the URL carries the listen address while Origin and Host carry
+    // the public domain, so comparing Origin to request.url refuses every real
+    // mutation. This asserts the production shape, not the laptop one.
+    const { status, forwarded } = await decide({
+      origin: 'https://demo.example',
+      host: 'demo.example',
+      'x-forwarded-proto': 'https',
+    })
+    expect(status).toBe(201)
+    expect(forwarded).toHaveLength(1)
+  })
+
+  it('accepts it when the proxy reports the host in x-forwarded-host', async () => {
+    const { status } = await decide({
+      origin: 'https://demo.example',
+      host: 'internal-host:8060',
+      'x-forwarded-host': 'demo.example',
+      'x-forwarded-proto': 'https',
+    })
+    expect(status).toBe(201)
+  })
+
+  it('refuses a host that matches over the wrong scheme', async () => {
+    const { status, forwarded } = await decide({
+      origin: 'http://demo.example',
+      host: 'demo.example',
+      'x-forwarded-proto': 'https',
+    })
+    expect(status).toBe(403)
+    expect(forwarded).toEqual([])
+  })
+
+  it('refuses a mutation with no Origin at all', async () => {
+    const { status, forwarded } = await decide({ host: 'demo.example' })
+    expect(status).toBe(403)
+    expect(forwarded).toEqual([])
+  })
+})
+
 describe('the upstream token has exactly one reader', () => {
   it('is read in one server module and nowhere else', () => {
     // The same structural shape as the `canPublish: true` guard: a secret with
     // one reader can be reviewed; a secret with three is a search problem.
     const readers = sources()
-      .filter((path) => /process\.env\.ADMIN_API_TOKEN/.test(readFileSync(path, 'utf-8')))
+      .filter((path) =>
+        // Comments stripped first: a comment naming the variable is the
+        // explanation of this rule, not a breach of it (see
+        // `tests/boundaries.test.ts` for the same fix).
+        /process\.env\.ADMIN_API_TOKEN/.test(
+          readFileSync(path, 'utf-8')
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/(^|[^:])\/\/.*$/gm, '$1'),
+        ),
+      )
       .map((path) => path.replace(`${SRC}/`, ''))
     expect(readers).toEqual(['lib/admin/upstream.ts'])
   })
