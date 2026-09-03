@@ -95,6 +95,27 @@ refuses to run without it (`The Railway TypeScript SDK is not installed`), which
 is the only reason there is a `package.json` at the repository root. It is not
 the web app, which has its own in `web/`, and neither image installs from it.
 
+**To prove a change is a no-op, declare the opposite and watch the plan speak.**
+A clean plan on its own does not distinguish "this field matches" from "the plan
+never looks at this field", which is the same broken-versus-nothing-to-do trap
+step 0 was fixed for. Declaring `checkSuites: false` on `web` was removed on
+exactly this basis: the plan read "already up to date" both with the line and
+without it, so the removal was verified by declaring the opposite value instead,
+which made the plan answer:
+
+```
+Plan: 0 to add, 1 to change, 0 to destroy
+  ~ Update web source.checkSuites
+    └ source.checkSuites (null → true)
+```
+
+That output proves two things at once: the field IS diffed, so the clean plan
+means something, and the stored value is `null` rather than `false`, so Railway
+was holding it unset and the declaration had been matching an absence. Railway
+does not store a setting equal to its default, so declaring one either does
+nothing or guarantees a permanently dirty plan. The probe is read-only and costs
+one command.
+
 ### Provisioning, in three steps
 
 1. Connect the repository to each service, with **Root Directory empty**. Not
@@ -971,6 +992,98 @@ both Python services receive only the dashboard-issued Supavisor **session**
 mode URL on port 5432 as `DATABASE_URL`. The value moves directly from the
 Supabase dashboard to Railway variables and is never pasted into a ticket,
 commit, terminal transcript or hive message.
+
+### Provisioning the Supabase project, in order
+
+The first step is the one that cannot be undone, so it goes first deliberately.
+
+1. **Create the project in `eu-central-1` (Frankfurt).** It is the closest
+   offered region to the Railway services, which run in Amsterdam. There is no
+   Amsterdam Supabase region. `VERIFY:` Supabase does not document whether a
+   project's region can be changed afterwards, so this runbook treats creation
+   as irreversible.
+2. **Choose the Free plan**, knowing its three operational edges: 500 MB of
+   database storage, a limit of two active projects, and the inactivity pause
+   that the check below exists for. `VERIFY:` the pricing page states 500 MB
+   while the compute-and-disk page mentions 8 GB in a disk-provisioning context
+   and warns that free compute is "subject to change"; read the figure in the
+   dashboard rather than from here.
+3. **Take the session-pooler URL, not the direct one.** In the dashboard's
+   **Connect** dialog choose Supavisor **session mode** on port **5432**. Not
+   the direct connection and not transaction mode, for the reasons in
+   `docs/10-admin.md`: the free direct endpoint is IPv6-only while Railway's
+   outbound IPv6 is off per service, and transaction mode does not support
+   prepared statements.
+4. **Set the values as Railway service variables**, using the table below. They
+   move from the Supabase dashboard into Railway directly. A connection string
+   contains the database password, so it never goes into a commit, a ticket, a
+   terminal transcript, a chat message or this file.
+
+   One of those values is not a secret and is fixed by the configuration rather
+   than chosen: `ADMIN_API_URL` on `web` is
+   `http://admin-api.railway.internal:8080`. The host is the private endpoint
+   `.railway/railway.ts` declares for `admin-api`, the port is the one its start
+   command binds, and `http` rather than `https` because private traffic is
+   already encrypted by Railway. It is set by hand because Railway's reference
+   variables can supply the bare host but cannot add a scheme and a port.
+5. **Tell whoever runs `apply`** that the values are in place. The apply is a
+   separate step from provisioning and comes after, because the variable names
+   are already declared and `preserve()` never writes a value.
+
+### Which variable goes on which service
+
+`.railway/railway.ts` names every one of these as `preserve()`, so the file
+protects them without ever holding a value. The placement is the security
+boundary, not a convenience: it is why the browser cannot reach the database and
+why the web tier cannot bypass the admin API's bearer check.
+
+| variable | `web` | `agent-worker` | `admin-api` |
+| --- | --- | --- | --- |
+| `DATABASE_URL` | no | yes | yes |
+| `PII_ENCRYPTION_KEY` | no | yes | yes |
+| `PII_HASH_KEY` | no | yes | yes |
+| `ADMIN_API_TOKEN` | yes | no | yes |
+| `ADMIN_API_URL` | yes | no | no |
+| `ADMIN_ACCESS_CODE` | yes | no | no |
+| `ADMIN_SESSION_SECRET` | yes | no | no |
+
+Three of those noes are the design rather than housekeeping. **`web` never gets
+`DATABASE_URL`**: its server routes call the admin API's private address and add
+the bearer server-side, so a mistake in the web tier cannot become a mistake
+against the database. **`agent-worker` never gets `ADMIN_API_TOKEN`**, because it
+does not call the admin API; it writes through the same repository adapter. And
+**neither Python service gets `ADMIN_ACCESS_CODE` or `ADMIN_SESSION_SECRET`**,
+which belong to the browser-facing gate alone.
+
+### Verifying the three-service topology
+
+`railway config plan` is the check, and it is the value-safe one: it redacts
+variable values by default, whereas `railway variables` prints them. Never reach
+for the latter to answer a question about which service carries a name.
+
+Before the apply, the plan must show `admin-api` as a **create** with **nothing
+destroyed** on `web` or `agent-worker`. Against the two-service graph that
+preceded it, the same plan reads "already up to date" and adds no admin service
+at all, which is what a missing topology looks like rather than a broken one.
+
+After the apply, the plan must read:
+
+```
+✓ Your Railway configuration is already up to date.
+```
+
+That single line is the topology assertion, and it is stronger than it looks
+**because omit means delete**. The file describes the whole environment, so a
+clean plan means Railway carries exactly the three services and exactly the
+variable names declared here - including `DATABASE_URL` present on both Python
+services and absent from `web`. A variable added to the wrong service by hand
+shows up as a change, and one removed from the file shows up as a destroy.
+
+If you doubt the plan is reading the field you care about, use the positive
+control from the configuration section above: declare the opposite and confirm
+the plan answers.
+
+### The pre-demo check
 
 The free project may pause after roughly one idle week. The admin API runs one
 bounded `SELECT 1` each day as a keep-active mitigation, but the pre-demo check

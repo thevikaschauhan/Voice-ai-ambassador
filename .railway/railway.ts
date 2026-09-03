@@ -1,5 +1,5 @@
 /**
- * The Railway project, in code. This file is the whole environment: both
+ * The Railway project, in code. This file is the whole environment: all three
  * services, their build and deploy settings, and the NAMES of the variables
  * they carry.
  *
@@ -81,6 +81,23 @@ export default defineRailway(() => {
       // file that did not name it would take it away again. DEMO_MAX_ROOMS
       // defaults to 2 in the route when unset, so it is named for the same
       // reason rather than because it has to be set.
+      // Phase 2, the browser-facing half of the admin surface. `web` is the
+      // ONLY service that carries these three, and it deliberately never
+      // carries DATABASE_URL: its server routes call the admin API's private
+      // address and add the bearer server-side, so a mistake in the web tier
+      // cannot become a mistake against the database (docs/10-admin.md).
+      ADMIN_ACCESS_CODE: preserve(),
+      // Shared with admin-api and nowhere else. Never browser-visible.
+      ADMIN_API_TOKEN: preserve(),
+      // `http://admin-api.railway.internal:8080` - the private endpoint
+      // declared below, and the port the start command binds. Set by hand
+      // rather than by `ref()`: RAILWAY_PRIVATE_DOMAIN is referencable, but it
+      // yields the bare host, and the contract in docs/01 defines this as a
+      // URL. A reference cannot add the scheme and port, and a literal
+      // carrying Railway's own `${...}` syntax could not be verified without
+      // an apply, which this card is not allowed to do.
+      ADMIN_API_URL: preserve(),
+      ADMIN_SESSION_SECRET: preserve(),
       DEMO_ACCESS_CODE: preserve(),
       // Which languages the talk page offers (#87 follow-on). Set to `en` on
       // the hosted service until the Arabic and Hindi packets come back; unset
@@ -165,6 +182,12 @@ export default defineRailway(() => {
       LLM_MODEL: preserve(),
       LLM_THINKING: preserve(),
       OPENROUTER_API_KEY: preserve(),
+      // Phase 2, shared with admin-api and with no other service: the worker
+      // writes buyer payloads and the admin API reads them back, so both need
+      // the same envelope key and the same contact fingerprint key. Neither
+      // ever reaches `web`.
+      PII_ENCRYPTION_KEY: preserve(),
+      PII_HASH_KEY: preserve(),
       PROMPT_MODE: preserve(),
       STT_ENABLED: preserve(),
       STT_MODEL_DEFAULT: preserve(),
@@ -176,7 +199,91 @@ export default defineRailway(() => {
     },
   });
 
+  // The Phase 2 admin API: FastAPI out of the SAME Python image as the worker,
+  // started differently. docs/10-admin.md is the surface contract; docs/01
+  // ADR-018..021 are the decisions.
+  const adminApi = service("admin-api", {
+    source: github(REPO, { branch: "main" }),
+    build: {
+      builder: "DOCKERFILE",
+      // The worker's Dockerfile, unchanged and unforked. One image, two
+      // processes: the difference is the start command below, not a second
+      // build. So the watch patterns have to match the worker's exactly, or
+      // an `agent/**` change would deploy one of the two services that run it.
+      dockerfilePath: "Dockerfile",
+      watchPatterns: ["agent/**", "data/**", "Dockerfile", ".dockerignore"],
+    },
+    deploy: {
+      // Unlike the worker, this service DOES need a start command: the image's
+      // CMD runs the LiveKit worker, and this process is uvicorn.
+      //
+      // `--host ::` and not 127.0.0.1 or 0.0.0.0. Railway's private network is
+      // IPv6, and internal DNS resolves to IPv6 only in environments created
+      // before 2025-10-16; `::` serves both, since a dual-stack listener also
+      // accepts IPv4-mapped connections. A process bound to 127.0.0.1 is
+      // reachable from nothing at all.
+      //
+      // The port is fixed rather than read from PORT, because nothing
+      // publishes this service: there is no domain and no edge proxy to hand
+      // it one. `web` reaches it at admin-api.railway.internal:8080, which is
+      // the value of ADMIN_API_URL above, so the two numbers have to agree.
+      startCommand: "uv run --no-sync uvicorn adapter.admin_api:app --host :: --port 8080",
+      // Migrations run here and nowhere else: once, after the build, before
+      // this deployment takes traffic, and never at ordinary startup
+      // (docs/10-admin.md). A failed pre-deploy stops the deployment and
+      // leaves the previous version serving, which is the behaviour a schema
+      // change wants.
+      //
+      // RECONCILE AT dwight/task-p2-migrations-repo: he owns the runner, the
+      // module below does not exist yet, and docs/10 specifies the phase
+      // rather than the invocation. A pre-deploy command that names a missing
+      // module fails the deployment, so this string is the one thing in this
+      // file that must be checked against his merge before anyone applies it.
+      preDeployCommand: ["uv run --no-sync python -m adapter.migrations up"],
+      // Railway's default is NO time limit, and the failure mode of that
+      // default is the quiet one: a migration blocked on a lock holds the
+      // deployment "in progress" indefinitely rather than failing it. Same
+      // shape as the worker's drain, where the default 0 was also wrong for
+      // us. 300s is ten times a normal migration on a Nano instance and well
+      // inside the platform's 3600s ceiling.
+      preDeployTimeoutSeconds: 300,
+      // No healthcheckPath, deliberately. docs/10 gives this service a
+      // `/ready` that reports NOT ready while the database is unreachable, by
+      // design, so that a Supabase pause degrades the admin surface instead of
+      // taking the deploy down - and a platform healthcheck pointed at it
+      // would convert exactly that state into a failed deployment. `/health`
+      // proves process liveness only and would be safe, but it is dwight's
+      // route to confirm and an undeclared healthcheck blocks nothing.
+      //
+      // No restart policy: on-failure with ten retries is the platform
+      // default, and a declared default is worse than an undeclared one.
+      // No drainingSeconds: this process serves bounded HTTP requests rather
+      // than holding a call open, so the platform default of 0 is right here
+      // and wrong for the worker.
+    },
+    // Amsterdam, beside the other two. `ams` is the same region the worker
+    // spells `europe-west4-drams3a`: Railway stores whichever form is written,
+    // and both plans read clean, so the two spellings in this file are not
+    // drift.
+    replicas: { ams: 1 },
+    // No public domain, and none is declared: every route but `/health` is
+    // bearer-protected, and the way to keep a private API private is to give
+    // it no ingress rather than to guard one. This endpoint name is the host
+    // in ADMIN_API_URL.
+    networking: { privateNetworkEndpoint: "admin-api" },
+    // Names only, as everywhere in this file.
+    variables: {
+      // Shared with `web`, which sends it; this service verifies it.
+      ADMIN_API_TOKEN: preserve(),
+      // The Supabase session-pooler URL, the same value the worker carries.
+      // Present on the two Python services and on no others.
+      DATABASE_URL: preserve(),
+      PII_ENCRYPTION_KEY: preserve(),
+      PII_HASH_KEY: preserve(),
+    },
+  });
+
   return project("voice-ai-binghatti", {
-    resources: [web, agentWorker],
+    resources: [web, agentWorker, adminApi],
   });
 });
