@@ -237,6 +237,21 @@ describe('qualifying and rejecting', () => {
     })
   })
 
+  it('names the revision field the API actually validates', async () => {
+    // Drift found against toby's merged admin_api.py: DecisionRequest declares
+    // `expected_lead_revision` (docs/02- names it that too), and this component
+    // was sending `revision`. The proxy forwards bodies verbatim, so the route
+    // could not catch it - every decision would have 422'd, which reads as a
+    // haunted failure rather than a field name.
+    const sent = stubDecision(201, { revision: 4 })
+    render(<LeadDetail lead={DETAIL} />)
+    await userEvent.click(screen.getByRole('button', { name: /qualify/i }))
+    await userEvent.click(screen.getByRole('button', { name: /save decision/i }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0].body).toMatchObject({ expected_lead_revision: 3 })
+    expect(sent[0].body).not.toHaveProperty('revision')
+  })
+
   it('tells the reviewer to reload when the revision has moved under them', async () => {
     stubDecision(409, { error: 'revision has moved' })
     await renderDetail(DETAIL)
