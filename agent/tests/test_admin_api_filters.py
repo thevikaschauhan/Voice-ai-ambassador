@@ -18,8 +18,15 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import UTC, datetime
+from typing import get_args
 
 import pytest
+
+from ambassador.schemas import Language
+
+# Derived, never restated: a fourth language added to the product must reach
+# these fixtures the day it lands, and the repo has a test that enforces it.
+LANGUAGES = sorted(get_args(Language))
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL_TEST"),
@@ -69,7 +76,7 @@ async def seeded(database):
 
     repository = await Repository.connect(database)
     ids = {}
-    for language in ("en", "ar", "hi"):
+    for language in LANGUAGES:
         ids[language] = await repository.start_lead(
             session_id=f"sess_{language}_{uuid.uuid4().hex[:8]}",
             language=language,
@@ -136,7 +143,7 @@ async def languages_in(client, query: str = "") -> list[str]:
 
 async def test_the_unfiltered_list_returns_every_lead(client):
     """The baseline, so every exclusion below means something."""
-    assert await languages_in(client) == ["ar", "en", "hi"]
+    assert await languages_in(client) == LANGUAGES
 
 
 async def test_the_language_filter_excludes_the_other_languages(client):
@@ -160,7 +167,9 @@ async def test_the_status_filter_still_works_beside_the_new_ones(client, seeded)
         expected_lead_revision=0,
     )
     assert await languages_in(client, "?status=qualified") == ["en"]
-    assert await languages_in(client, "?status=unreviewed") == ["ar", "hi"]
+    assert await languages_in(client, "?status=unreviewed") == [
+        language for language in LANGUAGES if language != "en"
+    ]
 
 
 async def test_status_and_language_narrow_together(client, seeded):
@@ -196,7 +205,7 @@ async def test_a_value_outside_the_enum_is_a_fixed_422(client, query, field):
 async def test_an_unknown_filter_name_does_not_widen_the_list(client):
     """A typo'd parameter must not quietly return everything as though it had
     been honoured."""
-    assert await languages_in(client, "?langauge=ar") == ["ar", "en", "hi"]
+    assert await languages_in(client, "?langauge=ar") == LANGUAGES
 
 
 # --- the control this change is most likely to break ----------------------

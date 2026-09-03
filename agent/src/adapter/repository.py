@@ -68,6 +68,12 @@ class Repository:
         # hide the reason. No second startup line here - the runtime already
         # logs host:port once from the lead store.
         assert_session_mode(dsn)
+        # These two defaults are what makes "Application startup complete" in the
+        # admin API's log mean something (ryan, from the live start): min_size=1
+        # opens a connection eagerly, so the line proves the pool CONNECTED, and
+        # check_schema=True below proves the migration check ran. Change either
+        # to lazy and that log line silently stops carrying either claim, while
+        # still being printed.
         pool = await asyncpg.create_pool(
             dsn,
             min_size=1,
@@ -256,6 +262,7 @@ class Repository:
         self,
         *,
         status: str | None = None,
+        language: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -270,7 +277,10 @@ class Repository:
         wire the day the route forgot to filter.
 
         `contact_status` IS included: whether contact was captured is
-        operational, and the value is not.
+        operational, and the value is not. Filters are AND-ed and each is
+        optional, so a caller that passes neither gets the whole list and one
+        that passes both gets the intersection - which is what two dropdowns on
+        a page produce.
         """
         rows = await self._pool.fetch(
             """
@@ -280,10 +290,12 @@ class Repository:
                    score_version, status, revision, contact_status
             FROM leads
             WHERE ($1::text IS NULL OR status = $1)
+              AND ($2::text IS NULL OR language = $2)
             ORDER BY created_at DESC
-            LIMIT $2 OFFSET $3
+            LIMIT $3 OFFSET $4
             """,
             status,
+            language,
             limit,
             offset,
         )
