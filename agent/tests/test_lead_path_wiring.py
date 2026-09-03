@@ -77,8 +77,7 @@ async def test_no_database_url_says_so_once_and_stays_quiet() -> None:
     assert not [
         name
         for name in names
-        if name != "lead_store_disabled"
-        and ("lead" in name or "analysis" in name)
+        if name != "lead_store_disabled" and ("lead" in name or "analysis" in name)
     ], names
 
 

@@ -98,6 +98,9 @@ def make_settings(**overrides: Any) -> Settings:
         demo_mode=False,
         language="en",
         allow_uncertified_language=False,
+        database_url="",
+        pii_encryption_key="",
+        pii_hash_key="",
         demo_max_call_seconds=0,
     )
     base.update(overrides)

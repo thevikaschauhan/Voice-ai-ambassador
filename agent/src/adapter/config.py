@@ -234,6 +234,15 @@ class Settings:
     # Whether anyone chose `stt_enabled`, rather than inheriting its default.
     # A worker must not be deaf by omission; see `undeclared_for_worker`.
     stt_enabled_explicit: bool
+
+    # The Phase 2 lead store (ADR-018). All three OPTIONAL: absent
+    # DATABASE_URL means "no lead store", not a refusal, because the console,
+    # the eval harness and every laptop run have no database and must keep
+    # working. A DSN with either key missing is the dangerous half-state and
+    # is refused where the writer is built, not here.
+    database_url: str
+    pii_encryption_key: str
+    pii_hash_key: str
     deepgram_api_key: str
     deepgram_model: str
 
@@ -511,6 +520,9 @@ def load_settings(env_path: Path | None = None) -> Settings:
         # stay runnable in text mode without it.
         stt_enabled=_resolve_bool(file_values, "STT_ENABLED", default=False),
         stt_enabled_explicit=_explicit_bool(file_values, "STT_ENABLED"),
+        database_url=_resolve(file_values, "DATABASE_URL"),
+        pii_encryption_key=_resolve(file_values, "PII_ENCRYPTION_KEY"),
+        pii_hash_key=_resolve(file_values, "PII_HASH_KEY"),
         fish_api_key=_resolve(file_values, "FISH_API_KEY"),
         fish_tts_model=_resolve(file_values, "FISH_TTS_MODEL", "s2.1-pro"),
         # These defaults have to be repeated in agent/.env.example, not left

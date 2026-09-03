@@ -27,6 +27,7 @@ from typing import Any, Final
 
 from ambassador.schemas import LeadSnapshot
 
+from .config import Settings
 from .crypto import Sealer
 from .events import EventLog
 from .repository import Repository
@@ -40,6 +41,52 @@ def _dsn_target(dsn: str) -> str:
     """
     tail = dsn.rsplit("@", 1)[-1]
     return tail.split("/", 1)[0] or "unknown"
+
+
+async def build_lead_writer(settings: Settings, log: EventLog) -> "LeadWriter | None":
+    """The writer for this job, or None with the reason on the stream.
+
+    ABSENCE MUST BE READABLE. The audit that produced this function could only
+    tell "not configured" from "not wired" by reading source, so an unset
+    DATABASE_URL emits exactly one `lead_store_disabled` and nothing else.
+
+    A DSN with either key missing REFUSES, naming the variable. Configured
+    halfway is the dangerous state: it would either write buyer text in the
+    clear or fail once per call, and both are worse than not starting.
+
+    A connect failure is not a refusal. The lead store is not on the call path,
+    so an unreachable database degrades to a report and the buyer hears
+    everything they were going to hear (ADR-018).
+    """
+    if not settings.database_url:
+        log.emit("lead_store_disabled", reason="no_database_url")
+        return None
+    missing = [
+        name
+        for name, value in (
+            ("PII_ENCRYPTION_KEY", settings.pii_encryption_key),
+            ("PII_HASH_KEY", settings.pii_hash_key),
+        )
+        if not value
+    ]
+    if missing:
+        raise ValueError(
+            f"DATABASE_URL is set but {', '.join(missing)} is not. Buyer-derived "
+            "payloads are encrypted before they reach Postgres (docs/10-), so a "
+            "lead store without its keys is not a configuration this will run."
+        )
+    try:
+        return await LeadWriter.connect(
+            settings.database_url,
+            encryption_key=settings.pii_encryption_key,
+            hash_key=settings.pii_hash_key,
+            log=log,
+        )
+    except Exception as exc:
+        # Reported in the same shape a failed write uses, with `connect` as the
+        # stage, so one query finds every lost lead whatever went wrong.
+        log.emit("lead_persist_failed", stage="connect", code=_failure_code(exc))
+        return None
 
 
 class LeadWriter:
@@ -136,6 +183,26 @@ class LeadWriter:
                 ),
             )
         return lead_id
+
+    async def mark_analysis_failed(self, lead_id: Any) -> None:
+        """Record a failed analysis without a summary or a score.
+
+        Separate from the finaliser's own failure path because a TIMEOUT is
+        caught by the caller that owns the shutdown budget, not by the analysis
+        itself - and a lead left at `pending` after a timeout would be
+        indistinguishable from one whose analysis never started.
+        """
+        try:
+            await self.repository.put_analysis(
+                lead_id,
+                status="failed",
+                summary=None,
+                score_total=None,
+                score_version=None,
+                breakdown=None,
+            )
+        except Exception:
+            return None
 
     async def persist_or_report(
         self, snapshot: LeadSnapshot, *, log: EventLog
