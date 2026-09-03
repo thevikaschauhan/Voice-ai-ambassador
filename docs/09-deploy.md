@@ -1018,6 +1018,14 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    move from the Supabase dashboard into Railway directly. A connection string
    contains the database password, so it never goes into a commit, a ticket, a
    terminal transcript, a chat message or this file.
+
+   One of those values is not a secret and is fixed by the configuration rather
+   than chosen: `ADMIN_API_URL` on `web` is
+   `http://admin-api.railway.internal:8080`. The host is the private endpoint
+   `.railway/railway.ts` declares for `admin-api`, the port is the one its start
+   command binds, and `http` rather than `https` because private traffic is
+   already encrypted by Railway. It is set by hand because Railway's reference
+   variables can supply the bare host but cannot add a scheme and a port.
 5. **Tell whoever runs `apply`** that the values are in place. The apply is a
    separate step from provisioning and comes after, because the variable names
    are already declared and `preserve()` never writes a value.
