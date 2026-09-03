@@ -143,10 +143,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     A PRESENT BUT BAD DSN is a different case and this lifespan does NOT make
     it graceful: `Repository.connect` raises and the app does not start. The
     property that keeps that from reaching a deploy is dwight's session-mode
-    guard in the pre-deploy step, one layer earlier - it failed the deploy on a
-    wrong pooler port before the process was ever launched. Named here so that
-    nobody later relaxes that guard on the theory that the app degrades
-    gracefully, because it does not; graceful is only the missing case.
+    guard in the pre-deploy step, one layer earlier - it refuses a DIRECT
+    database host before the process is ever launched. Not a wrong pooler
+    port: port 6543 passed the pre-deploy check, and every refusal the guard
+    has actually made names the direct host. That is the stronger reason to
+    keep it, because a direct host resolves and accepts connections, so
+    nothing downstream would have called it wrong. Named here so that nobody
+    later relaxes that guard on the theory that the app degrades gracefully,
+    because it does not; graceful is only the missing case.
     """
     if not hasattr(app.state, "log"):
         app.state.log = EventLog(session_id="admin-api")
