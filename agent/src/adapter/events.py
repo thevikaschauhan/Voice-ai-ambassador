@@ -206,6 +206,16 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     # closing words are their own text and stay in the TurnRecord like
     # every other utterance.
     "call_ended": "one of five fixed reasons",
+    # An enum stage and an enum code, never an exception string and never
+    # a buyer word (docs/10-). A lead that failed to save has to be
+    # visible to operations without the log becoming a data leak.
+    "lead_persisted": "a turn count and an elapsed time",
+    # host:port, and deliberately not the DSN, which carries the password.
+    # It is here because the pooler PORT is the difference between session
+    # and transaction mode (ADR-018) - a real thing to get wrong and an
+    # invisible one to diagnose without one startup line.
+    "lead_store_connected": "a host and port, never the DSN",
+    "lead_persist_failed": "an enum stage and an enum code",
     # Counts and booleans about a near miss, never the utterance. The
     # buyer's closing words are their own text; what tuning needs is how
     # many tokens were in the way and whether one was the ambassador's
@@ -1006,6 +1016,7 @@ class TurnTracker:
             model=self.model,
             prompt_mode=self.prompt_mode,  # type: ignore[arg-type]
             guardrail_mode=self.guardrail_mode,  # type: ignore[arg-type]
+            audit_incomplete=audit_incomplete,
         )
         self._log.add_turn(record)
         self._log.emit(

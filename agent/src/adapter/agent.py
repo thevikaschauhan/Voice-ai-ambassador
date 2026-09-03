@@ -70,6 +70,7 @@ from ambassador.farewell import (
     read_farewell,
 )
 from ambassador.guardrails.prohibited import languages_covered, load_patterns
+from ambassador.schemas import LeadSnapshot
 from ambassador.inventory import (
     build_allowed_figures,
     load_inventory,
@@ -108,10 +109,11 @@ from .confirmations import (
 from .confirmations import compose as compose_confirmation
 from .confirmations import compose_project as compose_project_confirmation
 from .disclosure import load_disclosures, resolve_opening
-from .events import EventLog, TurnTracker
+from .events import EventLog, TurnTracker, _now_iso
 from .events_bridge import EventsBridge, bridge_from_env
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
 from .levels import apply_gain, gain_for
+from .persist import LeadWriter
 from .lexicon import load_lexicon, respell_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
 from .stt_factory import build_stt, describe
@@ -405,6 +407,11 @@ class AmbassadorAgent(Agent):
         # over the first would be the same defect class as the double
         # handover `record_escalation` exists to prevent.
         self._closing = False
+        # Recorded for the durable lead: the reason is set by whichever
+        # close path ran, and `buyer_left` is the honest default for a
+        # session that simply stopped.
+        self._call_end_reason: str = "buyer_left"
+        self._started_at = _now_iso()
         # The turn whose audio, once over, ends the call. Set when the farewell
         # is handed the turn; read in `_seal`.
         self._closing_turn: int | None = None
@@ -742,6 +749,34 @@ class AmbassadorAgent(Agent):
                 ) from exc
         return composed
 
+    def lead_snapshot(self, *, ended_at: str) -> LeadSnapshot:
+        """Freeze this call for the durable lead (docs/10- step 3).
+
+        Built from the FULL-FIDELITY turns and the last accepted brief, never
+        from the emitted stream, which is redacted precisely so that it cannot
+        be used this way.
+
+        `ended_cleanly` is the call-level answer and is false when any turn was
+        sealed with an unresolved handle - a truncated call must not read like a
+        complete one. Per-turn `audit_incomplete` stays on the turns as well,
+        because the call-level flag cannot say WHICH turn was stranded.
+        """
+        turns = self._log.turns
+        return LeadSnapshot(
+            session_id=self._log.session_id,
+            started_at=self._started_at,
+            ended_at=ended_at,
+            call_end_reason=self._call_end_reason,
+            ended_cleanly=not any(turn.audit_incomplete for turn in turns),
+            language=self._settings.language,
+            requested_language=self._settings.language,
+            uncertified_fallback=(self._opening_language != self._settings.language),
+            inventory_version=f"{len(self._projects)}-records",
+            ambassador_name=self._ambassador_name,
+            turns=turns,
+            brief=self._brief.last_good(),
+        )
+
     def _compose_farewell(self) -> str:
         """The authored farewell, validated through the guardrails now.
 
@@ -866,6 +901,7 @@ class AmbassadorAgent(Agent):
         if self._closing:
             return
         self._closing = True
+        self._call_end_reason = reason
         self._log.emit("call_ended", reason=reason)
         if self._close_call is not None:
             self._closing_task = asyncio.create_task(self._close_call(reason))
@@ -915,6 +951,7 @@ class AmbassadorAgent(Agent):
         if self._closing:
             return
         self._closing = True
+        self._call_end_reason = "buyer_left"
         self._log.emit("call_ended", reason="buyer_left")
 
     def _fixed_line(self, key: str) -> str:
@@ -1685,6 +1722,7 @@ async def shutdown_session(
     # importing it here; `from __future__ import annotations` kept that a
     # lazy string, so it never raised, it just stopped meaning anything.
     stt_node: stt.STT | None,
+    lead_writer: "LeadWriter | None" = None,
 ) -> None:
     """Close everything the session owns, in order.
 
@@ -1699,6 +1737,16 @@ async def shutdown_session(
     agent.finalise_pending_turn()
     await agent.brief_extractor.drain()
     await agent.brief_extractor.aclose()
+    # AFTER the drain and before the providers close: the drain exists so the
+    # last turn's brief is awaited, and persisting earlier would lose the best
+    # brief of the call - the field the admin side is for (docs/10- step 3-4).
+    # `persist_or_report` cannot raise, so nothing here can stop the job
+    # ending: ADR-018 is explicit that an unavailable database never blocks a
+    # call, and by this point the farewell has already been heard.
+    if lead_writer is not None:
+        await lead_writer.persist_or_report(
+            agent.lead_snapshot(ended_at=_now_iso()), log=log
+        )
     if stt_node is not None:
         await stt_node.aclose()
     await llm.aclose()

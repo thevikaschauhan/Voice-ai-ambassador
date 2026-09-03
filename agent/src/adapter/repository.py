@@ -129,6 +129,14 @@ class Repository:
             ended_cleanly,
         )
 
+    async def set_ambassador_name(self, lead_id: Any, name: str) -> None:
+        """Which ambassador answered. Part of the lead, because the client
+        chose three names and an admin needs to know who the buyer believes
+        they spoke to."""
+        await self._pool.execute(
+            "UPDATE leads SET ambassador_name = $2 WHERE id = $1", lead_id, name
+        )
+
     async def put_brief(self, lead_id: Any, brief: dict[str, Any] | None) -> None:
         await self._pool.execute(
             "UPDATE leads SET brief = $2 WHERE id = $1",

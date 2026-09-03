@@ -13,6 +13,11 @@ dependencies = [
     # stack. The core-only gate still installs it and still passes: the
     # adapter's database tests gate on DATABASE_URL_TEST, not on the import.
     "asyncpg>=0.30",
+    # Authenticated encryption for buyer-derived payloads (docs/10-).
+    # A dependency rather than a hand-rolled construction because AEAD is
+    # the canonical thing not to write yourself, and the admin API needs
+    # the same envelope to read what the worker wrote.
+    "cryptography>=43.0",
 ]
 
 # `uv run eval` (docs/05-). Offline by default: no key, no network, no spend,

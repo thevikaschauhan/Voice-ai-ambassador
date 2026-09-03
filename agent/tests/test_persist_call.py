@@ -27,8 +27,11 @@ pytestmark = pytest.mark.skipif(
     reason="DATABASE_URL_TEST is not set; see tests/test_migrations.py",
 )
 
-KEY = "k" * 64  # 32 bytes, hex
-HASH_KEY = "h" * 64
+# 32 bytes each, as hex. Real hex digits: "k" is not one, and the loader
+# rightly rejects a key it cannot decode rather than quietly using the
+# literal characters.
+KEY = "0a" * 32
+HASH_KEY = "1b" * 32
 
 
 @pytest.fixture
@@ -262,6 +265,7 @@ async def test_a_database_failure_never_blocks_the_shutdown(database: str) -> No
     # Must NOT raise.
     lead_id = await writer.persist_or_report(_snapshot("sess_boom"), log=log[0])
     assert lead_id is None
+    await log[0].aclose()
     events = _events(log)
     assert any(e["event"] == "lead_persist_failed" for e in events)
 
@@ -278,6 +282,7 @@ async def test_the_failure_event_carries_no_buyer_words_and_no_exception_text(
 
     log = _log()
     await writer.persist_or_report(_snapshot("sess_boom"), log=log[0])
+    await log[0].aclose()
     written = log[1].getvalue()
 
     assert "studio at Skyrise" not in written
@@ -310,8 +315,4 @@ def _log():
 def _events(log) -> list[dict]:
     import json
 
-    return [
-        json.loads(line)
-        for line in log[1].getvalue().splitlines()
-        if line.strip()
-    ]
+    return [json.loads(line) for line in log[1].getvalue().splitlines() if line.strip()]

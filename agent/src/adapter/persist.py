@@ -1,0 +1,223 @@
+"""Freeze one call into the durable lead (ADR-020, docs/10- Lead finalisation).
+
+Every call becomes a lead - a farewell, a cap, a disconnect. The source is the
+in-process full-fidelity turns and the last accepted brief, NOT the redacted
+event stream, which deliberately does not carry buyer utterances, model
+sentences or most of the brief.
+
+TWO RULES SHAPE EVERY DECISION HERE.
+
+Nothing buyer-derived reaches Postgres in the clear: the brief, the summary,
+each turn's payload and the contact values are sealed by `adapter.crypto`
+first, bound to their lead and field. Phone and email additionally carry a
+keyed fingerprint so two calls from one buyer are findable without indexing the
+clear value.
+
+And persistence never blocks a call. It runs after speech has finished, its
+timeouts are bounded, and `persist_or_report` swallows every failure into a
+classified event carrying an enum stage and code - never an exception string,
+never a buyer word. A missing lead is an operations problem; a farewell that
+waited on Postgres would be the buyer's problem.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Final
+
+from ambassador.schemas import LeadSnapshot
+
+from .crypto import Sealer
+from .events import EventLog
+from .repository import Repository
+
+
+def _dsn_target(dsn: str) -> str:
+    """`host:port`, for one startup line. Never the DSN - it carries the
+    password - and useful because the pooler's PORT is the difference between
+    session mode and transaction mode (ADR-018), which is a real thing to get
+    wrong and an invisible one to diagnose.
+    """
+    tail = dsn.rsplit("@", 1)[-1]
+    return tail.split("/", 1)[0] or "unknown"
+
+
+class LeadWriter:
+    """The one writer of a lead. Owns the repository and the sealer together,
+    because a repository without a sealer could only write plaintext."""
+
+    def __init__(self, repository: Repository, sealer: Sealer) -> None:
+        self.repository = repository
+        self._sealer = sealer
+
+    @classmethod
+    async def connect(
+        cls,
+        dsn: str,
+        *,
+        encryption_key: str,
+        hash_key: str,
+        log: EventLog | None = None,
+    ) -> "LeadWriter":
+        # The sealer FIRST, so a process with no key fails before it opens a
+        # pool: the alternative ordering gets a working database and no way to
+        # write to it safely.
+        sealer = Sealer(encryption_key=encryption_key, hash_key=hash_key)
+        repository = await Repository.connect(dsn)
+        if log is not None:
+            log.emit("lead_store_connected", target=_dsn_target(dsn))
+        return cls(repository, sealer)
+
+    async def close(self) -> None:
+        await self.repository.close()
+
+    async def persist(self, snapshot: LeadSnapshot) -> Any:
+        """Write the snapshot. Idempotent on `session_id`.
+
+        The lead row goes in first and the turns after, so a failure part way
+        leaves a lead that says a call happened rather than nothing at all -
+        which is ADR-020's whole point about a failed analysis.
+        """
+        lead_id = await self.repository.start_lead(
+            session_id=snapshot.session_id,
+            language=snapshot.language,
+            requested_language=snapshot.requested_language,
+            uncertified_fallback=snapshot.uncertified_fallback,
+            inventory_version=snapshot.inventory_version,
+            started_at=_moment(snapshot.started_at),
+        )
+        await self.repository.finish_lead(
+            lead_id,
+            ended_at=_moment(snapshot.ended_at),
+            call_end_reason=snapshot.call_end_reason,
+            ended_cleanly=snapshot.ended_cleanly,
+        )
+        await self.repository.set_ambassador_name(lead_id, snapshot.ambassador_name)
+
+        if snapshot.brief is not None:
+            await self.repository.put_brief(
+                lead_id,
+                self._sealer.seal(
+                    lead_id, "brief", snapshot.brief.model_dump_json().encode("utf-8")
+                ),
+            )
+
+        contact = snapshot.contact
+        await self.repository.put_contact(
+            lead_id,
+            status=contact.status,
+            asked_turn_index=contact.asked_turn_index,
+            source_turn_index=contact.source_turn_index,
+            name=self._seal_optional(lead_id, "contact.name", contact.name),
+            phone=self._seal_optional(lead_id, "contact.phone", contact.phone),
+            email=self._seal_optional(lead_id, "contact.email", contact.email),
+            # Recomputed here rather than trusted from the snapshot: the
+            # fingerprint is only meaningful if it came from this key.
+            phone_fingerprint=(
+                self._sealer.fingerprint(contact.phone) if contact.phone else None
+            ),
+            email_fingerprint=(
+                self._sealer.fingerprint(contact.email) if contact.email else None
+            ),
+            contact_permission=contact.contact_permission,
+            confirmed=contact.confirmed,
+        )
+
+        for turn in snapshot.turns:
+            await self.repository.add_turn(
+                lead_id,
+                turn_index=turn.turn_index,
+                timestamp=_moment(turn.timestamp),
+                audit_incomplete=turn.audit_incomplete,
+                payload=self._sealer.seal(
+                    lead_id,
+                    f"turns.{turn.turn_index}",
+                    turn.model_dump_json().encode("utf-8"),
+                ),
+            )
+        return lead_id
+
+    async def persist_or_report(
+        self, snapshot: LeadSnapshot, *, log: EventLog
+    ) -> Any | None:
+        """Persist, or say why on the event stream and carry on.
+
+        The return value is the lead id or None, so a caller can tell the
+        difference - but no caller may depend on it, because ADR-018 is
+        explicit that an unavailable database never blocks the job ending.
+        """
+        started = time.monotonic()
+        try:
+            lead_id = await self.persist(snapshot)
+        except Exception as exc:
+            log.emit(
+                "lead_persist_failed",
+                stage="write",
+                code=_failure_code(exc),
+                turns=len(snapshot.turns),
+            )
+            return None
+        log.emit(
+            "lead_persisted",
+            turns=len(snapshot.turns),
+            elapsed_ms=round((time.monotonic() - started) * 1000, 1),
+        )
+        return lead_id
+
+    def _seal_optional(
+        self, lead_id: Any, field_path: str, value: str | None
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return self._sealer.seal(lead_id, field_path, value.encode("utf-8"))
+
+
+# OUR vocabulary, not the driver's. An exception class name looks like a code
+# and is not one: it is an open set owned by asyncpg, so it would put a
+# third-party taxonomy into an audit stream whose whole discipline is that
+# every field is enumerated. Four buckets, chosen because they are the four
+# different things an operator would DO about it.
+_FAILURE_CODES: Final = (
+    (
+        "unavailable",
+        (
+            "InterfaceError",
+            "ConnectionDoesNotExistError",
+            "CannotConnectNowError",
+            "ConnectionRefusedError",
+            "TooManyConnectionsError",
+            "PostgresConnectionError",
+        ),
+    ),
+    ("timeout", ("TimeoutError", "QueryCanceledError")),
+    (
+        "rejected",
+        (
+            "CheckViolationError",
+            "UniqueViolationError",
+            "NotNullViolationError",
+            "ForeignKeyViolationError",
+            "DataError",
+            "RaiseError",
+        ),
+    ),
+    ("schema", ("UndefinedTableError", "UndefinedColumnError", "SchemaOutOfDate")),
+)
+
+
+def _failure_code(exc: BaseException) -> str:
+    """One of a closed set. Never the exception's message, which can carry a
+    DSN, a column value or a buyer word."""
+    names = {cls.__name__ for cls in type(exc).__mro__}
+    for code, matches in _FAILURE_CODES:
+        if names.intersection(matches):
+            return code
+    return "unknown"
+
+
+def _moment(value: str) -> Any:
+    """An ISO string to a datetime, since the snapshot carries strings and
+    Postgres wants an instant."""
+    from datetime import datetime
+
+    return datetime.fromisoformat(value)

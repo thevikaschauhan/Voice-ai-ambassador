@@ -200,6 +200,12 @@ class TurnRecord(BaseModel):
     model: str
     prompt_mode: Literal["ambassador", "naive"]
     guardrail_mode: Literal["enforce", "warn"]
+    # True only when teardown stranded an unresolved speech handle, so whether
+    # the last chunk finished playing is UNKNOWN rather than known-good. It
+    # lives on the record and not only on the emitted event because the durable
+    # lead keeps it per turn (docs/10-): a stranded final turn has to stay
+    # visible as that turn, not just as a call-level flag.
+    audit_incomplete: bool = False
 
 
 # --- Booking (STUB:) ------------------------------------------------------
