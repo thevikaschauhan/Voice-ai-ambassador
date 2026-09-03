@@ -229,6 +229,165 @@ class Repository:
             lead[field] = _envelope(lead[field])
         return lead
 
+    # -- reads the admin API needs (task-p2-admin-api) --------------------
+    #
+    # Added here rather than in the route handlers because ADR-021 gives the
+    # repository the database and the API the domain, and SQL in a handler
+    # would be a second place the schema is known. Read-only: no schema change
+    # and no new column.
+
+    async def ping(self) -> None:
+        """Cheapest possible round trip, for `/ready` and the keep-alive probe.
+
+        `SELECT 1` rather than a schema check: readiness asks whether Postgres
+        is answering, and the schema is verified once at connect
+        (`assert_schema_current`). A pause under ADR-018's free tier shows up
+        here as a raised connection error, which is the caller's to interpret.
+        """
+        await self._pool.fetchval("SELECT 1")
+
+    async def list_leads(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """The lead LIST projection, and the column list is the security control.
+
+        docs/10-: "The lead list shows only operational fields... Buyer words
+        and contact values appear on the detail page only." So this deliberately
+        does not `SELECT *` the way `get_lead` does - it names its columns, and
+        `brief`, `summary`, `contact_name`, `contact_phone` and `contact_email`
+        are absent from that list. A list page cannot leak a transcript it was
+        never handed, and `SELECT *` here would put every one of those on the
+        wire the day the route forgot to filter.
+
+        `contact_status` IS included: whether contact was captured is
+        operational, and the value is not.
+        """
+        rows = await self._pool.fetch(
+            """
+            SELECT id, session_id, created_at, ended_at, call_end_reason,
+                   ended_cleanly, language, requested_language,
+                   uncertified_fallback, analysis_status, score_total,
+                   score_version, status, revision, contact_status
+            FROM leads
+            WHERE ($1::text IS NULL OR status = $1)
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            """,
+            status,
+            limit,
+            offset,
+        )
+        return [dict(row) for row in rows]
+
+    async def reset_analysis(self, lead_id: Any) -> None:
+        """Put a failed analysis back to pending, for docs/10-'s bounded retry.
+
+        Deliberately narrow: it moves the status and clears the previous
+        failure's outputs, and it does NOT touch the turns or the brief. The
+        durable call survives a retry that fails again, which is the whole
+        reason the snapshot is written before analysis is attempted.
+        """
+        result = await self._pool.execute(
+            """
+            UPDATE leads
+            SET analysis_status = 'pending', summary = NULL,
+                score_total = NULL, score_version = NULL, score_breakdown = NULL
+            WHERE id = $1 AND analysis_status = 'failed'
+            """,
+            lead_id,
+        )
+        if result.endswith(" 0"):
+            raise LookupError(f"no failed lead {lead_id}")
+
+    # -- knowledge reads --------------------------------------------------
+
+    async def list_documents(self) -> list[dict[str, Any]]:
+        """Latest revision of each document, without the extracted text.
+
+        The text is excluded for the same reason the lead list excludes the
+        transcript: it is the commercial content, a list does not need it, and
+        a response that never carries it cannot leak it.
+        """
+        rows = await self._pool.fetch(
+            """
+            SELECT DISTINCT ON (id)
+                   id, revision, title, source_type, original_filename,
+                   mime_type, source_bytes, status, parse_error_code,
+                   created_at, updated_at, published_at
+            FROM knowledge_documents
+            ORDER BY id, revision DESC
+            """
+        )
+        return [dict(row) for row in rows]
+
+    async def get_document(
+        self, document_id: Any, *, revision: int | None = None
+    ) -> dict[str, Any]:
+        """One document revision, text included. The latest when unspecified."""
+        if revision is None:
+            row = await self._pool.fetchrow(
+                """
+                SELECT * FROM knowledge_documents
+                WHERE id = $1 ORDER BY revision DESC LIMIT 1
+                """,
+                document_id,
+            )
+        else:
+            row = await self._pool.fetchrow(
+                """
+                SELECT * FROM knowledge_documents
+                WHERE id = $1 AND revision = $2
+                """,
+                document_id,
+                revision,
+            )
+        if row is None:
+            raise LookupError(f"no document {document_id}")
+        return dict(row)
+
+    async def get_chunks(
+        self, document_id: Any, *, revision: int
+    ) -> list[dict[str, Any]]:
+        # Columns named rather than `SELECT *`: the table carries a
+        # `search_vector` tsvector, which is an index artefact rather than
+        # domain data and has no JSON form to hand an API client.
+        rows = await self._pool.fetch(
+            """
+            SELECT id, document_id, document_revision, ordinal, heading, body,
+                   retrieval_scope, project_id, scope_review_id, conflict_code,
+                   prompt_body, page_start, page_end, content_sha
+            FROM knowledge_chunks
+            WHERE document_id = $1 AND document_revision = $2
+            ORDER BY ordinal
+            """,
+            document_id,
+            revision,
+        )
+        return [dict(row) for row in rows]
+
+    async def get_figures(
+        self, document_id: Any, *, revision: int
+    ) -> list[dict[str, Any]]:
+        """Every extracted occurrence, approved or not.
+
+        The admin review list needs the unapproved ones - that is what it is
+        for - so this does not filter on `active_approval_id`.
+        """
+        rows = await self._pool.fetch(
+            """
+            SELECT * FROM knowledge_figures
+            WHERE document_id = $1 AND document_revision = $2
+            ORDER BY chunk_id, id
+            """,
+            document_id,
+            revision,
+        )
+        return [dict(row) for row in rows]
+
     async def add_turn(
         self,
         lead_id: Any,
