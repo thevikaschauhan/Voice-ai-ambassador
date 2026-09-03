@@ -104,6 +104,24 @@ def make_settings(**overrides: Any) -> Settings:
     return Settings(**base)
 
 
+def test_the_voice_session_start_matches_the_text_mode_contract():
+    settings = make_settings(
+        llm_model="test/model-slug",
+        language="hi",
+        prompt_mode="naive",
+        guardrail_mode="warn",
+    )
+
+    assert adapter_agent._session_start_fields(settings) == {
+        "config": settings.redacted(),
+        "model": "test/model-slug",
+        "language": "hi",
+        "prompt_mode": "naive",
+        "guardrail_mode": "warn",
+        "inventory_version": adapter_agent.Harness.load().prompt_fingerprint("hi"),
+    }
+
+
 # --- fakes ----------------------------------------------------------------
 
 

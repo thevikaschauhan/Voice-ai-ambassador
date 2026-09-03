@@ -180,7 +180,11 @@ _REDACTED_FIELDS: Final[dict[str, tuple[str, ...]]] = {
 # Events with no free-text field at all. The value is the reason, and it is
 # there to be read in review: "I could not think of one" is not a reason.
 CLEAR_EVENTS: Final[dict[str, str]] = {
-    "session_start": "the already-redacted config summary: model names, modes, booleans",
+    # `config` has already masked credentials; `model` is the configured LLM
+    # slug; `language`, `prompt_mode` and `guardrail_mode` are closed enums;
+    # `inventory_version` is a 12-character SHA-256 prompt digest, never the
+    # prompt or inventory itself. Each is configuration, not buyer free text.
+    "session_start": "a redacted config, configured enums and a prompt digest",
     "session_end": "a turn count",
     # Two language codes and two adapter-authored words. The room metadata this
     # reads is written by another service, and NONE of it is emitted: `reason`
