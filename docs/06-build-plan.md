@@ -38,15 +38,121 @@ A head start already exists: the pure core (schemas, inventory loading with comp
 
 ### Faked (`STUB:`)
 
-Booking = spoken read-back, no calendar. CRM write = console log behind an interface. Inventory = hand-authored file, not a feed.
+Booking = spoken read-back, no calendar. CRM write = console log behind an
+interface **in Phase 1 only; P2-S02 replaces it with the durable lead record**.
+Inventory = hand-authored file, not a feed.
 
 ### Deferred (do not build; present as roadmap)
 
-Remaining three languages - SIP/80015 - WhatsApp follow-up - durable event store + PII hashing - per-referenced-project allowed-set scoping - `compute_payment` tool - POC 2 - everything `PHASE-2:`.
+Remaining three languages - SIP/80015 - WhatsApp follow-up -
+per-referenced-project inventory scoping - `compute_payment` tool - POC 2.
+The durable event store, encrypted/hashed PII, admin leads and knowledge corpus
+are no longer deferred: the Phase 2 contract below promotes them deliberately.
+Other older `PHASE-2:` markers remain roadmap unless a row below names them.
 
 On the hosted client demo specifically, three things are deliberately absent rather than unfinished. **The latency meter, the guardrail and violation panels, and the ambassador brief stay laptop-only**: they carry the unredacted records that issue #30 keeps loopback-bound, and they are the tech lead's screen in the meeting rather than the client's. **Hosted text mode** stays laptop-only for the same reason it exists, being a fallback for a room with bad audio; on the hosted service it refuses with a reason instead of serving a script. **A transport for the event bridge between services** is not built, because the bridge's loopback restriction is a security property and replacing it is design work this POC does not need once the transcript comes from the framework. The hosted page says which panels it is not showing, in one sentence.
 
 On hosting specifically: one Railway project with one environment, so no staging tier. No custom domain (the generated Railway domain is the demo URL), no autoscaling, and no replica count above one. The web gates are no longer on that list: `npm test`, `npm run typecheck`, `npm run lint` and `npm run build` run as a third job in `gates.yml`. All of these are consequences of the two-service topology rather than separate choices; `docs/09-deploy.md` is where they are argued.
+
+## Phase 2 - admin leads and knowledge base
+
+This phase begins after the working voice POC. Its architecture is ADR-018
+through ADR-021 and its surface contract is `docs/10-admin.md`. The human has
+approved Supabase Postgres, one shared admin code, one declinable contact ask,
+the per-figure document gate, the four ingestion formats, and the explainable
+score. The tables below are therefore decisions, not a menu.
+
+### Phase 2 ships
+
+| ID | Item | Note |
+|---|---|---|
+| P2-S01 | Supabase Postgres and migrations | Frankfurt free project; portable plain Postgres through the IPv4 session pooler; small explicit asyncpg pools; versioned SQL under `agent/`; no Supabase SDK/Auth/Storage/RLS |
+| P2-S02 | Durable lead snapshot for every call | Project full-fidelity turns and last accepted brief after brief drain; idempotent on session id; `buyer_left` and incomplete calls included |
+| P2-S03 | Structured summary and interest score | Pydantic model output with evidence turns; score arithmetic and versioned generic weights in pure code; analysis failure keeps the lead |
+| P2-S04 | Manual qualify/reject with audit | Score is guidance; append-only decisions update status transactionally with optimistic revision checks |
+| P2-S05 | One-time contact capture | Name plus phone or email, declinable; first goodbye may be intercepted once; second goodbye closes; phone digits are read back deterministically |
+| P2-S06 | Knowledge paste and upload | Synchronous bounded parsing for PDF, DOCX, TXT and pasted text; scanned PDFs fail visibly as no extractable text |
+| P2-S07 | Deterministic chunks, scope review and per-figure review | Paragraph-aware chunks default admin-only; inventory-governed project prose stays out of prompts; extracted occurrence list shows value, unit/currency, source sentence and page; only individually approved figures in eligible chunks are active |
+| P2-S08 | Full-text retrieval in the voice path | Published `general_knowledge` chunks only; inventory-governed brochure prose excluded; Postgres `simple` search; at most four chunks; once per final turn, cached across repeat `llm_node` calls, at most 250ms before `llm_ttft` |
+| P2-S09 | Retrieved-figure guardrail extension | Approved figures from retrieved chunks extend that turn's set; withheld/revoked values are removed before prompting; no validator bypass |
+| P2-S10 | Python admin API | Private FastAPI service from the same Python image; bearer-protected lead, decision and knowledge routes; only health is unauthenticated |
+| P2-S11 | Protected `/admin` web surface | Shared code, unset-closed and rate-limited; signed HttpOnly session; fixed server proxy routes add the bearer; lead/detail/decision and knowledge-review UI |
+| P2-S12 | Durable audit and PII protection | Existing clear-event classification persists; buyer payloads use authenticated encryption; phone/email use a separate keyed fingerprint; no buyer words on stdout |
+| P2-S13 | Deployed failure, pause and restart behavior | Railway hosts web, worker and private admin API; Supabase hosts Postgres; daily keep-active query plus pre-demo one-click-restore check in `docs/09-`; database pause/outage never blocks a call; saved records and approvals survive restarts |
+
+### Phase 2 faked (`STUB:`)
+
+| Item | Honest boundary |
+|---|---|
+| CRM integration | The admin database is the lead system of record. No Salesforce/HubSpot write or salesperson notification |
+| Actor identity | Shared-code decisions record actor `admin`, not a named employee |
+| Delivery guarantee | A failed database write emits a clear failure event. There is no local durable spool or at-least-once queue |
+| Free-tier availability | One scheduled low-cost query each day mitigates the roughly seven-day inactivity pause; it is not a production uptime commitment or substitute for the pre-demo state check. Published 500 MB database cap is `VERIFY:` in the creation dashboard |
+| Retention automation | The schema carries `retention_expires_at` and an audited delete route. The legal period is still `VERIFY:` and no scheduled purge runs yet |
+
+### Phase 2 deferred
+
+| Item | Trigger to revisit |
+|---|---|
+| Per-user login, roles and named actor attribution | More than the approved POC shared code or more than one admin role |
+| Multi-tenant knowledge and tenant-specific keys | A second merchant/developer enters the deployment |
+| Embeddings/vector search | Measured full-text misses or corpus growth beyond the approved 10-15 documents |
+| OCR/scanned PDFs, images, legacy DOC, XLSX and URL ingestion | A real source arrives in one of those formats |
+| Supabase Storage or another object store | Original upload retention or corpus size makes extracted-text-only storage insufficient |
+| Background ingestion workers and a job queue | Synchronous parse exceeds route limits at measured document sizes |
+| Local persistence spool and at-least-once delivery | Lead-loss tolerance becomes stricter than the POC's loud failure |
+| Automatic qualification/rejection | Never without a separate human decision, policy and audit ADR |
+| CRM sync, notifications and outbound follow-up | Binghatti names the target system and consent flow |
+
+### Phase 2 TDD contract
+
+Every implementation card lands as a RED commit containing a test that
+compiles, runs and fails for the intended missing behavior; a GREEN commit with
+the smallest implementation; and an optional refactor commit. The task branch
+keeps those commits unsquashed until god merges, and the PR description names
+all three. A test written after the implementation does not satisfy this wave.
+
+Every ships row has one first RED test:
+
+| Ships ID | Layer | RED test and intended failure |
+|---|---|---|
+| P2-S01 | pytest adapter | `test_migrations_create_and_round_trip_the_phase_2_schema` fails against an empty temporary Postgres database because no migration exists |
+| P2-S02 | pytest adapter | `test_buyer_left_persists_after_brief_drain_with_incomplete_audit_flag` fails because `shutdown_session` has no repository hook |
+| P2-S03 | pytest core | `test_every_rubric_signal_contributes_only_its_documented_points` fails because the rubric loader and scorer do not exist |
+| P2-S04 | route test | `test_a_decision_appends_history_and_rejects_a_stale_lead_revision` fails because no decision route or transaction exists |
+| P2-S05 | pytest adapter | `test_first_goodbye_asks_once_second_goodbye_closes_and_decline_is_valid` fails because the contact policy does not exist |
+| P2-S06 | route test | `test_pdf_docx_txt_and_paste_parse_while_a_scanned_pdf_reports_no_text` fails because the ingestion route and adapters do not exist |
+| P2-S07 | pytest core | `test_chunks_default_closed_and_inventory_governed_prose_never_enters_prompt_context` fails because the chunk/scope builder does not exist |
+| P2-S08 | pytest adapter | `test_retrieval_runs_once_per_final_turn_and_is_reused_by_repeat_llm_nodes` fails because the model path has no retrieval seam |
+| P2-S09 | pytest core | `test_only_approved_figures_from_retrieved_chunks_extend_the_turn_set` fails because the dynamic figure context does not exist |
+| P2-S10 | route test | `test_every_non_health_admin_route_refuses_a_missing_or_wrong_bearer` fails before FastAPI is mounted |
+| P2-S11 | vitest | `admin stays closed when ADMIN_ACCESS_CODE is absent and never serialises the upstream token` fails before the admin gate and proxy exist |
+| P2-S12 | pytest adapter | `test_buyer_payloads_encrypt_while_phase_2_events_contain_no_buyer_words` fails because the encryption and classified projections do not exist |
+| P2-S13 | live smoke | `disconnect_upload_retrieve_revoke_decide_survive_restart` fails on the undeployed two-host topology |
+
+### Phase 2 gates
+
+- Core contracts, score arithmetic, chunking and dynamic allowed figures have
+  100% branch coverage and no framework, database or FastAPI import.
+- `cd agent && uv run pytest && uv run ruff check . && uv run ruff format --check .`
+  passes with the Postgres integration fixture included.
+- `cd web && npm test && npm run typecheck && npm run lint && npm run build`
+  passes; `/admin` is keyboard-complete, has visible focus and works at 375px.
+- All four parsers reject wrong MIME/extension, oversize and malformed input;
+  scans report `no_extractable_text` and never publish an empty document.
+- A prompt-injection document cannot change persona, tools, guardrail mode or
+  make a withheld figure speak.
+- Approved figure, revocation, wrong-chunk figure and unapproved figure cases
+  pass through the real `process_sentence()` order.
+- Retrieval adds no more than 250ms p50 at the approved corpus size and occurs
+  once per buyer turn, not once per `llm_node` invocation.
+- English contact capture passes live with phone read-back. Arabic and Hindi
+  remain disabled until their reviewer-packet copy and digit sequence are
+  native-approved; no English fallback asks for PII in those calls.
+- A paused/unreachable database completes the voice call and emits
+  `lead_persist_failed` without buyer words or exception text.
+- Live smoke proves a disconnect lead, knowledge revision, figure approval and
+  admin decision remain after worker and admin API restarts.
 
 ## Third language: Hindi
 

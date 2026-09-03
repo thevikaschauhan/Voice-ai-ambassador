@@ -105,7 +105,12 @@ See design principle 1. The consequence that matters: no LiveKit import may appe
 ### ADR-003 - Two-channel turn design
 See design principle 2. Supersedes any single-forced-tool-call design.
 
-### ADR-004 - No vector database
+### ADR-004 - No vector database (inventory decision retained; knowledge scope superseded by ADR-019)
+**The brochure/FAQ revisit threshold has fired.** ADR-019 adds retrieval for the
+new knowledge corpus. The inventory decision remains: the small verified
+catalogue stays fully serialised in the base prompt, and no vector database is
+introduced.
+
 The full inventory is serialised into the system prompt. At ~10-40 projects of ~15 short fields, that is 6-12k tokens; retrieval adds infrastructure, latency, and a new failure class (the right project not retrieved) for nothing at this scale. Prompt caching makes the cost negligible. **Thresholds for revisiting:** more than ~60 projects; per-unit inventory; brochures/floor plans/FAQ documents entering the corpus; serialised catalogue beyond ~25k tokens. Say the threshold out loud in the meeting - a tech lead who has been pitched RAG by four vendors will respect a vendor who explains why they did not use it.
 
 ### ADR-005 - LiveKit Agents, Pipecat as fallback
@@ -129,8 +134,12 @@ The buyer picks a language before the call; that sets the STT hint. A wrong auto
 ### ADR-011 - Deterministic confirmation policy
 Confirmation of critical entities does not depend on vendor confidence scores, which are often absent or uncalibrated on streaming STT. Policy: the first budget mention is always confirmed, including its currency; project names are confirmed when fuzzy-match score is marginal; three consecutive failed recognitions escalate. Vendor confidence, where good, tightens the policy; it is never the only trigger. All three deterministic triggers are implemented - `ambassador/budget.py`, `ambassador/projects.py` and `ambassador/recognition.py` - and share one seam in `llm_node`: when a confirmation is owed the policy speaks and the model never runs, so the question cannot be skipped, reworded or answered on the buyer's behalf. WHICH policy owns a turn is `ambassador/confirmation.py`, pure core shared with the eval harness: a reply belongs to the question it answers (the one asked most recently), any other open question is suspended rather than read, and any handover quiesces every policy. At most one of them speaks per turn. The vendor-confidence refinement is the only part still open. Detail in `docs/04-`.
 
-### ADR-012 - In-memory state, no database
+### ADR-012 - In-memory state, no database (superseded by ADR-018 for Phase 2)
 Session state in the agent process; the CRM write is an interface with a console implementation (`STUB:`). A database adds deployment surface and a data-residency conversation we do not want during a POC. Refreshing loses the conversation; acceptable for a demo.
+
+This remains the record of the Phase 1 decision. The human has now requested
+durable leads and an admin surface, so the reason to avoid a database no longer
+outweighs the missing product capability.
 
 ### ADR-013 - Disclose the AI, store no raw audio
 The session opens with fixed, native-reviewed disclosure copy (never model-generated - a disclosure that varies is not a disclosure), stating the AI, the human route, and that the conversation is transcribed. The POC retains transcript, guardrail decisions, timings and the brief - no raw audio - which defers the PDPL biometric question entirely and is a good unprompted answer for their legal team. See `docs/03-`.
@@ -229,12 +238,175 @@ The latency line is the point: streaming charges only the tail, which is what th
 
 **Cost.** Deepgram is a new paid vendor and the first component not already on an existing account. `VERIFY:` its per-minute rate against `docs/08-`.
 
+### ADR-018 - Supabase Postgres is the durable system of record (decided 2026-09-03)
+
+**Decision.** Phase 2 uses a Supabase free-tier Postgres project selected by the
+human. The persistent Railway worker and admin API connect over TLS through the
+shared Supavisor **session** pooler. Session mode is the IPv4-compatible choice
+for persistent processes and retains prepared-statement support; transaction
+mode is intended for short-lived/serverless clients and would require asyncpg's
+statement cache to be disabled. `DATABASE_URL` is a server-side Railway
+variable on those two Python services only; the human creates the Supabase
+project and pastes the dashboard-issued session-pooler value, and neither the
+value nor a sample credential enters this repository.
+
+This supersedes ADR-012. Durable records include every call and turn, the last
+accepted brief, encrypted contact and transcript payloads, structured summary
+and score, append-only admin decisions, knowledge documents/chunks/figure
+reviews, and the redacted audit events defined in `docs/02-`. The redacted JSON
+event stream is not used as a lead source: full-fidelity `TurnRecord`s and the
+brief are projected in-process at shutdown.
+
+**Portability constraint.** This is Postgres hosted by Supabase, not a Supabase
+application architecture. There is no Supabase client SDK, Auth, Storage, Edge
+Function or RLS dependency. Plain SQL migrations under `agent/` own the schema;
+the Python repository uses `asyncpg`; the admin API and worker are the only
+database clients. The store can move to another Postgres host without changing
+the domain contracts or web UI.
+
+Migrations run once as a release step before the admin API deploy, not from the
+voice worker. Both Python processes check the schema version. The Supabase
+project is created in `eu-central-1` Frankfurt, the closest offered region to
+the Railway services in Amsterdam; `VERIFY:` Supabase does not state whether a
+project region can later change, so creation treats it as irreversible. The
+free-tier direct endpoint is IPv6-only while Railway outbound IPv6 is disabled
+on the current worker, so it is not the application default; the same
+session-pooler URL is the conservative release-migration path.
+
+Both processes use a small, explicit asyncpg pool rather than library defaults
+(initially at most five connections per process) and bounded acquisition/query
+timeouts. This stays far below the free Nano instance's 200 pooler-client limit
+and avoids shaping the POC like the high-concurrency session-pooler timeout
+reported in the still-open Supabase issue #39227. The final lead write occurs
+after speech finishes, so database latency cannot delay the farewell.
+
+The free tier's documented database allowance is 500 MB (`VERIFY:` confirm the
+dashboard value at project creation because another Supabase page describes
+disk allowance differently). Original upload bytes are therefore discarded
+after successful extraction. The free tier may pause after roughly seven days
+of low activity. One scheduled low-cost database query each day from the
+deployed admin API is the POC mitigation, not an uptime guarantee; the operator
+checks for a pause before a demo, and a paid plan is the production answer. An
+unavailable or paused database never blocks the voice response or farewell.
+Persistence and retrieval fail closed, emit classified events without
+exception text or buyer words, and make the missing lead visible to operations.
+A local durable retry queue and at-least-once delivery are deferred.
+
+### ADR-019 - Postgres full-text knowledge retrieval with source-scoped figure approval (decided 2026-09-03)
+
+**Decision.** The human approved synchronous ingestion of roughly 10-15 PDF,
+DOCX and TXT files plus pasted text. Deterministic adapters extract text;
+`ambassador/knowledge.py` performs deterministic heading/paragraph chunking;
+Postgres full-text search with the `simple` configuration retrieves published
+chunks. A scanned PDF with no text fails visibly and asks for a text-bearing
+file. OCR, images, legacy DOC, XLSX, URLs, embeddings and an ingestion queue are
+deferred.
+
+The inventory boundary does not move. Project names, locations, prices, unit
+sizes, handover dates, payment structures and amenities still come only from
+`data/inventory.json`. Ingestion may retain brochure passages about those
+fields for admin review, but marks them `inventory_governed` and never supplies
+their prose to the model. A correction or addition to a protected project fact
+goes through the existing inventory review and deploy. Only reviewed
+`general_knowledge` chunks, such as process and non-project FAQs, are eligible
+for voice retrieval.
+
+The small corpus is why full-text search comes before embeddings. It is local
+to the system of record, inspectable, fast enough for the voice budget and has
+no retrieval service to operate. ADR-004's inventory reasoning still holds;
+this ADR handles the new document corpus that fired its revisit clause.
+
+**Prompt seam.** Retrieval runs after the existing deterministic policy has
+declined to own the turn and before the model opens. It runs once against the
+final utterance, is cached by turn index because `llm_node` may run repeatedly,
+and adds at most 250ms before `llm_ttft`. Ranked excerpts enter a copy of
+`chat_ctx` as one delimited system message and never accumulate in session
+history. The fixed wrapper treats excerpt text as reference data, never as
+instructions, and an eval proves instruction-shaped document text cannot
+change persona, tools or guardrails.
+
+**Figures remain code-gated.** Ingestion extracts each figure occurrence with
+its typed value, currency/unit, source sentence, page, chunk and document
+revision. The admin approves occurrences individually; parsing never approves
+one. Approved occurrences from the retrieved chunks extend a copy of the base
+`AllowedFigures` for that turn. Unapproved or revoked occurrences are replaced
+before prompt assembly and do not enter the set. A direct match to a withheld
+figure is owned by a deterministic policy that speaks native-reviewed
+human-confirmation copy and routes a human. There is no source-based validator
+bypass. The unchanged numeric guardrail still blocks any unapproved figure the
+model attempts to emit.
+
+This evolves ADR-008 without weakening it: inventory and whitelist figures
+remain global, while knowledge figures are source-scoped to the retrieved,
+approved occurrences whose ids and immutable revisions are recorded on the
+turn. Revocation affects subsequent turns; historic audit remains
+reconstructable.
+
+### ADR-020 - Persist every call; score interest in code; decisions stay human (decided 2026-09-03)
+
+**Decision.** Every ending becomes a lead, including `buyer_left`, the duration
+cap and an incomplete final turn. `shutdown_session` seals the turn and drains
+brief extraction first, freezes a full-fidelity snapshot, persists it
+idempotently, then requests a Pydantic-validated summary and semantic scoring
+signals. A failed analysis leaves a durable lead with an explicit failure
+state. `ended_cleanly`, `call_end_reason` and `audit_incomplete` prevent a
+truncated call from looking complete.
+
+The model supplies summary text, boolean signals and supporting turn indexes.
+It never returns or computes the score. `ambassador/leads.py` validates the
+evidence and performs all arithmetic from a versioned rubric in
+`data/interest-score.yaml`, with 100% branch coverage. The approved signals are
+budget stated, project named, timeline, contact shared, a viewing or person
+requested, questions asked and call length. No minimum budget, priority-project
+or financing criterion applies yet. Historic scores keep their rubric version
+when weights change.
+
+The score is guidance only. `unreviewed -> qualified | rejected` is an admin
+decision, never a threshold, and every later change appends an immutable
+`AdminDecision` with previous/new state, reason, actor and timestamp. Under the
+approved shared-code POC the actor is `admin`; a nullable future user id lets
+per-user auth add attribution without rewriting history.
+
+Contact capture is deterministic and optional to the buyer. A fixed-copy tool
+may ask once after interest; if it has not, the first farewell is intercepted
+for one ask and a second farewell closes immediately. Name plus phone or email
+is captured only from the reply to that ask. Phone digits are read back from
+reviewer-authored digit forms before acceptance, never generated by the model.
+Contact values and echoes stay off the event stream and are encrypted in the
+lead record. English copy is a `DRAFT` marked `VERIFY:`; Arabic and Hindi are
+disabled until native-reviewed data exists.
+
+### ADR-021 - A Python admin API owns the domain; Next.js is a thin protected surface (decided 2026-09-03)
+
+**Decision.** FastAPI runs from the existing Python image as a third Railway
+application service. It owns knowledge ingestion/CRUD, lead list/detail,
+analysis retry and append-only qualify/reject. It is reachable from the web
+service over Railway private networking, has no public domain, and requires a
+shared server-side bearer token on every route except health.
+
+Next.js adds `/admin` and fixed same-origin proxy routes. The approved
+`ADMIN_ACCESS_CODE` is unset-closed, rate-limited and checked with the same
+constant-time, length-guarded pattern as `DEMO_ACCESS_CODE`. Acceptance creates
+a short-lived session cookie signed by a separate `ADMIN_SESSION_SECRET`, with
+`HttpOnly`, `Secure` and `SameSite=Strict`. The proxies validate it and add
+`ADMIN_API_TOKEN` server-side; neither that token,
+`DATABASE_URL`, encryption keys nor the private upstream address reaches the
+browser. Per-user login and roles are deferred.
+
+**Rejected alternative:** Next.js connects to Postgres directly. It removes one
+service but moves scoring, SQL ownership and PDF/DOCX parsing into TypeScript,
+duplicates Pydantic contracts and takes the highest-risk rules outside the
+pure-core coverage gate. One extra process is the smaller cost. Full route and
+surface contract in `docs/10-admin.md`.
+
 ## Deployment
 
 | Component | Where | Note |
 |---|---|---|
 | Next.js demo surface | Railway | No provider calls. It publishes a microphone into the room on the hosted talk path, which moves no credential: recognition, synthesis and inference stay in the worker (`docs/09-deploy.md`) |
 | Python agent worker | Railway | Long-lived process; connects out to LiveKit Cloud, so no inbound routing needed. One worker serves all three languages, reading each call's language from room metadata |
+| Python admin API (Phase 2) | Railway | Same image, separate FastAPI start command; private HTTP endpoint only; owns admin mutations and the migration/schema contract while the worker writes finalised leads |
+| Durable Postgres (Phase 2) | Supabase | External managed Postgres selected for its free tier; TLS pooler connection from the two Python services; no Supabase application services |
 | Transport | LiveKit Cloud | WebRTC; handles venue-network jitter; SIP later |
 | STT / TTS / LLM | Vendor APIs from the agent worker | Keys in Railway env only |
 
@@ -265,4 +437,13 @@ TTS_VOICE_ID_EN= / _AR= / _HI= # Fish voice reference ids. Defaulted to the PROV
 GUARDRAIL_MODE=enforce|warn    # warn logs violations without blocking; enforce is default
 PROMPT_MODE=ambassador|naive   # naive pairs with warn for the defence-in-depth demo (docs/03-)
 DEMO_MODE=true|false           # seeds the scripted conversation from docs/07-
+
+# Phase 2; values stay on the hosting platforms and never in this file
+DATABASE_URL=                  # Supabase pooler URL; worker + admin API only
+ADMIN_API_URL=                 # Railway private URL; web server only
+ADMIN_API_TOKEN=               # web server + admin API only; never browser-visible
+ADMIN_ACCESS_CODE=             # web server only; unset closes /admin
+ADMIN_SESSION_SECRET=          # web server only; signs the short-lived admin cookie
+PII_ENCRYPTION_KEY=            # worker + admin API only, versioned authenticated encryption
+PII_HASH_KEY=                  # worker + admin API only, contact deduplication HMAC
 ```

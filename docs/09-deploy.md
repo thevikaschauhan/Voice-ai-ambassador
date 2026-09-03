@@ -963,9 +963,37 @@ microphone reaches the worker and the agent's audio comes back.
 
 Issue #63 stays open until those cards close it.
 
+## Phase 2 hosted-demo database check
+
+This section takes effect with P2-S13; the current Phase 1 deployment still has
+no database. The Supabase project is created in `eu-central-1` Frankfurt and
+both Python services receive only the dashboard-issued Supavisor **session**
+mode URL on port 5432 as `DATABASE_URL`. The value moves directly from the
+Supabase dashboard to Railway variables and is never pasted into a ticket,
+commit, terminal transcript or hive message.
+
+The free project may pause after roughly one idle week. The admin API runs one
+bounded `SELECT 1` each day as a keep-active mitigation, but the pre-demo check
+is still mandatory:
+
+1. Open Supabase Studio and verify the project is active. If it is paused, use
+   the one-click restore action and wait for Studio to report active.
+2. Call the bearer-protected admin `/ready` route from inside the web service.
+   It must report a compatible schema; `/health` proves process liveness only.
+3. Run one read-only lead-list request and one knowledge search through the
+   fixed web proxy. Do not print response bodies or any variable value.
+4. Confirm the worker has not emitted `lead_persist_failed` or a failed
+   `knowledge_retrieval` since readiness recovered.
+
+A failed check blocks the Phase 2 admin demo, not the voice agent. The worker
+continues with its base inventory, finishes the authored farewell and emits a
+classified failure without buyer words. Free-tier restore through Studio is
+available for one year after a pause; a paid Supabase plan, which does not
+inactivity-pause, is the production answer.
+
 ## Not deployed
 
-One project, one environment, so there is no staging tier. No custom domain: the generated Railway domain is the demo URL. No autoscaling and no replica count above one; a single concurrent call is what the demo needs and a second worker replica would race for the same job. No database, which is not a hosting decision at all, just the existing one (in-memory session state, `STUB:` on the CRM write). Web gates in CI are no longer absent: `npm test`, `npm run typecheck`, `npm run lint` and `npm run build` run as a third job in `gates.yml`, on the same Node major the image pins.
+One project, one environment, so there is no staging tier. No custom domain: the generated Railway domain is the demo URL. No autoscaling and no replica count above one; a single concurrent call is what the demo needs and a second worker replica would race for the same job. **In the currently deployed Phase 1**, there is no database (in-memory session state, `STUB:` on the CRM write); the Phase 2 destination is the section above. Web gates in CI are no longer absent: `npm test`, `npm run typecheck`, `npm run lint` and `npm run build` run as a third job in `gates.yml`, on the same Node major the image pins.
 
 ## Where the rest lives
 
