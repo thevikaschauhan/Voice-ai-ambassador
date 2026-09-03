@@ -1040,8 +1040,8 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    use is not enough when the value to avoid is the default sitting beside it.
 
    Worse, the mistake survives the step that ought to catch it. Migrations
-   **pass** on 6543: the runner opens one short-lived connection, so
-   `applied 1 migration(s): 0001` says the URL reaches the database and says
+   **pass** on 6543: the runner opens one short-lived connection, so its
+   `applied ... migration(s)` line says the URL reaches the database and says
    nothing about the port being right. The runtime pool is where it breaks -
    `adapter/repository.py` keeps `statement_cache_size` at its default, which
    transaction mode would require to be 0, and its own docstring says so. A
@@ -1126,14 +1126,19 @@ the plan answers.
 The plan says nothing about the database itself, though, and `preserve()` is
 why: it asserts a name and never a value, so a clean plan holds with a
 connection string that points anywhere. The schema is confirmed from the
-`admin-api` pre-deploy log instead, which prints one of two lines:
+`admin-api` pre-deploy log instead, which prints one of two shapes:
 
 ```
-applied 1 migration(s): 0001        # first run against an empty database
-schema is up to date at version 0001   # every run after
+applied <n> migration(s): <versions>   # whatever was outstanding
+schema is up to date at version <v>    # nothing outstanding
 ```
 
-Either line proves the service reached Postgres and the schema is at the
+`<v>` is the highest-numbered file under `agent/migrations/`, so read it from
+the tree rather than from here: this document deliberately quotes no version
+number, because a line that names today's version goes stale the next time
+somebody adds a `.sql` file and no diff to this file will show it.
+
+Either shape proves the service reached Postgres and the schema is at the
 version this build expects. Neither proves the port is 5432 - see step 3.
 A pre-deploy that instead exits non-zero with `DATABASE_URL is not set` has
 done its job: the deployment fails, and the previous version keeps serving.
