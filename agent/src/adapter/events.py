@@ -192,6 +192,11 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
         "ambassador's given name"
     ),
     "session_end": "a turn count",
+    # ADR-018's keep-alive, from the admin API. One boolean and nothing
+    # else: deliberately NOT the exception, because a driver error can
+    # quote a DSN and this event is on the durable stream. The service log
+    # carries the detail; the audit carries whether it answered.
+    "database_health_probe": "one boolean, whether the database answered",
     # Two language codes and two adapter-authored words. The room metadata this
     # reads is written by another service, and NONE of it is emitted: `reason`
     # is one of a closed set of literals in `agent.LanguageSelection`, chosen

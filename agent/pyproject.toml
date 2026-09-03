@@ -18,6 +18,15 @@ dependencies = [
     # the canonical thing not to write yourself, and the admin API needs
     # the same envelope to read what the worker wrote.
     "cryptography>=43.0",
+    # The private admin API (ADR-021) and the ASGI server that runs it. MAIN
+    # dependencies, and the reason is a live failure rather than a preference:
+    # the Dockerfile installs main dependencies only, so a dev-group entry
+    # builds an image whose own start command cannot spawn. The deployed
+    # service crash-looped on `error: Failed to spawn: uvicorn` while these
+    # were undeclared - and Railway reported the deployment as SUCCESS
+    # throughout, so the log line was the only evidence.
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
 ]
 
 # `uv run eval` (docs/05-). Offline by default: no key, no network, no spend,

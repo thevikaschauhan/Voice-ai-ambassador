@@ -375,7 +375,7 @@ description names those commits and they are not squashed before god merges.
 | dwight/adapter | Persist every call from `shutdown_session` | `test_buyer_left_persists_after_brief_drain_with_incomplete_audit_flag` fails because shutdown has no repository hook |
 | dwight/adapter | Structured summary analysis and scoring finaliser | `test_invalid_analysis_keeps_the_lead_and_never_accepts_a_model_score` fails because no finaliser exists |
 | dwight/adapter | Knowledge parsers, full-text retrieval and prompt injection | `test_retrieval_runs_once_per_turn_and_reuses_the_same_revision_and_figure_set` fails because `llm_node` has no retrieval seam |
-| dwight/adapter | FastAPI admin API and bearer boundary | `test_every_non_health_route_refuses_a_missing_or_wrong_bearer` fails before the API exists |
+| toby/adapter | FastAPI admin API and bearer boundary | `test_every_non_health_admin_route_refuses_a_missing_or_wrong_bearer` fails before the API exists |
 | dwight/adapter | Authenticated PII envelopes and classified durable audit | `test_buyer_payloads_encrypt_while_phase_2_events_contain_no_buyer_words` fails before the encryption and event projections exist |
 | jim/web | Admin access session and fixed proxy routes | `admin routes stay closed when ADMIN_ACCESS_CODE is absent and never expose ADMIN_API_TOKEN` fails before the gate exists |
 | jim/web | Lead list, detail and manual decisions | `an admin can inspect score evidence and append, but not overwrite, a decision` fails before the UI exists |
