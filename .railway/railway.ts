@@ -139,6 +139,16 @@ export default defineRailway(() => {
       BRIEF_MODEL: preserve(),
       DEEPGRAM_API_KEY: preserve(),
       DEEPGRAM_MODEL: preserve(),
+      // Supabase Postgres, via the Supavisor pooler in SESSION mode. One
+      // variable and not two: the usual pooled/direct pair (DATABASE_URL plus
+      // DIRECT_URL) exists so migrations can bypass the pooler, and the direct
+      // host is reachable only over IPv6 on a free Supabase project while
+      // Railway leaves outbound IPv6 off per service. So there is no direct
+      // route to name, and migrations take the same session-mode URL the app
+      // uses. Named here before it exists because omit means delete: an apply
+      // from a file that did not name it would remove the database credential
+      // from a running worker.
+      DATABASE_URL: preserve(),
       // Toby's per-call duration cap (#77), set to 600 on the hosted service.
       // Named here for the reason the whole list exists: omit means delete, and
       // an apply from a file that did not name it would take the cap away and
