@@ -725,9 +725,13 @@ def main(language: str) -> None:
     # section 4 would be asking how to SAY a name whose written form is still an
     # open question one section below. Answering that question and pronouncing
     # its answer belong together.
-    ambassador_name = load_ambassadors().name_for("en")
+    # EVERY ambassador name, not just English's. This excluded one name while
+    # only English had one; the moment the client named all three, Nora and
+    # Maya were back in this list and section 4 was once again asking how to
+    # say a name whose written form 4b has not settled.
+    ambassador_names = set(load_ambassadors().names.values())
     for term in _terms():
-        if term == ambassador_name:
+        if term in ambassador_names:
             continue
         w(bullet(f"{term} ->"))
     w("")
@@ -737,16 +741,36 @@ def main(language: str) -> None:
     # other way. Their reading is what the client needs in order to choose.
     w("## 4b. What the ambassador is called")
     w("")
-    english = load_ambassadors().name_for("en") or "(not chosen yet)"
-    w(
-        f"The client named the English ambassador {english}. The name is their "
-        "decision and not yours to change, and it is not language copy: it is "
-        "the same word whoever is listening."
-    )
+    ambassadors = load_ambassadors()
+    # THIS language's ambassador, not English's. The section was written when
+    # only English had a name and hardcoded it, which rendered an Arabic packet
+    # asking a native how to write "Jane" - a name no Arabic call ever speaks.
+    theirs = ambassadors.name_for(language)
+    english = ambassadors.name_for("en") or "(not chosen yet)"
+    if theirs:
+        w(
+            f"The client named the ambassador who speaks {name} **{theirs}**. "
+            "The name is their decision and not yours to change, and it is not "
+            "language copy: it is the same word whoever is listening."
+        )
+        if theirs != english:
+            w("")
+            w(
+                f"(The English ambassador is {english}, and the two are "
+                "deliberately different people rather than one name rendered "
+                f"twice. You are being asked about {theirs} only.)"
+            )
+    else:
+        w(
+            f"The ambassador who speaks {name} has no name yet, so calls in "
+            f"{name} open without one. The English ambassador is {english}, "
+            "for reference. If a name is chosen later the questions below "
+            "apply to it."
+        )
     w("")
     w(
-        "What we cannot answer is how it should be written and said to a "
-        f"{name} buyer. Two answers, both squarely yours:"
+        f"What we cannot answer is how it should be written and said to "
+        f"{article(name)} {name} buyer. Two answers, both squarely yours:"
     )
     w("")
     w(bullet(f"written in {name} (the form that appears on screen):"))
@@ -755,32 +779,47 @@ def main(language: str) -> None:
     w(
         "The second one is asked here rather than in section 4 because it "
         "depends on the first: there is no point respelling a form nobody has "
-        "chosen yet. If your answer to the written form is the English name as "
-        "it stands, the respelling is how a "
+        "chosen yet. If your answer to the written form is the name as it "
+        f"stands in Latin letters, the respelling is how {article(name)} "
         f"{name} voice should say it."
     )
     w("")
+    subject = theirs or "an unfamiliar given name"
     w(
         "Then one judgement, the one we most need and cannot get anywhere "
-        "else: does an English given name land naturally on a "
-        f"{name} buyer's ear for a brand's ambassador, or does it read as "
-        "foreign, hard to say, or simply odd? Say so plainly if it does not, "
-        "and say why."
+        f"else: does {subject} land naturally on {article(name)} {name} "
+        "buyer's ear for a brand's ambassador, or does it read as foreign, "
+        "hard to say, or simply odd? Say so plainly if it does not, and say "
+        "why."
     )
     w("")
     w(
         "We are deliberately NOT asking you to choose a different name. If "
-        f"your answer is that {english} does not land, that goes to the client "
+        f"your answer is that {subject} does not land, that goes to the client "
         "as a question, because the name is theirs. Your reading is what they "
         "need in order to decide; a name picked in this room would be the "
         "wrong way round."
     )
     w("")
-    w(
-        "It is spoken in the first sentence of every call, so a form that "
-        f"reads oddly is the first thing the buyer hears. Until you answer, "
-        f"calls in {name} open without a name, exactly as they do today."
-    )
+    # Two different states and they were conflated: a language can have a name
+    # and still have no disclosure, which is where ar and hi actually are.
+    if theirs and not disclosures.is_certified(language):
+        w(
+            f"It is spoken in the first sentence of every call. {name} has no "
+            "disclosure yet (section 1), so no call opens in it at all today "
+            f"and {theirs} is not being said to anyone. Both answers are "
+            "needed before one is."
+        )
+    elif theirs:
+        w(
+            "It is spoken in the first sentence of every call, so a form that "
+            "reads oddly is the first thing the buyer hears."
+        )
+    else:
+        w(
+            f"It would be spoken in the first sentence of every {name} call, "
+            "so a form that reads oddly is the first thing the buyer hears."
+        )
     w("")
     w("## 5. Things the agent must never be allowed to say")
     w("")

@@ -38,15 +38,45 @@ def test_the_shipped_file_names_the_english_ambassador_jane():
     assert load_ambassadors().name_for("en") == "Jane"
 
 
-def test_arabic_and_hindi_are_unnamed_until_a_reviewer_answers():
-    """Not a gap to be filled by transliterating here. How a given name is
-    written in Arabic or Devanagari is a native-reviewer question, and the
-    packet asks it - so these stay empty and those languages behave as they
-    always have. Delete this test the day a reviewer answers, not before."""
+def test_every_shipped_language_has_the_name_the_client_chose():
+    """Three names, one per language, all the client's own decision.
+
+    This replaces a test that asserted ar and hi were EMPTY pending a native
+    reviewer. That framing was half wrong and the answer made it visible: the
+    reviewer was never going to supply a name, because choosing one is the
+    client's. What is still open, and is genuinely theirs, is how each is
+    written in Arabic or Devanagari and how it is said - which the packet asks
+    and the Latin spelling here does not pre-empt.
+    """
     ambassadors = load_ambassadors()
-    assert ambassadors.name_for("ar") == ""
-    assert ambassadors.name_for("hi") == ""
-    assert ambassadors.named == frozenset({"en"})
+    assert ambassadors.name_for("en") == "Jane"
+    assert ambassadors.name_for("ar") == "Nora"
+    assert ambassadors.name_for("hi") == "Maya"
+    assert ambassadors.named == frozenset(get_args(Language))
+
+
+def test_the_names_are_distinct_per_language():
+    """One ambassador rendered three ways would be a different product decision
+    from three named ambassadors, and the file supports the second. Pinned so a
+    future edit collapsing them is a deliberate act rather than a typo."""
+    names = load_ambassadors().names
+    assert len(set(names.values())) == len(names)
+
+
+def test_every_name_can_be_respelled_for_the_synthesiser():
+    """A name the agent speaks and the lexicon does not carry is a name Fish
+    pronounces from its literal spelling, which is the defect the lexicon
+    exists for. The coupling is documented in data/lexicon.yaml; this is what
+    notices when a name is added and the term is not."""
+    terms = {
+        entry["term"]
+        for entry in yaml.safe_load((DATA / "lexicon.yaml").read_text(encoding="utf-8"))
+    }
+    missing = [name for name in load_ambassadors().names.values() if name not in terms]
+    assert not missing, (
+        f"these ambassador names have no lexicon term, so the reviewer packet "
+        f"never asks how to say them: {missing}"
+    )
 
 
 def test_every_language_has_an_entry_even_when_it_is_empty():
@@ -58,6 +88,12 @@ def test_every_language_has_an_entry_even_when_it_is_empty():
 
 
 # --- the loader -----------------------------------------------------------
+
+
+# Every shipped language is named now, so the unnamed path has no production
+# example left. It is still real behaviour - clearing an entry, or a fourth
+# language landing before the client names it - so from here it is covered by
+# fixtures rather than by the data file, and deliberately so.
 
 
 def test_an_absent_language_reads_as_unnamed(tmp_path):

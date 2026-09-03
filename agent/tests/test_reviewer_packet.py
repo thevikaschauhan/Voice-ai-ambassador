@@ -79,13 +79,71 @@ def test_it_does_not_ask_for_a_form_for_a_square_footage_or_the_hotline(arabic):
 
 
 def test_it_asks_for_every_lexicon_term(arabic):
+    """Every term except the ambassador names, which are asked per language.
+
+    The exemption is pam's, widened. A place or a project is the same string in
+    every packet, so "appears in the Arabic packet" is the right check for it.
+    An ambassador name is not: Maya speaks Hindi and has no business in an
+    Arabic reviewer's document, so requiring her here would force the packet to
+    ask a question its reader cannot answer.
+
+    Coverage does not drop, it moves and gets stricter:
+    `test_4b_asks_about_the_ambassador_who_speaks_that_language` asserts each
+    name is asked for in ITS OWN packet, which "appears anywhere" never did.
+    """
     import yaml
 
+    from ambassador.ambassadors import load_ambassadors
+
+    names = {n for n in load_ambassadors().names.values() if n}
     entries = yaml.safe_load(
         (AGENT_DIR.parent / "data" / "lexicon.yaml").read_text(encoding="utf-8")
     )
     for entry in entries:
-        assert str(entry["term"]) in arabic
+        term = str(entry["term"])
+        if term in names:
+            continue
+        assert term in arabic
+
+
+def test_no_ambassador_name_is_in_the_name_list_for_any_language():
+    """The generalisation of the test below, and the reason it is separate.
+
+    That one checks the English name because English is what section 4b's
+    prose was written around. This checks EVERY name in every packet, which is
+    what actually broke: the exemption named `name_for("en")` while only
+    English had a name, and the day the client named all three, Nora and Maya
+    were back in section 4's list with nothing failing.
+    """
+    from ambassador.ambassadors import load_ambassadors
+
+    names = {n for n in load_ambassadors().names.values() if n}
+    assert names, "no ambassador names to check"
+    for language in sorted(LANGUAGE_NAMES):
+        packet = generate(language)
+        name_list = packet.split("## 4. How these names should sound")[1].split(
+            "## 4b."
+        )[0]
+        present = sorted(n for n in names if f"- [ ] {n} ->" in name_list)
+        assert not present, (
+            f"the {language} packet asks section 4 how to say {present}, whose "
+            "written form section 4b has not settled yet"
+        )
+
+
+def test_4b_asks_about_the_ambassador_who_speaks_that_language():
+    """Not about English's. The section hardcoded `name_for("en")`, so the
+    Arabic packet asked a native reviewer how to write "Jane" - a name no
+    Arabic call ever speaks."""
+    from ambassador.ambassadors import load_ambassadors
+
+    ambassadors = load_ambassadors()
+    for language in sorted(LANGUAGE_NAMES):
+        theirs = ambassadors.name_for(language)
+        if not theirs:
+            continue
+        section_4b = generate(language).split("## 4b.")[1].split("## 5.")[0]
+        assert theirs in section_4b, (language, theirs)
 
 
 def test_the_ambassadors_name_is_asked_for_in_4b_not_the_name_list():

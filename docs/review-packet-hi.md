@@ -265,20 +265,22 @@ Written so a text-to-speech voice says them correctly, in your own script - not 
 
 ## 4b. What the ambassador is called
 
-The client named the English ambassador Jane. The name is their decision and not yours to change, and it is not language copy: it is the same word whoever is listening.
+The client named the ambassador who speaks Hindi **Maya**. The name is their decision and not yours to change, and it is not language copy: it is the same word whoever is listening.
+
+(The English ambassador is Jane, and the two are deliberately different people rather than one name rendered twice. You are being asked about Maya only.)
 
 What we cannot answer is how it should be written and said to a Hindi buyer. Two answers, both squarely yours:
 
 - [ ] written in Hindi (the form that appears on screen):
 - [ ] said aloud (respelled so a voice says it right, as in section 4):
 
-The second one is asked here rather than in section 4 because it depends on the first: there is no point respelling a form nobody has chosen yet. If your answer to the written form is the English name as it stands, the respelling is how a Hindi voice should say it.
+The second one is asked here rather than in section 4 because it depends on the first: there is no point respelling a form nobody has chosen yet. If your answer to the written form is the name as it stands in Latin letters, the respelling is how a Hindi voice should say it.
 
-Then one judgement, the one we most need and cannot get anywhere else: does an English given name land naturally on a Hindi buyer's ear for a brand's ambassador, or does it read as foreign, hard to say, or simply odd? Say so plainly if it does not, and say why.
+Then one judgement, the one we most need and cannot get anywhere else: does Maya land naturally on a Hindi buyer's ear for a brand's ambassador, or does it read as foreign, hard to say, or simply odd? Say so plainly if it does not, and say why.
 
-We are deliberately NOT asking you to choose a different name. If your answer is that Jane does not land, that goes to the client as a question, because the name is theirs. Your reading is what they need in order to decide; a name picked in this room would be the wrong way round.
+We are deliberately NOT asking you to choose a different name. If your answer is that Maya does not land, that goes to the client as a question, because the name is theirs. Your reading is what they need in order to decide; a name picked in this room would be the wrong way round.
 
-It is spoken in the first sentence of every call, so a form that reads oddly is the first thing the buyer hears. Until you answer, calls in Hindi open without a name, exactly as they do today.
+It is spoken in the first sentence of every call. Hindi has no disclosure yet (section 1), so no call opens in it at all today and Maya is not being said to anyone. Both answers are needed before one is.
 
 ## 5. Things the agent must never be allowed to say
 

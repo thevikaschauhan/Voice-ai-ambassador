@@ -13,10 +13,14 @@
 # how it should be said aloud. That question is a native reviewer's and is
 # asked in the reviewer packet. Do not answer it here by transliterating.
 #
+# THREE NAMES, NOT ONE RENDERED THREE WAYS. The client chose Jane, Nora and
+# Maya, one per language, and the file has always supported that shape.
+#
 # AN EMPTY ENTRY MEANS UNNAMED, and unnamed is a working state, not a failure.
 # The disclosure and the prompt both fall back to the wording that shipped
-# before names existed, so `ar` and `hi` behave exactly as they do today until
-# a reviewer answers. This is deliberately NOT the disclosures.yaml rule,
+# before names existed. No entry is empty today, but the behaviour is kept and
+# tested because clearing one has to stay safe. This is deliberately NOT the
+# disclosures.yaml rule,
 # where an empty entry blocks the language: a call with no disclosure is a
 # call that may not happen, and a call with an unnamed ambassador is just a
 # call.
@@ -28,11 +32,13 @@
 
 en: "Jane"
 
-ar: ""
-  # VERIFY: with a native reviewer - the Arabic form of the ambassador's given
-  # name, and how it should be said. Leave empty until answered; Arabic calls
-  # open unnamed in the meantime.
+ar: "Nora"
+  # The client chose the name. VERIFY: with a native reviewer - how "Nora" is
+  # WRITTEN in Arabic script and how it should be said. Those are rendering
+  # questions, not naming ones, and they are asked in reviewer packet 4b. The
+  # Latin spelling here is the client's own, and it is what the agent speaks
+  # and the surface labels until a reviewer answers.
 
-hi: ""
-  # VERIFY: with a native reviewer - the Devanagari form of the ambassador's
-  # given name, and how it should be said. Same rule.
+hi: "Maya"
+  # Same: the client chose "Maya"; VERIFY: with a native reviewer is only how
+  # it is written in Devanagari and how it should be said.
