@@ -276,3 +276,105 @@ def test_post_documents_requires_the_bearer() -> None:
             json={"source_type": "paste", "title": "x", "text": "y"},
         )
     assert response.status_code in (401, 403)
+
+
+def test_pasted_text_over_the_cap_is_refused_with_413_like_an_upload(
+    monkeypatch: Any,
+) -> None:
+    """The gate god found open: paste had no cap at all.
+
+    An 8388609-byte paste returned 201 and was chunked into Postgres, because
+    `parse_document` checked the length only on the file branch. The cap has to
+    be the same number, the same code and the same status for both routes, or
+    the reviewer learns which door is unlocked.
+    """
+    from adapter.admin_api import app
+    from adapter.ingestion import max_source_bytes
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("ADMIN_API_TOKEN", "test-token")
+
+    # A bare object, so a write would raise rather than pass quietly: the claim
+    # is that nothing reached the repository, not merely that the status was 413.
+    app.state.repository = object()
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/knowledge/documents",
+            headers={"authorization": "Bearer test-token"},
+            json={
+                "source_type": "paste",
+                "title": "Too big",
+                "text": "x" * (max_source_bytes() + 1),
+            },
+        )
+    assert response.status_code == 413, response.text
+    assert response.json()["detail"] == "limit_exceeded"
+
+
+def test_the_paste_cap_counts_encoded_bytes_not_characters(monkeypatch: Any) -> None:
+    """`max_source_bytes` is bytes, and a paste is where that distinction bites.
+
+    An upload arrives as bytes already. Pasted text arrives as characters, and
+    Arabic or a curly quote is two or three bytes each - so a paste measured in
+    characters admits three times the configured bytes.
+    """
+    from adapter import ingestion
+    from adapter.ingestion import ParseFailed, parse_document
+
+    monkeypatch.setattr(ingestion, "max_source_bytes", lambda: 40)
+
+    # 30 characters, 60 bytes: under the cap by length, over it by weight.
+    try:
+        parse_document(None, None, pasted="م" * 30)
+    except ParseFailed as failure:
+        assert failure.code == "limit_exceeded"
+    else:  # pragma: no cover - the assertion below reports it
+        raise AssertionError("30 Arabic characters are 60 bytes and over a 40 cap")
+
+    # The same character count in ASCII is 30 bytes and fits.
+    assert parse_document(None, None, pasted="x" * 30).source_bytes == 30
+
+
+def test_the_cap_is_one_decision_shared_by_both_document_routes(
+    monkeypatch: Any,
+) -> None:
+    """One cap, checked in the parser, for whichever way the bytes arrived.
+
+    The upload handler used to compare lengths itself, which is how the paste
+    branch could be missing the check and still look guarded. A limit written
+    down twice is a limit that will disagree with itself.
+    """
+    from pathlib import Path
+
+    from adapter.admin_api import app
+    from adapter.ingestion import max_source_bytes
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("ADMIN_API_TOKEN", "test-token")
+    app.state.repository = object()
+    over = max_source_bytes() + 1
+
+    with TestClient(app) as client:
+        paste = client.post(
+            "/v1/knowledge/documents",
+            headers={"authorization": "Bearer test-token"},
+            json={"source_type": "paste", "title": "Big", "text": "x" * over},
+        )
+        upload = client.post(
+            "/v1/knowledge/documents/upload",
+            headers={"authorization": "Bearer test-token"},
+            files={"file": ("big.pdf", b"x" * over, "application/pdf")},
+        )
+
+    # Same status and same code, so the web tier's advice for `limit_exceeded`
+    # applies whichever route the reviewer used (#113).
+    assert (paste.status_code, paste.json()["detail"]) == (413, "limit_exceeded")
+    assert (upload.status_code, upload.json()["detail"]) == (413, "limit_exceeded")
+
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "adapter" / "admin_api.py"
+    ).read_text(encoding="utf-8")
+    assert "max_source_bytes" not in source, (
+        "the cap belongs to the parser; a handler that re-checks it is a second "
+        "copy of the number"
+    )

@@ -341,3 +341,70 @@ describe('the upstream token has exactly one reader', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('the cap on pasted text', () => {
+  /**
+   * god found the paste door open on the API: 8388609 bytes of text returned
+   * 201 and were chunked into Postgres. The API is the gate and that is where
+   * the fix belongs, but this route forwards the paste, so it refuses first
+   * for the same reason the upload route does - a reviewer should not wait for
+   * a round trip to be told no.
+   */
+  async function paste(text: string) {
+    process.env.ADMIN_ACCESS_CODE = CODE
+    process.env.ADMIN_SESSION_SECRET = SECRET
+    process.env.ADMIN_API_TOKEN = TOKEN
+    process.env.ADMIN_API_URL = UPSTREAM
+    const forwarded: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      (async (input: RequestInfo | URL) => {
+        forwarded.push(String(input))
+        return new Response('{"id":"doc-1"}', { status: 201 })
+      }) as typeof fetch,
+    )
+    const { signAdminSession } = await import('@/lib/admin/session')
+    const cookie = `admin_session=${signAdminSession({ issuedAt: Date.now() })}`
+    const { POST } = await import('@/app/api/admin/knowledge/documents/route')
+    const response = await POST(
+      post(
+        'https://demo.example/api/admin/knowledge/documents',
+        { source_type: 'paste', title: 'Payment plans', text },
+        { cookie, host: 'demo.example', 'x-forwarded-proto': 'https' },
+      ),
+    )
+    return { status: response.status, forwarded }
+  }
+
+  it('refuses an over-cap paste and forwards nothing', async () => {
+    const { MAX_UPLOAD_BYTES } = await import('@/lib/admin/knowledge')
+    const { status, forwarded } = await paste('x'.repeat(MAX_UPLOAD_BYTES + 1))
+    expect(status).toBe(413)
+    expect(forwarded).toEqual([])
+  })
+
+  it('measures the encoded bytes, not the character count', async () => {
+    const { MAX_UPLOAD_BYTES } = await import('@/lib/admin/knowledge')
+    // Two bytes per character in UTF-8, so half the cap in characters is the
+    // whole cap in bytes. Counting characters would admit this.
+    const { status, forwarded } = await paste('م'.repeat(MAX_UPLOAD_BYTES / 2 + 1))
+    expect(status).toBe(413)
+    expect(forwarded).toEqual([])
+  })
+
+  it('forwards a paste that fits', async () => {
+    const { status, forwarded } = await paste('Two bedrooms start at AED 2,000,000.')
+    expect(status).toBe(201)
+    expect(forwarded).toHaveLength(1)
+  })
+
+  it('uses the byte cap that data/knowledge.yaml states', async () => {
+    // The API reads that file; this constant is a copy of the number, and a
+    // copy with no test is a number that drifts on somebody else's edit.
+    const yaml = readFileSync(join(process.cwd(), '..', 'data', 'knowledge.yaml'), 'utf-8')
+    const stated = /^max_source_bytes:\s*(\d+)/m.exec(yaml)
+    expect(stated, 'data/knowledge.yaml must state max_source_bytes').not.toBeNull()
+    const { MAX_UPLOAD_BYTES } = await import('@/lib/admin/knowledge')
+    expect(MAX_UPLOAD_BYTES).toBe(Number(stated?.[1]))
+  })
+})
