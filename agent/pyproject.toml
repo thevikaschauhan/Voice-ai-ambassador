@@ -27,6 +27,13 @@ dependencies = [
     # throughout, so the log line was the only evidence.
     "fastapi>=0.115",
     "uvicorn>=0.34",
+    # Pure-python parsers for the two binary ingestion formats (docs/10- step
+    # 2). MAIN dependencies, not dev: they are imported at REQUEST time by the
+    # admin API, and a runtime import of a dev-only package is an ImportError in
+    # the deployed image and nowhere else - the uvicorn lesson. A test asserts
+    # they are here rather than in a group.
+    "pypdf==6.1.1",
+    "python-docx==1.2.0",
 ]
 
 # `uv run eval` (docs/05-). Offline by default: no key, no network, no spend,

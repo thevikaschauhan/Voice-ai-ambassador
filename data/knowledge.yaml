@@ -24,3 +24,10 @@
 target_chars: 1600
 maximum_chars: 2400
 overlap_paragraphs: 1
+
+# The upload cap, in bytes. ONE number for two tiers: the web route refuses
+# above it in the browser and again server-side (#113), and the admin API
+# refuses it a third time - which is the one that counts, because the first two
+# are courtesies to whoever is uploading. 8 MiB holds a real brochure; at the
+# approved scale of 10-15 documents nothing here needs to be larger.
+max_source_bytes: 8388608
