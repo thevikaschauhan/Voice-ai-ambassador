@@ -29,13 +29,23 @@
 # same path on its way to TTS, and section 4 of the reviewer packet asks for its
 # ar/hi respelling automatically because it is a term here - which is the only
 # place a "how is it said" answer can actually be recorded.
-# COUPLING: this term is the literal string "Jane". If the client later chooses
-# a different given name for a language, this entry changes with it, because a
-# respelling keyed to a name nobody uses is respelling nothing.
+# COUPLING: these terms are the literal name strings. If the client later
+# changes a given name, the entry changes with it, because a respelling keyed to
+# a name nobody uses is respelling nothing. The `en` respellings are the build
+# team's own and are English guidance for an English voice; how each name is
+# said in Arabic or Hindi is a native reviewer's answer, asked in packet 4b.
 - term: Jane
   arpabet: null
   respell:
     en: "jayn"
+- term: Nora
+  arpabet: null
+  respell:
+    en: "NOR-ah"
+- term: Maya
+  arpabet: null
+  respell:
+    en: "MY-ah"
 - term: Binghatti
   arpabet: null   # VERIFY: with the client - bin-GAT-ti
   respell:

@@ -6,19 +6,17 @@ Everything the Binghatti voice ambassador needs in Arabic, in one sitting. Gener
 
 ## 1. The opening disclosure (required before we can ship this language)
 
-Spoken by the system before the agent says anything, and it cannot be interrupted. Until this exists the agent refuses to start a call in Arabic at all.
-
-English: > You are speaking with Binghatti's AI ambassador. This conversation is transcribed so our team can assist you. You can ask for a person at any time.
+Spoken by the system before the agent says anything, and it cannot be interrupted.
 
 "Transcribed" is deliberate and must survive: we keep the text, never the audio, and the notice has to match that.
 
 The three commitments this line must carry, and nothing beyond them:
 
-1. That the buyer is speaking with Binghatti's AI ambassador (both that it is AI, and that it is Binghatti's).
+1. That the buyer is speaking with Binghatti's AI ambassador (both that it is AI, and that it is Binghatti's). In version B the ambassador's given name sits inside this same commitment - it identifies who is speaking and is not a fourth thing being claimed.
 2. That the conversation is transcribed, meaning the text is kept and the audio is not, so our team can assist.
 3. That the buyer can ask for a person at any time.
 
-Please do not add anything else. Not a welcome, not a project or a price, not a promise about response times, and not a request for permission: this is a notice the buyer hears, not a consent question they answer.
+Please do not add anything else. Not a welcome, not a project or a price, not a promise about response times, and not a request for permission: this is a notice the buyer hears, not a consent question they answer. The name in version B is not an exception to this - it is part of commitment 1, not something we added on top, so please do not drop it to satisfy the rule.
 
 Three choices we cannot make for you, and would like recorded with the copy:
 
@@ -28,7 +26,21 @@ Three choices we cannot make for you, and would like recorded with the copy:
 
 Two practical notes: there are no digits in this line, so nothing here needs a spoken-number decision. And it is the one line that opens every single call and cannot be interrupted, so please hear it back in the shipping voice before you sign it off rather than only reading it.
 
-- [ ] Arabic disclosure:
+**We need TWO versions of it, and they are not the same ask.**
+
+**A. Without the ambassador's name** - required. Until this exists the agent refuses to start a call in Arabic at all.
+
+English: > You are speaking with Binghatti's AI ambassador. This conversation is transcribed so our team can assist you. You can ask for a person at any time.
+
+- [ ] Arabic:
+
+**B. With the ambassador's name** - wanted, not required. If this is missing, calls in Arabic simply open with version A and no name, which is what happens today.
+
+English: > You are speaking with {name}, Binghatti's AI ambassador. This conversation is transcribed so our team can assist you. You can ask for a person at any time.
+
+Keep the placeholder `{name}` exactly as written, wherever the name belongs in your sentence. We substitute the ambassador's name into it. Where a name sits inside a sentence is an authoring question in your language and not something we can derive from version A, which is why we are asking for both rather than translating one into the other.
+
+- [ ] Arabic:
 
 ## 2. Failure copy (required - this is what speaks when the model fails)
 
@@ -247,6 +259,25 @@ Written so a text-to-speech voice says them correctly, in your own script - not 
 - [ ] Trakheesi ->
 - [ ] Ejari ->
 - [ ] AED ->
+
+## 4b. What the ambassador is called
+
+The client named the ambassador who speaks Arabic **Nora**. The name is their decision and not yours to change, and it is not language copy: it is the same word whoever is listening.
+
+(The English ambassador is Jane, and the two are deliberately different people rather than one name rendered twice. You are being asked about Nora only.)
+
+What we cannot answer is how it should be written and said to an Arabic buyer. Two answers, both squarely yours:
+
+- [ ] written in Arabic (the form that appears on screen):
+- [ ] said aloud (respelled so a voice says it right, as in section 4):
+
+The second one is asked here rather than in section 4 because it depends on the first: there is no point respelling a form nobody has chosen yet. If your answer to the written form is the name as it stands in Latin letters, the respelling is how an Arabic voice should say it.
+
+Then one judgement, the one we most need and cannot get anywhere else: does Nora land naturally on an Arabic buyer's ear for a brand's ambassador, or does it read as foreign, hard to say, or simply odd? Say so plainly if it does not, and say why.
+
+We are deliberately NOT asking you to choose a different name. If your answer is that Nora does not land, that goes to the client as a question, because the name is theirs. Your reading is what they need in order to decide; a name picked in this room would be the wrong way round.
+
+It is spoken in the first sentence of every call. Arabic has no disclosure yet (section 1), so no call opens in it at all today and Nora is not being said to anyone. Both answers are needed before one is.
 
 ## 5. Things the agent must never be allowed to say
 

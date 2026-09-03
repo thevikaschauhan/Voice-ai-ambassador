@@ -119,12 +119,13 @@ def test_the_voice_session_start_matches_the_text_mode_contract():
         "prompt_mode": "naive",
         "guardrail_mode": "warn",
         "inventory_version": adapter_agent.Harness.load().prompt_fingerprint("hi"),
-        # Empty on purpose: the settings above are `hi`, and Hindi has no
-        # ambassador name until a native reviewer says how it is written. The
-        # unnamed case is the one worth pinning here, because it is what two of
-        # the three shipped languages get and it must stay a plain empty
-        # string rather than becoming "None" on the way to a surface.
-        "ambassador_name": "",
+        # The settings above are `hi`, and Hindi's ambassador is Maya. This
+        # pinned "" while ar and hi were unnamed; the client has since named
+        # all three. The unnamed case still matters - it must stay a plain
+        # empty string rather than becoming "None" on the way to a surface -
+        # and is covered by fixtures in tests/test_ambassadors.py now that no
+        # shipped language exercises it.
+        "ambassador_name": "Maya",
     }
 
 
