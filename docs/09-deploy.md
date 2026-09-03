@@ -1091,6 +1091,39 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    transaction mode would require to be 0, and its own docstring says so. A
    green provisioning run is therefore compatible with a URL that every
    runtime query will fail against.
+   **What a correct URL looks like in the logs.** Since `adapter/session_mode.py`,
+   both Python services refuse a URL that cannot work, on the shared connect
+   path that the migration runner and `Repository.connect` both call - so the
+   refusal happens at `admin-api`'s pre-deploy and at the worker's first write,
+   not only in one of them. Two refusals, quoted as shapes:
+
+   ```
+   DATABASE_URL is a Supabase direct-connection host, which is IPv6-only; use
+   the session pooler (pooler.supabase.com) on port 5432.
+   DATABASE_URL uses port 6543 (Supavisor transaction mode); this process needs
+   session mode on port 5432.
+   ```
+
+   Neither names the host or the user, because a Supabase hostname carries the
+   project ref and the URL carries a password. A refusal fails the deployment
+   and leaves the previous version serving.
+
+   Two lines confirm the good case, and **you need both**:
+
+   ```
+   database port 5432 (session mode)          # admin-api pre-deploy, before the migration lines
+   lead_store_connected target=<host>:<port>  # the worker, on its first write
+   ```
+
+   The first shows the **port** and deliberately nothing else. The second shows
+   the **host** with the port, credentials stripped at the `@`. That division
+   is the table above restated: the port separates session from transaction and
+   the host separates pooler from direct, so a log that shows only the port
+   cannot distinguish the incident this section exists to describe. The guard
+   refuses the direct host before either line prints, which is what makes the
+   port line meaningful - but it is the worker's line that lets a reader SEE
+   the pooler.
+
 4. **Set the values as Railway service variables**, using the table below. They
    move from the Supabase dashboard into Railway directly. A connection string
    contains the database password, so it never goes into a commit, a ticket, a
