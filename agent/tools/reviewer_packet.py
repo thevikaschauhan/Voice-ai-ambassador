@@ -32,6 +32,8 @@ from adapter.disclosure import load_disclosures  # noqa: E402
 from adapter.fallbacks import load_fallback_copy  # noqa: E402
 from adapter.lexicon import load_lexicon  # noqa: E402
 from adapter.prerolls import load_prerolls  # noqa: E402
+from ambassador.farewell import load_farewells  # noqa: E402
+from ambassador.figures import load_numerals  # noqa: E402
 from ambassador.guardrails.prohibited import (  # noqa: E402
     languages_covered,
     load_patterns,
@@ -46,6 +48,36 @@ from ambassador.verbalise import (  # noqa: E402
 )
 
 LANGUAGE_NAMES = {"ar": "Arabic", "hi": "Hindi"}
+
+# Every data file that needs native-authored ar/hi copy, mapped to the heading
+# of the section that asks for it.
+#
+# This exists because the packet's completeness claim was quietly false once.
+# #81 added `farewells.yaml` - a new file needing native closing phrases, a
+# courtesy list and an authored farewell - and did not add a section here, so
+# the packet stopped asking for something the runtime demands and no test
+# noticed. The native session it would have been collected in is the scarcest
+# input this project has.
+#
+# The KEYS are checked against the data directory itself by
+# `test_reviewer_packet.py`, which finds every file carrying a
+# native-authorship `VERIFY:` marker. So this table cannot silently fall
+# behind: add such a file without a section here and the suite fails. It is a
+# declaration of what the packet asks, deliberately kept next to the code that
+# asks it, and it is not the source of truth for which files exist.
+NATIVE_COPY_SECTIONS: dict[str, str] = {
+    "disclosures.yaml": "## 1. The opening disclosure",
+    "fallbacks.yaml": "## 2. Failure copy",
+    "prerolls.yaml": "## 2b. Short acknowledgments",
+    "farewells.yaml": "## 2c. The end of the call",
+    "spoken-forms.yaml": "## 3. Money, percentages and dates spoken aloud",
+    "numerals.yaml": "### The magnitude words the guardrail has to read",
+    "currencies.yaml": "### The currency words a buyer might say",
+    "confirmations.yaml": "## 3b. Checking a buyer's budget back to them",
+    "recognition.yaml": "## 3d. When we cannot hear the buyer at all",
+    "lexicon.yaml": "## 4. How these names should sound",
+    "prohibited-patterns.yaml": "## 5. Things the agent must never be allowed to say",
+}
 
 # Described, not quoted. A reviewer cannot read a regular expression, and a
 # description generalises where an example anchors them to one phrasing. It
@@ -78,6 +110,21 @@ SPEECH_NOTE = {
         'ones. And it wrote the handover quarter as "Q3 2026" inside a Hindi '
         "sentence. Tell us what a buyer should hear in each case."
     ),
+}
+
+# The English glosses for the magnitude ask, per language.
+#
+# Deliberately NOT the same list twice. Hindi is asked about the Indian
+# numbering it actually writes; Arabic is asked openly, without being primed
+# with "lakh" and "crore". `numerals.yaml` does say the borrowings belong in
+# the Arabic table, and an Arabic reviewer who writes them will volunteer them
+# when asked for every magnitude word - whereas naming them first invites a
+# dutiful yes, and a multiplier entered on a guess is a figure wrong by ten or
+# a hundred times. The open question is the safer one, and it is also why the
+# packet keeps Indian numbering out of the Arabic document entirely.
+MAGNITUDE_GLOSS = {
+    "ar": "thousand, million, billion",
+    "hi": "thousand, lakh, crore",
 }
 
 DIALECT_NOTE = {
@@ -140,6 +187,20 @@ def bullet(item: str) -> str:
     return f"- [ ] {item}"
 
 
+def mag_example(language: str) -> str:
+    """A magnitude word the reviewer will recognise, in their own script.
+
+    Quoting one is safe where authoring a list is not: these two words are
+    the ones `numerals.yaml` names in its own VERIFY comments as the examples
+    of what is missing, so this echoes the repository rather than inventing
+    copy (AGENTS.md).
+    """
+    return {
+        "ar": "\u0645\u0644\u064a\u0648\u0646",
+        "hi": "\u0915\u0930\u094b\u0921\u093c",
+    }[language]
+
+
 def article(word: str) -> str:
     """ "an Arabic", "a Hindi". The packet is the first thing a native reviewer
     reads, and it is generated - so the grammar has to be generated too."""
@@ -159,6 +220,8 @@ def main(language: str) -> None:
     fallbacks = load_fallback_copy()
     lexicon = load_lexicon()
     prerolls = load_prerolls()
+    farewells = load_farewells()
+    numerals = load_numerals()
     patterns = load_patterns()
     confirmations = load_confirmations()
 
@@ -192,6 +255,49 @@ def main(language: str) -> None:
     w(
         '"Transcribed" is deliberate and must survive: we keep the text, never '
         "the audio, and the notice has to match that."
+    )
+    w("")
+    w("The three commitments this line must carry, and nothing beyond them:")
+    w("")
+    w(
+        "1. That the buyer is speaking with Binghatti's AI ambassador (both "
+        "that it is AI, and that it is Binghatti's)."
+    )
+    w(
+        "2. That the conversation is transcribed, meaning the text is kept and "
+        "the audio is not, so our team can assist."
+    )
+    w("3. That the buyer can ask for a person at any time.")
+    w("")
+    w(
+        "Please do not add anything else. Not a welcome, not a project or a "
+        "price, not a promise about response times, and not a request for "
+        "permission: this is a notice the buyer hears, not a consent question "
+        "they answer."
+    )
+    w("")
+    w("Three choices we cannot make for you, and would like recorded with the copy:")
+    w("")
+    w(
+        '- The word for "transcribed". It has to mean the text is kept and the '
+        "audio is not. If there is no clean single word, a short clause is "
+        'better than the word for "recorded", which implies we keep audio. We '
+        "do not."
+    )
+    w('- The register of "you", and whether it stays that way for the whole call.')
+    w(
+        '- How "AI" is actually said to a property buyer, rather than how it '
+        "is written. If the natural spoken form is the English initialism, say "
+        "so and we will use it: a textbook-correct term nobody says out loud "
+        "is the wrong answer here, and this is your judgement, not ours."
+    )
+    w("")
+    w(
+        "Two practical notes: there are no digits in this line, so nothing "
+        "here needs a spoken-number decision. And it is the one line that "
+        "opens every single call and cannot be interrupted, so please hear it "
+        "back in the shipping voice before you sign it off rather than only "
+        "reading it."
     )
     w("")
     w(bullet(f"{name} disclosure:"))
@@ -237,6 +343,85 @@ def main(language: str) -> None:
     w(bullet(f"{name} acknowledgment:"))
     w(bullet(f"{name} acknowledgment:"))
     w("")
+    w("## 2c. The end of the call")
+    w("")
+    w(
+        "Two different things are needed here, and the second one is the "
+        "delicate one. The first is what the agent SAYS when a call ends. The "
+        "second is how it recognises that the buyer is ending it."
+    )
+    w("")
+    w("**The farewell itself** - spoken once, then the call closes.")
+    stand_in = farewells.speech.get(language, "") == farewells.speech["en"]
+    w(f"English: > {farewells.speech['en']}")
+    if stand_in:
+        w("")
+        w(
+            f"The {name} slot currently holds this same English text as a "
+            "stand-in, because a call must never end in silence. It is not "
+            f"{article(name)} {name} farewell and we are not asking you to "
+            "approve it."
+        )
+    w("")
+    w(bullet(f"{name} farewell:"))
+    w("")
+    w("**Recognising that the buyer is closing.** This is two lists, not one.")
+    w("")
+    w(
+        "The rule is that a farewell must be what the utterance IS, not a word "
+        "inside it: at least one closing phrase has to match, and everything "
+        "else in the utterance has to be a courtesy word. That is what keeps "
+        '"before we say goodbye, what about the payment plan" a question about '
+        "the payment plan."
+    )
+    w("")
+    w(
+        "So the two lists are not interchangeable, and the split matters more than the contents:"
+    )
+    w("")
+    w(
+        "- **Closing phrases** are the closings themselves. Put something here "
+        "only if hearing it ALONE should end the call."
+    )
+    w(
+        "- **Courtesy words** may sit around a closing without changing what it "
+        'is (the "ok" and "then" and "thanks" of "ok, thanks, bye then"). '
+        "These never fire on their own, so a courtesy in the wrong list is "
+        "harmless and a closing in the wrong list is a hang-up on a live "
+        "buyer. When in doubt, put it in courtesies."
+    )
+    w("")
+    w(
+        "Please err SHORT on closing phrases. A missed goodbye leaves the call "
+        "exactly as it behaves today; a false one hangs up on a buyer "
+        "mid-sentence. We would rather ship ten certain phrases than forty "
+        "probable ones."
+    )
+    w("")
+    w(
+        "Code-switched English matters here: a Dubai buyer may well end "
+        f'{article(name)} {name} call with "ok bye". Tell us which English '
+        f"closings genuinely occur in {name} calls and we will include them, "
+        "marked as code-switched. We are not assuming them."
+    )
+    w("")
+    w(
+        "Also: please quote every entry when you write them down. A bare `no` "
+        "or `ok` loads as a yes/no value rather than a word and becomes "
+        "something that can never match, a trap two other files here already "
+        "walked into."
+    )
+    w("")
+    w(
+        f"(For reference, English uses {len(farewells.phrases['en'])} closing "
+        f"phrases and {len(farewells.courtesies['en'])} courtesy words. "
+        f"Detection in {name} is off entirely today.)"
+    )
+    w("")
+    w(bullet(f"{name} closing phrases (err short):"))
+    w(bullet(f"{name} courtesy words:"))
+    w(bullet(f"code-switched English closings that really occur in {name} calls:"))
+    w("")
     w("## 3. Money, percentages and dates spoken aloud")
     w("")
     w(
@@ -279,6 +464,58 @@ def main(language: str) -> None:
     )
     w("")
     w(bullet("currency tokens:"))
+    w("")
+    w("### The magnitude words the guardrail has to read")
+    w("")
+    w(
+        "Different job from everything above, and the highest-stakes ask on "
+        "this page. The three sections above are about what the buyer HEARS. "
+        "This one is about what the system can READ, so that it can refuse to "
+        "say a figure it has not verified."
+    )
+    w("")
+    w(
+        f"The numeric guardrail reads a figure by finding the digits and the "
+        f"magnitude word beside them. In {name} it currently knows no "
+        f'magnitude words at all, so "8 {mag_example(language)}" reads as the '
+        "number eight rather than as a large amount, and a figure that small "
+        "keeps exemptions that a large one would not get. That is the "
+        "guardrail seeing less than the buyer does."
+    )
+    w("")
+    w(
+        "We supply the factors, so please give only the words: you do not need "
+        "to tell us what each one is worth, and we will confirm every pairing "
+        "back to you before it ships."
+    )
+    w("")
+    w(
+        "Include every spelling and inflection a model might write, including "
+        "plurals, because this is matched against written text rather than "
+        "heard."
+    )
+    w("")
+    known = (
+        f"(The system knows {len(numerals.multipliers)} magnitude words today, "
+        f"and reports authored words for "
+        f"{', '.join(sorted(numerals.languages))} only."
+    )
+    if language == "hi":
+        # Indian English writes these in Latin script and every list applies to
+        # every language, so they are genuinely already covered - a point worth
+        # making to a Hindi reviewer and noise to an Arabic one.
+        known += (
+            ' The Latin spellings "lakh" and "crore" are already covered and '
+            "do not need repeating; what is missing is the same words written "
+            "in Devanagari.)"
+        )
+    else:
+        known += f" What is missing is the words written in {name}.)"
+    w(known)
+    w("")
+    w(bullet(f"magnitude words in {name} ({MAGNITUDE_GLOSS[language]}):"))
+    w(bullet(f'the word for "percent" spelled out in {name}:'))
+    w(bullet(f"currency words written in {name} (dirhams, rupees):"))
     w("")
     w("## 3b. Checking a buyer's budget back to them")
     w("")

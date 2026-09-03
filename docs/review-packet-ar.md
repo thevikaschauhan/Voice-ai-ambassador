@@ -12,6 +12,22 @@ English: > You are speaking with Binghatti's AI ambassador. This conversation is
 
 "Transcribed" is deliberate and must survive: we keep the text, never the audio, and the notice has to match that.
 
+The three commitments this line must carry, and nothing beyond them:
+
+1. That the buyer is speaking with Binghatti's AI ambassador (both that it is AI, and that it is Binghatti's).
+2. That the conversation is transcribed, meaning the text is kept and the audio is not, so our team can assist.
+3. That the buyer can ask for a person at any time.
+
+Please do not add anything else. Not a welcome, not a project or a price, not a promise about response times, and not a request for permission: this is a notice the buyer hears, not a consent question they answer.
+
+Three choices we cannot make for you, and would like recorded with the copy:
+
+- The word for "transcribed". It has to mean the text is kept and the audio is not. If there is no clean single word, a short clause is better than the word for "recorded", which implies we keep audio. We do not.
+- The register of "you", and whether it stays that way for the whole call.
+- How "AI" is actually said to a property buyer, rather than how it is written. If the natural spoken form is the English initialism, say so and we will use it: a textbook-correct term nobody says out loud is the wrong answer here, and this is your judgement, not ours.
+
+Two practical notes: there are no digits in this line, so nothing here needs a spoken-number decision. And it is the one line that opens every single call and cannot be interrupted, so please hear it back in the shipping voice before you sign it off rather than only reading it.
+
 - [ ] Arabic disclosure:
 
 ## 2. Failure copy (required - this is what speaks when the model fails)
@@ -39,6 +55,38 @@ If there is no natural Arabic equivalent, say so and we play nothing - an Englis
 
 - [ ] Arabic acknowledgment:
 - [ ] Arabic acknowledgment:
+
+## 2c. The end of the call
+
+Two different things are needed here, and the second one is the delicate one. The first is what the agent SAYS when a call ends. The second is how it recognises that the buyer is ending it.
+
+**The farewell itself** - spoken once, then the call closes.
+English: > Thank you for your time today. If you would like to go further, a Binghatti ambassador can pick this up with you whenever suits. Goodbye.
+
+The Arabic slot currently holds this same English text as a stand-in, because a call must never end in silence. It is not an Arabic farewell and we are not asking you to approve it.
+
+- [ ] Arabic farewell:
+
+**Recognising that the buyer is closing.** This is two lists, not one.
+
+The rule is that a farewell must be what the utterance IS, not a word inside it: at least one closing phrase has to match, and everything else in the utterance has to be a courtesy word. That is what keeps "before we say goodbye, what about the payment plan" a question about the payment plan.
+
+So the two lists are not interchangeable, and the split matters more than the contents:
+
+- **Closing phrases** are the closings themselves. Put something here only if hearing it ALONE should end the call.
+- **Courtesy words** may sit around a closing without changing what it is (the "ok" and "then" and "thanks" of "ok, thanks, bye then"). These never fire on their own, so a courtesy in the wrong list is harmless and a closing in the wrong list is a hang-up on a live buyer. When in doubt, put it in courtesies.
+
+Please err SHORT on closing phrases. A missed goodbye leaves the call exactly as it behaves today; a false one hangs up on a buyer mid-sentence. We would rather ship ten certain phrases than forty probable ones.
+
+Code-switched English matters here: a Dubai buyer may well end an Arabic call with "ok bye". Tell us which English closings genuinely occur in Arabic calls and we will include them, marked as code-switched. We are not assuming them.
+
+Also: please quote every entry when you write them down. A bare `no` or `ok` loads as a yes/no value rather than a word and becomes something that can never match, a trap two other files here already walked into.
+
+(For reference, English uses 20 closing phrases and 32 courtesy words. Detection in Arabic is off entirely today.)
+
+- [ ] Arabic closing phrases (err short):
+- [ ] Arabic courtesy words:
+- [ ] code-switched English closings that really occur in Arabic calls:
 
 ## 3. Money, percentages and dates spoken aloud
 
@@ -81,6 +129,22 @@ Spoken as "the fourth quarter of 2026", never "Q four".
 List every written form of the currency your phrases above already say aloud - the native word, and any Latin form a model might write mid-sentence when writing Arabic (AED, Dhs). We remove these so the buyer does not hear the currency twice.
 
 - [ ] currency tokens:
+
+### The magnitude words the guardrail has to read
+
+Different job from everything above, and the highest-stakes ask on this page. The three sections above are about what the buyer HEARS. This one is about what the system can READ, so that it can refuse to say a figure it has not verified.
+
+The numeric guardrail reads a figure by finding the digits and the magnitude word beside them. In Arabic it currently knows no magnitude words at all, so "8 مليون" reads as the number eight rather than as a large amount, and a figure that small keeps exemptions that a large one would not get. That is the guardrail seeing less than the buyer does.
+
+We supply the factors, so please give only the words: you do not need to tell us what each one is worth, and we will confirm every pairing back to you before it ships.
+
+Include every spelling and inflection a model might write, including plurals, because this is matched against written text rather than heard.
+
+(The system knows 15 magnitude words today, and reports authored words for en only. What is missing is the words written in Arabic.)
+
+- [ ] magnitude words in Arabic (thousand, million, billion):
+- [ ] the word for "percent" spelled out in Arabic:
+- [ ] currency words written in Arabic (dirhams, rupees):
 
 ## 3b. Checking a buyer's budget back to them
 
