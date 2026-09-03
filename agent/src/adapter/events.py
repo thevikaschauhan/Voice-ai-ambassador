@@ -184,7 +184,13 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     # slug; `language`, `prompt_mode` and `guardrail_mode` are closed enums;
     # `inventory_version` is a 12-character SHA-256 prompt digest, never the
     # prompt or inventory itself. Each is configuration, not buyer free text.
-    "session_start": "a redacted config, configured enums and a prompt digest",
+    # `ambassador_name` joins them: product identity from data/ambassadors.yaml,
+    # chosen by the client, and the same string the web surface labels the orb
+    # with. Not a fact about the buyer.
+    "session_start": (
+        "a redacted config, configured enums, a prompt digest and the "
+        "ambassador's given name"
+    ),
     "session_end": "a turn count",
     # Two language codes and two adapter-authored words. The room metadata this
     # reads is written by another service, and NONE of it is emitted: `reason`
@@ -201,7 +207,10 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "call_ended": "one of three fixed reasons",
     "farewell_spoken": "a turn index; the copy itself is authored, not buyer-derived",
     "farewell_interrupted": "the same fixed reason, for a close the buyer talked over",
-    "disclosure": "two language codes and a boolean, all from configuration",
+    "disclosure": (
+        "two language codes and a boolean, all from configuration, plus the "
+        "ambassador name actually spoken - a data-file value, never buyer text"
+    ),
     "budget_policy": "language codes and booleans, all from configuration",
     # An enum action, a currency code and booleans - and deliberately NOT the
     # text. A confirmation echoes the buyer's own budget, so its text is

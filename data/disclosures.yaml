@@ -15,16 +15,43 @@
 # ALLOW_UNCERTIFIED_LANGUAGE=true opens in English instead and marks the event
 # stream `uncertified_fallback: true`, which is the graceful-degradation demo
 # docs/04- asks for - not a way to ship an unreviewed language quietly.
+#
+# TWO SHAPES, and the difference is only whether the ambassador has a name.
+#
+#   a plain string      the sentence, spoken as written. The shape every entry
+#                       had before names existed, and still the right one for a
+#                       language whose ambassador is unnamed.
+#   a mapping           `unnamed:` is that same sentence and is REQUIRED - it
+#                       is what makes the language openable at all, and it is
+#                       what gets spoken if the name is ever cleared.
+#                       `named:` is optional, carries `{name}`, and is used
+#                       only when data/ambassadors.yaml has a name for this
+#                       language.
+#
+# Both forms are authored, both are read aloud, and a reviewer signs off on
+# both: a sentence that only reads correctly with a name substituted into it is
+# a sentence nobody has actually checked. If `named:` is missing while a name
+# exists, the unnamed sentence is spoken - the disclosure still happens, it
+# just does not use the name. There is deliberately no rendering path that can
+# produce "You are speaking with , Binghatti's AI ambassador".
 
-en: >
-  You are speaking with Binghatti's AI ambassador. This conversation is
-  transcribed so our team can assist you. You can ask for a person at any
-  time.
+en:
+  named: >
+    You are speaking with {name}, Binghatti's AI ambassador. This conversation
+    is transcribed so our team can assist you. You can ask for a person at any
+    time.
+  unnamed: >
+    You are speaking with Binghatti's AI ambassador. This conversation is
+    transcribed so our team can assist you. You can ask for a person at any
+    time.
 
 ar: ""
   # VERIFY: native-authored Arabic disclosure. The call must not ship in
   # Arabic until this exists and has been reviewed, and now it cannot: with
-  # this empty, LANGUAGE=ar refuses to start.
+  # this empty, LANGUAGE=ar refuses to start. When it arrives, it comes as the
+  # mapping above if the ambassador has an Arabic name by then, and as a plain
+  # string if she does not.
 
 hi: ""
-  # VERIFY: native-authored Hindi disclosure. Same rule, same enforcement.
+  # VERIFY: native-authored Hindi disclosure. Same rule, same enforcement, same
+  # two shapes.

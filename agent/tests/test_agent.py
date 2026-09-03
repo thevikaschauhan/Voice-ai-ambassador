@@ -119,7 +119,20 @@ def test_the_voice_session_start_matches_the_text_mode_contract():
         "prompt_mode": "naive",
         "guardrail_mode": "warn",
         "inventory_version": adapter_agent.Harness.load().prompt_fingerprint("hi"),
+        # Empty on purpose: the settings above are `hi`, and Hindi has no
+        # ambassador name until a native reviewer says how it is written. The
+        # unnamed case is the one worth pinning here, because it is what two of
+        # the three shipped languages get and it must stay a plain empty
+        # string rather than becoming "None" on the way to a surface.
+        "ambassador_name": "",
     }
+
+
+def test_the_session_contract_carries_the_ambassador_name_where_there_is_one():
+    """The other half, so the assertion above cannot pass by the field being
+    absent from both sides."""
+    settings = make_settings(language="en")
+    assert adapter_agent._session_start_fields(settings)["ambassador_name"] == "Jane"
 
 
 # --- fakes ----------------------------------------------------------------

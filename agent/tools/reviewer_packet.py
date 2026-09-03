@@ -32,6 +32,7 @@ from adapter.disclosure import load_disclosures  # noqa: E402
 from adapter.fallbacks import load_fallback_copy  # noqa: E402
 from adapter.lexicon import load_lexicon  # noqa: E402
 from adapter.prerolls import load_prerolls  # noqa: E402
+from ambassador.ambassadors import load_ambassadors  # noqa: E402
 from ambassador.farewell import load_farewells  # noqa: E402
 from ambassador.figures import load_numerals  # noqa: E402
 from ambassador.guardrails.prohibited import (  # noqa: E402
@@ -76,6 +77,7 @@ NATIVE_COPY_SECTIONS: dict[str, str] = {
     "confirmations.yaml": "## 3b. Checking a buyer's budget back to them",
     "recognition.yaml": "## 3d. When we cannot hear the buyer at all",
     "lexicon.yaml": "## 4. How these names should sound",
+    "ambassadors.yaml": "## 4b. What the ambassador is called",
     "prohibited-patterns.yaml": "## 5. Things the agent must never be allowed to say",
 }
 
@@ -246,12 +248,45 @@ def main(language: str) -> None:
     w("")
     w(
         "Spoken by the system before the agent says anything, and it cannot be "
-        "interrupted. Until this exists the agent refuses to start a call in "
-        f"{name} at all."
+        "interrupted."
+    )
+    w("")
+    # Two sentences, two different stakes, and conflating them overstates one
+    # and understates the other. The unnamed sentence is what makes the
+    # language shippable at all; the named one is an improvement whose absence
+    # falls back rather than refusing.
+    w("**We need TWO versions of it, and they are not the same ask.**")
+    w("")
+    w(
+        f"**A. Without the ambassador's name** - required. Until this exists "
+        f"the agent refuses to start a call in {name} at all."
     )
     w("")
     w(f"English: > {disclosures.copy['en']}")
     w("")
+    w(bullet(f"{name}:"))
+    w("")
+    named = disclosures.named_copy.get("en", "")
+    if named:
+        w(
+            "**B. With the ambassador's name** - wanted, not required. If this "
+            f"is missing, calls in {name} simply open with version A and no "
+            "name, which is what happens today."
+        )
+        w("")
+        w(f"English: > {named}")
+        w("")
+        w(
+            "Keep the placeholder `{name}` exactly as written, wherever the "
+            "name belongs in your sentence. We substitute the ambassador's "
+            "name into it. Where a name sits inside a sentence is an authoring "
+            "question in your language and not something we can derive from "
+            "version A, which is why we are asking for both rather than "
+            "translating one into the other."
+        )
+        w("")
+        w(bullet(f"{name}:"))
+        w("")
     w(
         '"Transcribed" is deliberate and must survive: we keep the text, never '
         "the audio, and the notice has to match that."
@@ -261,7 +296,9 @@ def main(language: str) -> None:
     w("")
     w(
         "1. That the buyer is speaking with Binghatti's AI ambassador (both "
-        "that it is AI, and that it is Binghatti's)."
+        "that it is AI, and that it is Binghatti's). In version B the "
+        "ambassador's given name sits inside this same commitment - it "
+        "identifies who is speaking and is not a fourth thing being claimed."
     )
     w(
         "2. That the conversation is transcribed, meaning the text is kept and "
@@ -273,7 +310,9 @@ def main(language: str) -> None:
         "Please do not add anything else. Not a welcome, not a project or a "
         "price, not a promise about response times, and not a request for "
         "permission: this is a notice the buyer hears, not a consent question "
-        "they answer."
+        "they answer. The name in version B is not an exception to this - it "
+        "is part of commitment 1, not something we added on top, so please do "
+        "not drop it to satisfy the rule."
     )
     w("")
     w("Three choices we cannot make for you, and would like recorded with the copy:")
@@ -684,6 +723,49 @@ def main(language: str) -> None:
         pass
     for term in _terms():
         w(bullet(f"{term} ->"))
+    w("")
+    # Wording is pam's (packet owner). The one thing it deliberately does NOT
+    # ask for is a replacement name: handing a reviewer that decision is the
+    # same error as asking this team to author the disclosure, pointed the
+    # other way. Their reading is what the client needs in order to choose.
+    w("## 4b. What the ambassador is called")
+    w("")
+    english = load_ambassadors().name_for("en") or "(not chosen yet)"
+    w(
+        f"The client named the English ambassador {english}. The name is their "
+        "decision and not yours to change, and it is not language copy: it is "
+        "the same word whoever is listening."
+    )
+    w("")
+    w(
+        "What we cannot answer is how it should be written and said to a "
+        f"{name} buyer. Two answers, both squarely yours:"
+    )
+    w("")
+    w(bullet(f"written in {name} (the form that appears on screen):"))
+    w(bullet("said aloud: see section 4, where the respellings live"))
+    w("")
+    w(
+        "Then one judgement, the one we most need and cannot get anywhere "
+        "else: does an English given name land naturally on a "
+        f"{name} buyer's ear for a brand's ambassador, or does it read as "
+        "foreign, hard to say, or simply odd? Say so plainly if it does not, "
+        "and say why."
+    )
+    w("")
+    w(
+        "We are deliberately NOT asking you to choose a different name. If "
+        f"your answer is that {english} does not land, that goes to the client "
+        "as a question, because the name is theirs. Your reading is what they "
+        "need in order to decide; a name picked in this room would be the "
+        "wrong way round."
+    )
+    w("")
+    w(
+        "It is spoken in the first sentence of every call, so a form that "
+        f"reads oddly is the first thing the buyer hears. Until you answer, "
+        f"calls in {name} open without a name, exactly as they do today."
+    )
     w("")
     w("## 5. Things the agent must never be allowed to say")
     w("")

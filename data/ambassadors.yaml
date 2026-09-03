@@ -1,0 +1,38 @@
+# The ambassador's given name, per language. Read by the Python core
+# (agent/src/ambassador/ambassadors.py) and, at request time, by the web
+# surface for the orb label. Two services, one file, one schema: a name that
+# disagrees between the page and the voice is worse than no name.
+#
+# A NAME IS PRODUCT IDENTITY, NOT LANGUAGE COPY. The client chose "Jane" for
+# English. That is a decision about who the ambassador is, and it is the same
+# word whoever is listening - so AGENTS.md's rule against authoring copy in a
+# language you do not speak does not apply to the name itself. It very much
+# applies to the sentence AROUND the name, which is why the disclosure lives
+# in data/disclosures.yaml and still needs native authoring, and to the
+# question of how a given name should be WRITTEN in Arabic or Devanagari and
+# how it should be said aloud. That question is a native reviewer's and is
+# asked in the reviewer packet. Do not answer it here by transliterating.
+#
+# AN EMPTY ENTRY MEANS UNNAMED, and unnamed is a working state, not a failure.
+# The disclosure and the prompt both fall back to the wording that shipped
+# before names existed, so `ar` and `hi` behave exactly as they do today until
+# a reviewer answers. This is deliberately NOT the disclosures.yaml rule,
+# where an empty entry blocks the language: a call with no disclosure is a
+# call that may not happen, and a call with an unnamed ambassador is just a
+# call.
+#
+# QUOTE EVERY VALUE. This file is read into speech and into a prompt, and bare
+# YAML scalars are not strings: `no` and `on` load as booleans, a bare number
+# loads as a number, and either would reach a buyer as something other than
+# what was typed. The loader rejects a non-string rather than coercing it.
+
+en: "Jane"
+
+ar: ""
+  # VERIFY: with a native reviewer - the Arabic form of the ambassador's given
+  # name, and how it should be said. Leave empty until answered; Arabic calls
+  # open unnamed in the meantime.
+
+hi: ""
+  # VERIFY: with a native reviewer - the Devanagari form of the ambassador's
+  # given name, and how it should be said. Same rule.

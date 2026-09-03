@@ -25,6 +25,17 @@
 # BY EAR in every shipped voice during rehearsal. Mispronouncing the client's
 # name in their own boardroom is unrecoverable.
 
+# The ambassador's own given name (data/ambassadors.yaml). It goes through this
+# same path on its way to TTS, and section 4 of the reviewer packet asks for its
+# ar/hi respelling automatically because it is a term here - which is the only
+# place a "how is it said" answer can actually be recorded.
+# COUPLING: this term is the literal string "Jane". If the client later chooses
+# a different given name for a language, this entry changes with it, because a
+# respelling keyed to a name nobody uses is respelling nothing.
+- term: Jane
+  arpabet: null
+  respell:
+    en: "jayn"
 - term: Binghatti
   arpabet: null   # VERIFY: with the client - bin-GAT-ti
   respell:

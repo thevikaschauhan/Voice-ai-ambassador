@@ -37,7 +37,8 @@ the real thing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, get_args
 
@@ -57,16 +58,40 @@ _LANGUAGES: Final[tuple[Language, ...]] = get_args(Language)
 _SELF_CERTIFIED: Final[Language] = "en"
 
 
+# The one substitution the copy may carry. Named rather than inlined so a
+# search for it finds the data file, the loader and the test together.
+NAME_PLACEHOLDER: Final = "{name}"
+
+
 @dataclass(frozen=True)
 class Disclosures:
     """Disclosure copy per language, with absence preserved rather than filled.
 
-    `certified` is exactly the set of languages holding real copy. It is the
-    readiness signal the session gate reads, so it must not be inferred from
-    anything softer than the presence of the text itself.
+    `copy` is the sentence spoken when the ambassador is unnamed, and it is
+    what `certified` reads: a language is openable when it has that sentence,
+    which is exactly the rule that applied before names existed. `named_copy`
+    is the optional template carrying `{name}` and is used only when there is a
+    name to put in it.
+
+    Two fields rather than one rendered string because the choice depends on
+    `data/ambassadors.yaml`, which this loader deliberately does not read - the
+    disclosure knows what it can say, the caller knows who is saying it.
     """
 
     copy: dict[Language, str]
+    named_copy: dict[Language, str] = field(default_factory=dict)
+
+    def speak(self, language: Language, name: str) -> str:
+        """The disclosure for this language, with the ambassador's name in it.
+
+        Falls back to the unnamed sentence whenever there is nothing to
+        substitute or nowhere to substitute it, so no combination of a missing
+        name and a missing template can produce a sentence with a hole in it.
+        """
+        template = self.named_copy.get(language, "")
+        if not name or not template:
+            return self.copy.get(language, "")
+        return template.replace(NAME_PLACEHOLDER, name)
 
     @property
     def certified(self) -> frozenset[Language]:
@@ -86,6 +111,26 @@ class Disclosures:
         return self.copy[_SELF_CERTIFIED], _SELF_CERTIFIED
 
 
+def _text(source: str, language: Language, value: Any, key: str | None) -> str:
+    """One scalar of disclosure copy, or a refusal.
+
+    Same YAML trap the fallback loader documents: bare yes/no/on/off parse as
+    booleans and bare digits as numbers, and this string is spoken to a buyer
+    verbatim. Shared by both shapes so the named template cannot quietly skip
+    the check the plain string gets.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        where = f"{language!r}" if key is None else f"{key!r} for {language!r}"
+        raise ValueError(
+            f"{source}: the disclosure {where} is a {type(value).__name__}, "
+            "not text. This is spoken to a buyer verbatim, so it has to be a "
+            "quoted string."
+        )
+    return value.strip()
+
+
 def load_disclosures(path: Path | None = None) -> Disclosures:
     """Parse the file, or fail in front of whoever edited it.
 
@@ -103,20 +148,35 @@ def load_disclosures(path: Path | None = None) -> Disclosures:
         )
 
     copy: dict[Language, str] = {}
+    named_copy: dict[Language, str] = {}
     for language in _LANGUAGES:
         value = document.get(language)
-        if value is None:
-            value = ""
-        elif not isinstance(value, str):
-            # Same YAML trap the fallback loader documents: bare yes/no/on/off
-            # parse as booleans and bare digits as numbers, and this string is
-            # spoken to a buyer verbatim.
-            raise ValueError(
-                f"{source.name}: the disclosure for {language!r} is a "
-                f"{type(value).__name__}, not text. This is spoken to a buyer "
-                "verbatim, so it has to be a quoted string."
-            )
-        copy[language] = value.strip()
+        if isinstance(value, dict):
+            # The named shape. `unnamed` is the disclosure and is what makes the
+            # language openable; `named` is the optional template. Read in that
+            # order so a mapping that forgot `unnamed` fails here rather than at
+            # the readiness gate, where the message would blame the wrong thing.
+            unnamed = _text(source.name, language, value.get("unnamed"), "unnamed")
+            if not unnamed:
+                raise ValueError(
+                    f"{source.name}: {language!r} has no 'unnamed' disclosure. "
+                    "That sentence is the one that makes the language openable "
+                    "and the one spoken if the ambassador's name is ever "
+                    "cleared, so a named template cannot stand alone."
+                )
+            template = _text(source.name, language, value.get("named"), "named")
+            if template and NAME_PLACEHOLDER not in template:
+                raise ValueError(
+                    f"{source.name}: the 'named' disclosure for {language!r} "
+                    f"contains no {NAME_PLACEHOLDER}, so naming the ambassador "
+                    "would change nothing about what the buyer hears. Either "
+                    "put the placeholder in it or delete the key."
+                )
+            copy[language] = unnamed
+            if template:
+                named_copy[language] = template
+        else:
+            copy[language] = _text(source.name, language, value, None)
 
     if not copy[_SELF_CERTIFIED]:
         raise ValueError(
@@ -124,7 +184,7 @@ def load_disclosures(path: Path | None = None) -> Disclosures:
             "opens with a disclosure, and this is the copy an uncertified "
             "language falls back to, so its absence leaves nothing to say."
         )
-    return Disclosures(copy=copy)
+    return Disclosures(copy=copy, named_copy=named_copy)
 
 
 class UncertifiedLanguageError(RuntimeError):
@@ -141,6 +201,7 @@ def resolve_opening(
     language: Language,
     *,
     allow_uncertified: bool,
+    names: Mapping[Language, str] | None = None,
 ) -> tuple[str, Language]:
     """The disclosure to speak, or a refusal to open the call at all.
 
@@ -149,9 +210,17 @@ def resolve_opening(
     English disclosure on an Arabic call is a documented, deliberate
     degradation, and the record has to show it was that rather than a
     certified Arabic opening.
+
+    `names` is the ambassador name per language, and the lookup is keyed on the
+    language ACTUALLY SPOKEN rather than the one requested. That matters in the
+    degraded case: an Arabic call that falls back to the English sentence must
+    use the English name, because the name is being read inside English copy.
+    Omitted, the ambassador is unnamed and the sentence is the one that shipped
+    before names existed - which is what every existing caller and test gets.
     """
+    lookup = dict(names or {})
     if disclosures.is_certified(language):
-        return disclosures.copy[language], language
+        return disclosures.speak(language, lookup.get(language, "")), language
 
     if not allow_uncertified:
         raise UncertifiedLanguageError(
@@ -160,4 +229,9 @@ def resolve_opening(
             "native speaker, or set ALLOW_UNCERTIFIED_LANGUAGE=true to demo "
             f"the degraded path, which opens in {_SELF_CERTIFIED!r} instead."
         )
-    return disclosures.for_language(language)
+    _, spoken_language = disclosures.for_language(language)
+    # Re-rendered rather than reusing the copy `for_language` returned: that one
+    # is the unnamed sentence, and the name belongs to the language actually
+    # being spoken, not the one that was asked for.
+    speech = disclosures.speak(spoken_language, lookup.get(spoken_language, ""))
+    return speech, spoken_language

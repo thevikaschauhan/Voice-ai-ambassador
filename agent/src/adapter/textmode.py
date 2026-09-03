@@ -39,6 +39,7 @@ import sys
 import time
 from typing import Any, Final
 
+from ambassador.ambassadors import load_ambassadors
 from ambassador.schemas import Language
 
 from .config import load_settings
@@ -123,6 +124,11 @@ class TextSession:
                 "prompt_mode": "ambassador",
                 "guardrail_mode": "enforce",
                 "inventory_version": self._harness.prompt_fingerprint(self._language),
+                # Same field as the voice path, from the same file. The two
+                # transports are pinned to one session contract (#86), and an
+                # ambassador who is Jane on a call and unnamed in text would be
+                # the kind of divergence that pinning exists to prevent.
+                "ambassador_name": load_ambassadors().name_for(self._language),
             }
         ]
 

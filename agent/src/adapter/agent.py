@@ -80,6 +80,7 @@ from ambassador.projects import (
     agreement_words,
     build_name_index,
 )
+from ambassador.ambassadors import load_ambassadors
 from ambassador.recognition import RecognitionMonitor, load_noise_words
 from ambassador.schemas import Language
 from ambassador.verbalise import load_spoken_forms
@@ -219,6 +220,12 @@ class AmbassadorAgent(Agent):
         # policies: the reason is the framework's, not any one policy's.
         self._policy_observed_turn: int | None = None
 
+        # Who this ambassador is, by language. Empty is "unnamed" and is a
+        # working state, not a gap: the prompt and the disclosure both fall
+        # back to the wording that shipped before names existed.
+        self._ambassadors = load_ambassadors()
+        self._ambassador_name = self._ambassadors.name_for(settings.language)
+
         instructions = (
             NAIVE_PROMPT
             if settings.prompt_mode == "naive"
@@ -227,6 +234,7 @@ class AmbassadorAgent(Agent):
                 settings.language,
                 system_confirms_budget=self._budget_policy_runs,
                 system_confirms_project=self._project_policy_runs,
+                ambassador_name=self._ambassador_name,
             )
         )
         super().__init__(instructions=instructions)
@@ -358,6 +366,13 @@ class AmbassadorAgent(Agent):
             load_disclosures(),
             settings.language,
             allow_uncertified=settings.allow_uncertified_language,
+            names=self._ambassadors.names,
+        )
+        # The name actually SPOKEN, which is the one for the language the
+        # opening ends up in. On a degraded call that is the English name
+        # inside English copy, not the empty Arabic one.
+        self._spoken_ambassador_name = self._ambassadors.name_for(
+            self._opening_language
         )
 
         # The end of the call. Loaded and guard-checked HERE, after
@@ -411,6 +426,11 @@ class AmbassadorAgent(Agent):
             # deliberate, documented degradation, and the record must never let
             # it be mistaken for a certified Arabic opening.
             uncertified_fallback=degraded,
+            # The name in the sentence the buyer is about to hear. Reported
+            # beside the language because on a degraded call the two come from
+            # different languages, and `session_start`'s name is the one for
+            # the language that was ASKED for.
+            ambassador_name=self._spoken_ambassador_name,
         )
         if degraded:
             logger.warning(
@@ -1686,6 +1706,12 @@ def _session_start_fields(settings: Settings) -> dict[str, object]:
         "prompt_mode": settings.prompt_mode,
         "guardrail_mode": settings.guardrail_mode,
         "inventory_version": Harness.load().prompt_fingerprint(settings.language),
+        # Who this call runs as. From data/ambassadors.yaml rather than the
+        # config, because it is product identity the client chose and not an
+        # environment setting - and the web surface reads the same file for the
+        # orb label, so a mismatch between the page and the voice shows up in
+        # one place. Empty means unnamed, which is a working state.
+        "ambassador_name": load_ambassadors().name_for(settings.language),
     }
 
 

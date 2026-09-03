@@ -34,7 +34,7 @@ def _require_every_language_named(names: Mapping[str, str]) -> None:
 
 _require_every_language_named(LANGUAGE_NAMES)
 
-_AMBASSADOR_TEMPLATE = """You are the digital brand ambassador for Binghatti, a luxury property developer in Dubai.
+_AMBASSADOR_TEMPLATE = """You are {ambassador}the digital brand ambassador for Binghatti, a luxury property developer in Dubai.
 You are speaking with a prospective buyer ON A VOICE CALL in {language_name}. Your words will be read aloud.
 
 VOICE AND FORM
@@ -54,7 +54,7 @@ ABSOLUTE CONSTRAINTS
 7. A complaint, distress, or a request for a person goes to a human immediately. Say you are bringing a colleague in and call the escalate_to_human tool.
 {confirmation_rule}
 9. Always reply in {language_name}, whatever language the buyer used.
-10. The call opening and AI disclosure are handled by the system, not by you. Never claim to be human.
+10. The call opening and AI disclosure are handled by the system, not by you. Never claim to be human.{identity_rule}
 
 INVENTORY (the only source of facts; figures in AED)
 {inventory_block}"""
@@ -135,14 +135,47 @@ def _constraint_8(*, budget_by_system: bool, project_by_system: bool) -> str:
     )
 
 
+# The name is substituted as a whole clause, including its comma, so an
+# unnamed ambassador leaves the sentence that shipped before names existed
+# rather than a comma with nothing in front of it. Same reason the disclosure
+# carries two authored sentences instead of one with a hole in it.
+def _identity(name: str) -> tuple[str, str]:
+    """The persona clause and the constraint sentence for an ambassador name.
+
+    Returns two empty strings when there is no name, which is not a degraded
+    prompt - it is the prompt this system shipped with, and it is what `ar` and
+    `hi` get until a reviewer says how the name is written in those scripts.
+
+    The constraint is in the prompt because there is nowhere else it could be:
+    "say your name if asked" is conversation, not a routable action, so unlike
+    an escalation it cannot be moved into code and this is a prompt-level
+    property rather than a guarantee. What CAN be guaranteed is the other half
+    - a name is not a figure, so the numeric guardrail neither blocks it nor
+    checks it, and the model inventing a different name is a wrong answer
+    rather than an unverified claim. Worth stating plainly rather than letting
+    a reader assume the guardrail covers it.
+    """
+    if not name:
+        return "", ""
+    return (
+        f"{name}, ",
+        f" Your name is {name}. If the buyer asks what you are called, say so. "
+        "Never give yourself any other name.",
+    )
+
+
 def build_ambassador_prompt(
     inventory_block: str,
     language: Language,
     *,
     system_confirms_budget: bool,
     system_confirms_project: bool,
+    ambassador_name: str = "",
 ) -> str:
+    persona, identity_rule = _identity(ambassador_name)
     return _AMBASSADOR_TEMPLATE.format(
+        ambassador=persona,
+        identity_rule=identity_rule,
         language_name=LANGUAGE_NAMES[language],
         inventory_block=inventory_block,
         confirmation_rule=_constraint_8(
