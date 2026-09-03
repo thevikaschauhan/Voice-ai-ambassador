@@ -1,0 +1,43 @@
+# The interest-score rubric (docs/10-, ADR-020). Loaded by
+# agent/src/ambassador/leads.py, which does ALL the arithmetic: the model
+# supplies boolean signals and the turn indexes supporting them, and never a
+# number. A score a model returns is a figure nobody can check, and unlike a
+# price there is no inventory to check it against.
+#
+# VERSION IS LOAD-BEARING. Historic scores are never recomputed when weights
+# change, so a saved total is only interpretable beside the version that
+# produced it. Changing any weight means a NEW version string in the same
+# commit; editing weights in place silently rewrites what every past score
+# meant.
+#
+# The weights must name all seven signals exactly once and sum to `maximum`,
+# and `maximum` must be 100. Both are enforced at load. The sum is what makes
+# "out of 100" true; without it a rubric can declare 100 and be unreachable, or
+# exceed it and produce a total nobody can interpret. The fixed 100 is what
+# makes two leads scored under different versions comparable at a glance.
+#
+# The rubric is deliberately generic. The human approved no minimum budget, no
+# priority project and no cash-versus-finance rule, so none is encoded here.
+# Adding one is a product decision and a new version, not a tuning exercise.
+#
+# The score is GUIDANCE. No threshold qualifies or rejects a buyer; only an
+# admin decision changes lead_status (docs/10-).
+
+version: "2026-09-03.1"
+maximum: 100
+
+weights:
+  # Model signal plus supporting buyer-turn indexes.
+  budget_stated: 15
+  # Model signal; every referenced id must resolve to data/inventory.json.
+  project_named: 15
+  timeline_stated: 10
+  # Needs a real contact value AND contact permission, not just a name.
+  contact_shared: 20
+  # The strongest buying signal we can observe, hence the largest weight.
+  viewing_or_human_requested: 25
+  # 5 points per distinct validated buyer turn, capped at 2 questions.
+  questions_asked: 10
+  # 1 point per complete 60 seconds, capped at 5. From timestamps, never from
+  # anything the model said about how long the call felt.
+  call_length: 5
