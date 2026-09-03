@@ -34,9 +34,14 @@ import os
 from typing import Any
 
 from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 ALGORITHM = "aes-256-gcm"
+# v1 IS the HKDF derivation described in `derive_key`. Changing how a key is
+# derived changes what every stored envelope means, so it changes this too -
+# nothing is persisted yet, so v1 is still free to mean this.
 KEY_VERSION = "v1"
 # 96 bits, the AES-GCM standard nonce size: the only size the construction is
 # specified for, and the size that lets the counter block be used as intended.
@@ -49,23 +54,52 @@ class EnvelopeError(RuntimeError):
     tampered ciphertext. Deliberately does not say which."""
 
 
-def _key(value: str, name: str) -> bytes:
+# Any string of at least this many CHARACTERS. Not a byte length and not a
+# format: the human generates these with `openssl rand -base64 32` or
+# `secrets.token_urlsafe(32)`, and both produce 43 characters that are neither
+# hex nor 32 bytes of utf-8. The first version of this parsed instead of
+# derived, accepted 64-hex or exactly-32-byte strings, and would have put a
+# worker on Railway that refused every job over a config error. A key format
+# is not something anyone should have to infer from a variable name.
+MIN_KEY_CHARACTERS = 32
+
+
+def derive_key(value: str, name: str) -> bytes:
+    """A 32-byte key from any sufficiently long string, via HKDF-SHA256.
+
+    DERIVED, never parsed, and deliberately without sniffing for hex or
+    base64: a derivation is unambiguous, so one string means one key on every
+    code path, while sniffing would make the same string mean two different
+    keys depending on who read it.
+
+    `info` is the VARIABLE NAME, which is what stops the encryption key and
+    the fingerprint key colliding when someone pastes one generated value into
+    both variables - the realistic mistake, not a theoretical one.
+
+    Stable for a given string, because a process that derived a different key
+    on restart could not read what it wrote.
+    """
     if not value:
         raise ValueError(
             f"{name} is not set. Buyer-derived payloads are encrypted before "
             "they reach Postgres (docs/10-), so there is no configuration in "
             "which this may be skipped."
         )
-    try:
-        raw = bytes.fromhex(value)
-    except ValueError:
-        raw = value.encode("utf-8")
-    if len(raw) != _KEY_BYTES:
+    if len(value) < MIN_KEY_CHARACTERS:
+        # The length only, never the value.
         raise ValueError(
-            f"{name} must be {_KEY_BYTES} bytes ({_KEY_BYTES * 2} hex "
-            f"characters); got {len(raw)}."
+            f"{name} must be at least {MIN_KEY_CHARACTERS} characters; got "
+            f"{len(value)}. Generate one with `openssl rand -base64 32`."
         )
-    return raw
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=_KEY_BYTES,
+        # No salt: there is one input secret per variable and nothing to
+        # coordinate a salt with across two services. `info` carries the
+        # separation instead, which is what HKDF's info field is for.
+        salt=None,
+        info=name.encode("utf-8"),
+    ).derive(value.encode("utf-8"))
 
 
 class Sealer:
@@ -77,8 +111,8 @@ class Sealer:
     """
 
     def __init__(self, *, encryption_key: str, hash_key: str) -> None:
-        self._aead = AESGCM(_key(encryption_key, "PII_ENCRYPTION_KEY"))
-        self._hash_key = _key(hash_key, "PII_HASH_KEY")
+        self._aead = AESGCM(derive_key(encryption_key, "PII_ENCRYPTION_KEY"))
+        self._hash_key = derive_key(hash_key, "PII_HASH_KEY")
 
     @classmethod
     def from_env(cls) -> "Sealer":

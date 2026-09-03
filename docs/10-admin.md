@@ -334,6 +334,17 @@ review.
   is not encryption and is not presented as one. `PII_ENCRYPTION_KEY` and
   `PII_HASH_KEY` are server-only Railway variables shared by worker and admin
   API; neither reaches the web service.
+- **Key format: any string of at least 32 characters.** Each variable's working
+  key is DERIVED from it with HKDF-SHA256, using the variable name as the info
+  parameter, so the same generated value pasted into both variables still
+  yields two unrelated keys. Generate one with `openssl rand -base64 32` or
+  `python -c "import secrets; print(secrets.token_urlsafe(32))"`; both produce
+  43 characters, which is neither hex nor 32 bytes of text. The first
+  implementation parsed the variable instead of deriving from it and accepted
+  only 64 hex characters, which would have put a worker on Railway that refused
+  every job - a key format is not something anyone should have to infer from a
+  variable name. The derivation is what `key_version` identifies, so changing
+  it changes what every stored envelope means.
 - No raw audio is stored. Extracted knowledge text is commercial content,
   protected by the database and authenticated admin route. Original PDF/DOCX
   bytes are not retained by default.
