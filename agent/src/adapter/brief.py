@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Final
 
 import httpx
 from pydantic import ValidationError
@@ -83,7 +84,51 @@ def _schema_hint() -> str:
             "language": "en | ar | hi",
         },
         indent=2,
+    ) + (
+        # The validator now accepts an object of nulls, so this only saves a
+        # round trip - but it is the round trip that produced nine fallbacks on
+        # one call. The model read "use null for anything the buyer has not
+        # indicated" as being about the FIELDS, which is the reading a field
+        # list invites.
+        '\n\n"budget" is the whole object or null. Return "budget": null when the '
+        "buyer has not stated an amount, never an object whose fields are null."
     )
+
+
+_IDENTIFIER: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def error_field_locations(exc: BaseException) -> list[str]:
+    """The field paths a validation error names, and nothing else.
+
+    `brief_invalid.error` and `.raw` are redacted because they quote the
+    offending input back, which on this path is the model's account of what a
+    buyer said. That left an operator with nine `[redacted]` lines and no way to
+    tell which field lost the brief. A Pydantic error LOCATION is structural, so
+    it can be emitted where the message cannot.
+
+    "Structural" is enforced rather than asserted: an extra-field error's
+    location is a key the MODEL wrote, and a model can put a sentence in a key.
+    A path is identifiers and list indexes; anything else is dropped whole.
+    """
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return []
+    located: list[str] = []
+    for error in errors():
+        parts: list[str] = []
+        for part in error.get("loc", ()):
+            if isinstance(part, int):
+                parts.append(str(part))
+            elif isinstance(part, str) and _IDENTIFIER.match(part):
+                parts.append(part)
+            else:
+                parts = []
+                break
+        path = ".".join(parts)
+        if path and path not in located:
+            located.append(path)
+    return located
 
 
 class BriefExtractor:
@@ -196,6 +241,8 @@ class BriefExtractor:
         ]
 
         error: str | None = None
+        error_class: str | None = None
+        error_fields: list[str] = []
         for attempt in ("first", "repair"):
             if attempt == "repair":
                 messages = messages + [
@@ -206,6 +253,7 @@ class BriefExtractor:
                 text, usage = await self._call(messages)
             except Exception as e:  # network, status, timeout
                 error = f"{type(e).__name__}: {e}"
+                error_class, error_fields = type(e).__name__, []
                 self._on_event(
                     "brief_error", turn=turn_index, attempt=attempt, error=error
                 )
@@ -215,10 +263,13 @@ class BriefExtractor:
                 brief = self._validate(text)
             except (ValidationError, ValueError, json.JSONDecodeError) as e:
                 error = str(e)[:400]
+                error_class, error_fields = type(e).__name__, error_field_locations(e)
                 self._on_event(
                     "brief_invalid",
                     turn=turn_index,
                     attempt=attempt,
+                    fields=error_fields,
+                    error_class=error_class,
                     error=error,
                     raw=text[:400],
                 )
@@ -248,6 +299,8 @@ class BriefExtractor:
             "brief_fallback",
             turn=turn_index,
             reason="extraction failed twice",
+            fields=error_fields,
+            error_class=error_class,
             error=error,
             kept_last_good=self._last_good is not None,
             brief=None if self._last_good is None else self._last_good.model_dump(),

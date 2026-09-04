@@ -5,7 +5,7 @@ diverge, fix the divergence in the same change.
 """
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -156,6 +156,57 @@ Stage = Literal[
 ]
 
 
+def all_null_optional_objects_to_none(model_cls: type[BaseModel], data: Any) -> Any:
+    """Read an optional sub-object whose every REQUIRED field is null as absent.
+
+    The brief prompt tells the model to "use null for anything the buyer has not
+    indicated", and on the human's 08:32Z call the model applied that to the
+    FIELDS of `budget` rather than to `budget` itself. That reading is not
+    wrong, and `{"amount": null, "currency": null}` says the same thing as
+    `null`: no budget was stated. Rejecting it cost every brief on that call.
+
+    Generic over the model's own fields rather than keyed on `budget`. An
+    exemption naming one member of a set is a bug waiting on somebody else's
+    edit: the next optional sub-object would arrive without it, fail the same
+    way, and nothing in a diff would show it.
+
+    REQUIRED fields only, so a default the model echoes back (`confirmed:
+    false`) cannot keep an empty object alive - and a HALF-stated object
+    (an amount with no currency) still fails, which is a real failure with a
+    repair attempt for it.
+    """
+    if not isinstance(data, dict):
+        return data
+    cleaned: dict[str, Any] | None = None
+    for name, sub_model in _optional_sub_models(model_cls):
+        value = data.get(name)
+        if not isinstance(value, dict):
+            continue
+        required = [n for n, f in sub_model.model_fields.items() if f.is_required()]
+        if not required or any(value.get(n) is not None for n in required):
+            continue
+        if cleaned is None:
+            cleaned = dict(data)
+        cleaned[name] = None
+    return data if cleaned is None else cleaned
+
+
+def _optional_sub_models(
+    model_cls: type[BaseModel],
+) -> tuple[tuple[str, type[BaseModel]], ...]:
+    """The fields annotated `SomeModel | None`, read off the model itself."""
+    found: list[tuple[str, type[BaseModel]]] = []
+    for name, field in model_cls.model_fields.items():
+        args = get_args(field.annotation)
+        if type(None) not in args:
+            continue
+        for arg in args:
+            if isinstance(arg, type) and issubclass(arg, BaseModel):
+                found.append((name, arg))
+                break
+    return tuple(found)
+
+
 class LeadBrief(BaseModel):
     intent: Literal["invest", "live", "unknown"] = "unknown"
     budget: Budget | None = None
@@ -167,6 +218,11 @@ class LeadBrief(BaseModel):
     shortlist_ids: list[str] = []
     stage: Stage = "opening"
     language: Language
+
+    @model_validator(mode="before")
+    @classmethod
+    def _unstated_sub_objects_are_none(cls, data: Any) -> Any:
+        return all_null_optional_objects_to_none(cls, data)
 
 
 # --- Events and audit -----------------------------------------------------

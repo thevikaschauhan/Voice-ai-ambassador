@@ -170,6 +170,15 @@ _REDACTED_FIELDS: Final[dict[str, tuple[str, ...]]] = {
     "brief_fallback": ("brief", "error"),
     # `raw` is the model's attempted brief; the validation `error` quotes the
     # offending input value back inside its own message.
+    #
+    # `fields` and `error_class` on both of these stay IN THE CLEAR, and that is
+    # a decision: a Pydantic error location is a field path and the class is a
+    # type name, neither of which can carry buyer text - `error_field_locations`
+    # drops any location that is not an identifier, because an extra-field
+    # error's location is a key the model wrote. They exist because the two
+    # fields that CAN carry buyer text are redacted, which left the human's
+    # 08:32Z call showing nine `[redacted]` lines and no way to tell that
+    # `budget.amount` was what lost every brief.
     "brief_invalid": ("raw", "error"),
     # `error` here is `f"{type(e).__name__}: {e}"` over a transport failure,
     # and brief.py builds that message from up to 200 characters of the raw
