@@ -180,6 +180,16 @@ _REDACTED_FIELDS: Final[dict[str, tuple[str, ...]]] = {
 # Events with no free-text field at all. The value is the reason, and it is
 # there to be read in review: "I could not think of one" is not a reason.
 CLEAR_EVENTS: Final[dict[str, str]] = {
+    "knowledge_retrieved": (
+        "Counts and elapsed time for one turn's retrieval. No excerpt text, "
+        "no chunk bodies and no buyer words: the identifiers live in the "
+        "encrypted knowledge_use row, not on the event stream."
+    ),
+    "knowledge_retrieval_skipped": (
+        "A turn that retrieved nothing, and why - a missing pool, a paused "
+        "database or the 250ms budget. The reason is a fixed code, never an "
+        "exception string, so a database error message cannot reach stdout."
+    ),
     # `config` has already masked credentials; `model` is the configured LLM
     # slug; `language`, `prompt_mode` and `guardrail_mode` are closed enums;
     # `inventory_version` is a 12-character SHA-256 prompt digest, never the

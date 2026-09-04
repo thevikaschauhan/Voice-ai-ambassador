@@ -338,3 +338,113 @@ async def test_get_audit_events_returns_the_event_that_was_added(repository, lea
     (event,) = await repository.get_audit_events(lead)
     assert event["event"] == "lead_detail_read"
     assert event["detail"] == '{"by": "admin"}'
+
+
+# -- full-text retrieval (ADR-019) --------------------------------------
+
+
+@pytest.fixture
+async def published(repository):
+    """A published document with three chunks: general, bound project, and
+    one still closed. Only Postgres can settle what the search returns."""
+    document_id = await repository.add_document(
+        revision=1,
+        title="Handbook",
+        source_type="txt",
+        original_filename=None,
+        mime_type="text/plain",
+        source_bytes=512,
+        source_sha256="c" * 64,
+        extracted_text="",
+    )
+    ids = {}
+    for ordinal, (key, body, scope, project) in enumerate(
+        [
+            (
+                "general",
+                "The rooftop pool is open to residents.",
+                "general_knowledge",
+                None,
+            ),
+            (
+                "project",
+                "Canal Residences faces the water.",
+                "project_knowledge",
+                "binghatti-canal",
+            ),
+            ("closed", "Internal margin guidance for the pool.", "admin_only", None),
+        ]
+    ):
+        chunk_id = await repository.add_chunk(
+            document_id,
+            document_revision=1,
+            ordinal=ordinal,
+            heading=None,
+            body=body,
+            content_sha256=f"{ordinal:064d}",
+        )
+        ids[key] = chunk_id
+        if scope != "admin_only":
+            await repository._pool.execute(
+                "UPDATE knowledge_chunks SET retrieval_scope = $2, project_id = $3,"
+                " prompt_body = body WHERE id = $1",
+                chunk_id,
+                scope,
+                project,
+            )
+    await repository._pool.execute(
+        "UPDATE knowledge_documents SET status = 'published' WHERE id = $1",
+        document_id,
+    )
+    return {"document_id": document_id, **ids}
+
+
+async def test_search_returns_reviewed_prose_and_never_a_closed_chunk(
+    repository, published
+):
+    rows = await repository.search_chunks("pool", project_ids=[], limit=4)
+    assert [row["id"] for row in rows] == [published["general"]]
+
+
+async def test_search_skips_a_document_that_is_not_published(repository, published):
+    await repository._pool.execute(
+        "UPDATE knowledge_documents SET status = 'draft' WHERE id = $1",
+        published["document_id"],
+    )
+    assert await repository.search_chunks("pool", project_ids=[], limit=4) == []
+
+
+async def test_a_bound_project_chunk_ranks_ahead_of_general_knowledge(
+    repository, published
+):
+    """docs/10-: when the turn's project is known its prose sorts first, and
+    general knowledge stays eligible on every turn."""
+    await repository._pool.execute(
+        "UPDATE knowledge_chunks SET prompt_body = 'The rooftop pool faces the water.'"
+        " WHERE id = $1",
+        published["general"],
+    )
+    rows = await repository.search_chunks(
+        "water", project_ids=["binghatti-canal"], limit=4
+    )
+    assert rows[0]["id"] == published["project"]
+
+
+async def test_figures_for_chunks_reports_approval_from_the_active_review(
+    repository, published
+):
+    """`approved` is derived from `active_approval_id`, so a revocation reads
+    as False here without a second query."""
+    unapproved = await repository.add_figure(
+        published["document_id"],
+        document_revision=1,
+        chunk_id=published["general"],
+        value="1250000",
+        kind="amount",
+        currency="AED",
+        surface="1,250,000",
+        source_sentence="Prices start at 1,250,000.",
+    )
+    (figure,) = await repository.figures_for_chunks([published["general"]])
+    assert figure["id"] == unapproved
+    assert figure["approved"] is False

@@ -393,6 +393,27 @@ class ContactCapture(BaseModel):
         return self
 
 
+class KnowledgeUse(BaseModel):
+    """What one turn was allowed to see, frozen at the turn.
+
+    Buffered in memory during the call and written at persist, because
+    `knowledge_use` has a composite foreign key to `lead_turns(lead_id,
+    turn_index)` and lead turns do not exist until the call is over. Ids and
+    revisions only: `chunk_refs` is what makes a spoken turn reconstructable
+    after a document is replaced or an approval revoked, and it holds no
+    buyer words and no document text.
+    """
+
+    turn_index: int
+    # A hash of the utterance, never the utterance. This row is read by
+    # admins and docs/10- keeps buyer words out of it.
+    query_fingerprint: str
+    chunk_refs: list[dict[str, object]] = []
+    figure_review_ids: list[str] = []
+    withheld_figure_match: bool = False
+    elapsed_ms: int = 0
+
+
 class LeadSnapshot(BaseModel):
     """The durable record of one call, frozen before analysis is attempted.
 
@@ -413,6 +434,10 @@ class LeadSnapshot(BaseModel):
     inventory_version: str
     ambassador_name: str = ""
     turns: list[TurnRecord] = []
+    # Empty for every call that retrieved nothing, which is why it
+    # defaults rather than being required: retrieval is not on the path
+    # of a call that never asked a knowledge question.
+    knowledge_use: list[KnowledgeUse] = []
     brief: "LeadBrief | None" = None
     contact: ContactCapture = ContactCapture(status="not_asked")
     analysis_status: AnalysisStatus = "pending"

@@ -116,7 +116,7 @@ def make_agent_with_knowledge(repository, streams):
 
     buf = StringIO()
     log = EventLog("sess_test", stream=buf, verbose=False)
-    retriever = KnowledgeRetriever(repository, log=log)
+    retriever = KnowledgeRetriever(lambda: repository, log=log)
     agent = AmbassadorAgent(settings=make_settings(), log=log, knowledge=retriever)
     spy = SpyLLM(streams)
     agent._llm = spy
@@ -218,8 +218,7 @@ async def test_retrieval_runs_once_per_turn_and_reuses_the_same_revision_and_fig
 
 
 async def test_only_approved_figures_from_retrieved_chunks_extend_the_turn_set():
-    from ambassador.figures import build_allowed_figures
-    from ambassador.inventory import load_inventory
+    from ambassador.inventory import build_allowed_figures, load_inventory
 
     base = build_allowed_figures(load_inventory())
     repository = SpyRepository(
@@ -244,8 +243,7 @@ async def test_only_approved_figures_from_retrieved_chunks_extend_the_turn_set()
 
 
 async def test_a_retrieval_miss_extends_nothing_and_adds_no_system_message():
-    from ambassador.figures import build_allowed_figures
-    from ambassador.inventory import load_inventory
+    from ambassador.inventory import build_allowed_figures, load_inventory
 
     repository = SpyRepository([], [])
     agent, spy, _, _ = make_agent_with_knowledge(repository, [HealthyStream(["ok "])])
@@ -481,6 +479,7 @@ async def test_a_turn_with_no_repository_skips_retrieval_and_says_why():
     agent._llm = SpyLLM([HealthyStream(["ok "])])
 
     await run_llm_node(agent, user_ctx("tell me about the amenities"))
+    await log.aclose()
 
     events = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
     (skipped,) = [e for e in events if e.get("event") == "knowledge_retrieval_skipped"]
@@ -493,9 +492,10 @@ async def test_the_event_carries_counts_and_elapsed_but_no_buyer_or_document_wor
     repository = SpyRepository(
         [chunk_row("c1", body="A very distinctive brochure sentence.")], []
     )
-    agent, _, _, buf = make_agent_with_knowledge(repository, [HealthyStream(["ok "])])
+    agent, _, log, buf = make_agent_with_knowledge(repository, [HealthyStream(["ok "])])
 
     await run_llm_node(agent, user_ctx("a very distinctive buyer question"))
+    await log.aclose()
 
     events = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
     (retrieved,) = [e for e in events if e.get("event") == "knowledge_retrieved"]
@@ -515,6 +515,104 @@ async def test_retrieval_does_not_run_when_the_deterministic_policy_owns_the_tur
     repository = SpyRepository([chunk_row("c1")], [])
     agent, _, _, _ = make_agent_with_knowledge(repository, [HealthyStream(["ok "])])
 
-    await run_llm_node(agent, user_ctx("my budget is about two million"))
+    await run_llm_node(agent, user_ctx("My budget is 2 crore."))
 
     assert repository.searches == []
+
+
+# -- the pool is a task, and a turn never waits for it -------------------
+
+
+async def test_an_unfinished_pool_task_reads_as_no_repository_and_is_not_awaited():
+    """`build_lead_writer` is started at session start and awaited at
+    shutdown. A turn arriving mid-handshake must take the skip, not the
+    wait - awaiting here would put the Frankfurt handshake in front of
+    llm_ttft, which is the latency the task exists to avoid."""
+    import asyncio
+
+    from adapter.retrieval import repository_when_ready
+
+    started = asyncio.Event()
+
+    async def never_finishes():
+        started.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(never_finishes())
+    await started.wait()
+    try:
+        provider = repository_when_ready(task)
+        # Would hang rather than fail if the provider awaited the task.
+        assert await asyncio.wait_for(asyncio.to_thread(provider), timeout=1) is None
+    finally:
+        task.cancel()
+
+
+async def test_a_failed_or_cancelled_pool_task_reads_as_no_repository():
+    import asyncio
+
+    from adapter.retrieval import repository_when_ready
+
+    async def boom():
+        raise RuntimeError("no route to host")
+
+    failed = asyncio.create_task(boom())
+    await asyncio.gather(failed, return_exceptions=True)
+    assert repository_when_ready(failed)() is None
+
+    async def forever():
+        await asyncio.Event().wait()
+
+    cancelled = asyncio.create_task(forever())
+    cancelled.cancel()
+    await asyncio.gather(cancelled, return_exceptions=True)
+    assert repository_when_ready(cancelled)() is None
+
+    assert repository_when_ready(None)() is None
+
+
+async def test_a_connected_pool_task_yields_the_writers_repository():
+    import asyncio
+
+    from adapter.retrieval import repository_when_ready
+
+    class Writer:
+        repository = "the-pool"
+
+    async def connected():
+        return Writer()
+
+    task = asyncio.create_task(connected())
+    await task
+    assert repository_when_ready(task)() == "the-pool"
+
+
+async def test_a_turn_whose_pool_is_not_connected_yet_skips_and_says_not_connected():
+    import asyncio
+    import json
+
+    from adapter.agent import AmbassadorAgent
+    from adapter.events import EventLog
+    from adapter.retrieval import KnowledgeRetriever, repository_when_ready
+
+    async def forever():
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(forever())
+    buf = StringIO()
+    log = EventLog("sess_test", stream=buf, verbose=False)
+    agent = AmbassadorAgent(
+        settings=make_settings(),
+        log=log,
+        knowledge=KnowledgeRetriever(repository_when_ready(task), log=log),
+    )
+    agent._llm = SpyLLM([HealthyStream(["ok "])])
+    try:
+        await run_llm_node(agent, user_ctx("tell me about the amenities"))
+        await log.aclose()
+    finally:
+        task.cancel()
+
+    events = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+    (skipped,) = [e for e in events if e.get("event") == "knowledge_retrieval_skipped"]
+    assert skipped["reason"] == "not_connected"

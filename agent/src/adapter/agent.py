@@ -72,7 +72,8 @@ from ambassador.farewell import (
     read_farewell,
 )
 from ambassador.guardrails.prohibited import languages_covered, load_patterns
-from ambassador.schemas import LeadSnapshot
+from ambassador.knowledge import KnowledgeContext
+from ambassador.schemas import KnowledgeUse, LeadSnapshot
 from ambassador.inventory import (
     build_allowed_figures,
     load_inventory,
@@ -112,6 +113,7 @@ from .confirmations import compose as compose_confirmation
 from .confirmations import compose_project as compose_project_confirmation
 from .disclosure import load_disclosures, resolve_opening
 from .events import EventLog, TurnTracker, _now_iso
+from .retrieval import KnowledgeRetriever, repository_when_ready
 from .events_bridge import EventsBridge, bridge_from_env
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
 from .levels import apply_gain, gain_for
@@ -171,12 +173,18 @@ class AmbassadorAgent(Agent):
         log: EventLog,
         guard_factory: Callable[..., SentenceGuard] = SentenceGuard,
         close_call: Callable[[str], Awaitable[None]] | None = None,
+        knowledge: KnowledgeRetriever | None = None,
     ) -> None:
         projects = load_inventory()
         self._projects = projects
         self._project_ids = [p.id for p in projects]
         self._settings = settings
         self._log = log
+        # ADR-019. None until the pool is wired, and None is a working
+        # configuration: a call with no knowledge base speaks the
+        # inventory figures and nothing else.
+        self._knowledge = knowledge
+        self._knowledge_context: KnowledgeContext | None = None
 
         # ADR-011. The policy speaks INSTEAD of the model when it has a
         # question, which is what makes it deterministic: prompt constraint 8
@@ -545,6 +553,16 @@ class AmbassadorAgent(Agent):
         elif reading.has_phrase and self._candidate_turn != tracker.turn_index:
             self._note_candidate(tracker.turn_index, reading)
 
+    def knowledge_use(self) -> list[KnowledgeUse]:
+        """This call's buffered retrieval records, for the snapshot.
+
+        Empty when nothing was ever retrieved, which is the normal shape of a
+        call that asked no knowledge question.
+        """
+        if self._knowledge is None:
+            return []
+        return self._knowledge.buffered()
+
     def _ensure_tracker(self, chat_ctx: lk_llm.ChatContext) -> TurnTracker:
         """The turn `llm_node` is running for, opening one if nothing has yet.
 
@@ -766,6 +784,10 @@ class AmbassadorAgent(Agent):
         """
         turns = self._log.turns
         return LeadSnapshot(
+            # Buffered during the call because `knowledge_use` has a
+            # composite FK to `lead_turns`, which do not exist until
+            # persist writes them.
+            knowledge_use=self.knowledge_use(),
             session_id=self._log.session_id,
             started_at=self._started_at,
             ended_at=ended_at,
@@ -1207,13 +1229,21 @@ class AmbassadorAgent(Agent):
         tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
         opened: list[Any] = []
 
+        # Set by the retrieval seam below, read here at call time. One fixed
+        # system message on a COPY of `chat_ctx`, never on the live context:
+        # session history that accumulated every turn's excerpts would grow
+        # without bound and would let turn three's document answer turn nine.
+        knowledge_message: str | None = None
+
         async def open_stream(
             extra_instruction: str | None = None,
         ) -> AsyncIterable[Any]:
+            additions = [m for m in (knowledge_message, extra_instruction) if m]
             ctx = chat_ctx
-            if extra_instruction:
+            if additions:
                 ctx = chat_ctx.copy()
-                ctx.add_message(role="system", content=extra_instruction)
+                for message in additions:
+                    ctx.add_message(role="system", content=message)
             stream = activity_llm.chat(
                 chat_ctx=ctx,
                 tools=tools,
@@ -1258,6 +1288,33 @@ class AmbassadorAgent(Agent):
             yield (owed.text if owed.text.endswith((" ", "\n")) else (owed.text + " "))
             return
 
+        # ADR-019's prompt seam, and its position is the contract: AFTER the
+        # deterministic policy declined the turn, BEFORE the model opens. A
+        # confirmation turn returns above this line, so it never spends the
+        # retrieval budget on a prompt nobody builds.
+        guard = self._guard
+        if self._knowledge is not None:
+            context = await self._knowledge.for_turn(
+                turn_index=tracker.turn_index,
+                query=tracker.buyer_utterance,
+                base=self._guard.allowed,
+                project_ids=self._project_ids,
+            )
+            self._knowledge_context = context
+            knowledge_message = context.system_message
+            # A COPY for this turn. `extend_allowed_figures` returns `base`
+            # itself when nothing qualified, so the common case does not build
+            # a second guard at all.
+            if context.allowed is not self._guard.allowed:
+                guard = self._guard.with_allowed(context.allowed)
+        else:
+            self._log.emit(
+                "knowledge_retrieval_skipped",
+                turn=tracker.turn_index,
+                reason="no_retriever",
+                elapsed_ms=0,
+            )
+
         # Emitted here, after the confirmation check, because it claims a
         # model call is about to happen. On a confirmation turn none does, and
         # a request line with no llm_ttft or llm_usage behind it makes the
@@ -1278,7 +1335,7 @@ class AmbassadorAgent(Agent):
         try:
             source = await open_stream()
             async for out in guarded_stream(
-                source, guard=self._guard, sink=sink, regenerate=regenerate
+                source, guard=guard, sink=sink, regenerate=regenerate
             ):
                 if isinstance(out, str):
                     spoke_anything = True
@@ -2090,6 +2147,12 @@ async def entrypoint(ctx: JobContext) -> None:
         settings=settings,
         log=log,
         close_call=functools.partial(end_call, ctx, log),
+        # ADR-019. The retriever reads through the SAME pool the lead store
+        # connects, rather than opening a second one: one pool per job is what
+        # keeps this inside Supabase's client limit. It resolves the task per
+        # turn and never awaits it, so a turn that arrives before the
+        # handshake finishes is a skip, not a wait.
+        knowledge=KnowledgeRetriever(repository_when_ready(lead_store), log=log),
     )
 
     stt_node = build_stt(settings)

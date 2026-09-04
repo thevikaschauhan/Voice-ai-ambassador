@@ -25,6 +25,7 @@ repository that silently encrypted would make the boundary impossible to audit.
 from __future__ import annotations
 
 from datetime import datetime
+from collections.abc import Sequence
 from typing import Any
 
 import asyncpg
@@ -406,6 +407,77 @@ class Repository:
             """,
             document_id,
             revision,
+        )
+        return [dict(row) for row in rows]
+
+    async def search_chunks(
+        self, query: str, *, project_ids: Sequence[str], limit: int = 4
+    ) -> list[dict[str, Any]]:
+        """Full-text search over what a call is allowed to be told.
+
+        `simple` rather than `english`: ADR-019, and the corpus is trilingual
+        brochure prose where stemming an Arabic or Hindi token with English
+        rules is worse than not stemming at all.
+
+        Three filters, and only the first two are the security boundary. A
+        document must be published; `prompt_body IS NOT NULL` is the schema's
+        own `only_reviewed_scopes_reach_the_prompt` constraint read from the
+        other side, so an unreviewed or inventory-governed chunk cannot come
+        back from here at all. The caller still re-checks scope in code
+        (`is_prompt_eligible`), because a query is a filter and the gate is a
+        rule - and a rule that only exists in a WHERE clause is one edit away
+        from not existing.
+
+        Project chunks bound to a project this turn is about sort first;
+        general knowledge stays eligible on every turn. Columns are named:
+        the table carries a `search_vector` tsvector with no JSON form.
+        """
+        rows = await self._pool.fetch(
+            """
+            SELECT c.id, c.document_id, c.document_revision, c.heading,
+                   c.prompt_body, c.retrieval_scope, c.project_id,
+                   c.conflict_code
+            FROM knowledge_chunks c
+            JOIN knowledge_documents d
+              ON d.id = c.document_id AND d.revision = c.document_revision
+            WHERE d.status = 'published'
+              AND c.prompt_body IS NOT NULL
+              AND c.search_vector @@ plainto_tsquery('simple', $1)
+            ORDER BY (c.retrieval_scope = 'project_knowledge'
+                      AND c.project_id = ANY($2::text[])) DESC,
+                     ts_rank(c.search_vector,
+                             plainto_tsquery('simple', $1)) DESC,
+                     c.id
+            LIMIT $3
+            """,
+            query,
+            list(project_ids),
+            limit,
+        )
+        return [dict(row) for row in rows]
+
+    async def figures_for_chunks(
+        self, chunk_ids: Sequence[Any]
+    ) -> list[dict[str, Any]]:
+        """Every occurrence on the retrieved chunks, approved or not.
+
+        The unapproved ones are needed, not filtered away: the caller has to
+        replace their surfaces in the excerpt before the model sees them, and
+        it cannot replace what it was not told about.
+
+        `approved` is derived from `active_approval_id`, which is the
+        projection of the append-only review history - so a revocation reads
+        as False here without a second query.
+        """
+        rows = await self._pool.fetch(
+            """
+            SELECT id, chunk_id, value, kind, currency, unit, surface,
+                   source_sentence, (active_approval_id IS NOT NULL) AS approved
+            FROM knowledge_figures
+            WHERE chunk_id = ANY($1::uuid[])
+            ORDER BY chunk_id, id
+            """,
+            list(chunk_ids),
         )
         return [dict(row) for row in rows]
 
