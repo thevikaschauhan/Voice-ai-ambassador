@@ -119,7 +119,7 @@ LeadRecord
   id                    UUID
   session_id            str              unique idempotency key, never contact data
   created_at/ended_at   datetime         UTC
-  call_end_reason       "buyer_farewell" | "agent_farewell" | "duration_cap" | "buyer_left" | "session_error"
+  call_end_reason       "buyer_farewell" | "buyer_farewell_repeated" | "agent_farewell" | "duration_cap" | "buyer_left" | "session_error"
   ended_cleanly         bool             false for an unresolved/incomplete final turn
   language              Language
   requested_language    Language

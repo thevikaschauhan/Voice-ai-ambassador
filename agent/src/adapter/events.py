@@ -205,12 +205,14 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "language_selected": "two language codes, an enum source and an enum reason",
     "call_duration_cap_armed": "one integer, the configured cap in seconds",
     "call_duration_cap": "one integer and a fixed literal action",
-    # One of five fixed reasons - buyer_farewell, buyer_farewell_repeated,
-    # agent_farewell, duration_cap,
-    # buyer_left - and never the utterance that triggered it. The buyer's
-    # closing words are their own text and stay in the TurnRecord like
-    # every other utterance.
-    "call_ended": "one of five fixed reasons",
+    # One of the six fixed reasons in `CallEndReason` - buyer_farewell,
+    # buyer_farewell_repeated, agent_farewell, duration_cap, buyer_left and the
+    # reserved session_error - and never the utterance that triggered it. The
+    # buyer's closing words are their own text and stay in the TurnRecord like
+    # every other utterance. The enumeration is worth keeping accurate because
+    # it is the only place that says WHY the set is closed, and a test asserts
+    # it names every value.
+    "call_ended": "one of six fixed reasons",
     # An enum stage and an enum code, never an exception string and never
     # a buyer word (docs/10-). A lead that failed to save has to be
     # visible to operations without the log becoming a data leak.
