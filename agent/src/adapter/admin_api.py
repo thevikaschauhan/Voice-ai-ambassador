@@ -337,6 +337,28 @@ async def list_leads(
     )
 
 
+def opened_decisions(lead_id: Any, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Decisions with their notes opened, for every route that returns one.
+
+    Shared rather than repeated because a note is a sealed composite holding
+    raw bytes: a route that returns it unopened does not degrade, it 500s in
+    the JSON encoder. The list route did exactly that, and it went unnoticed
+    only because no note had ever been sealed to serialise.
+    """
+    opened = []
+    for decision in rows:
+        note, error = open_field(
+            app,
+            lead_id,
+            field_paths.decision_note(decision.get("sequence")),
+            decision.get("note"),
+        )
+        decision["note"] = note
+        decision["note_error"] = error
+        opened.append(decision)
+    return opened
+
+
 @app.get("/v1/leads/{lead_id}", dependencies=[Depends(require_bearer)])
 async def get_lead(lead_id: str) -> dict[str, Any]:
     """The detail page's lead, with every sealed field opened.
@@ -395,17 +417,7 @@ async def get_lead(lead_id: str) -> dict[str, Any]:
         turns.append(turn)
     lead["turns"] = turns
 
-    decisions = []
-    for decision in await repository.get_decisions(lead_id):
-        note, error = open_field(
-            app,
-            lead_id,
-            field_paths.decision_note(decision.get("sequence")),
-            decision.get("note"),
-        )
-        decision["note"] = note
-        decision["note_error"] = error
-        decisions.append(decision)
+    decisions = opened_decisions(lead_id, await repository.get_decisions(lead_id))
     lead["decisions"] = decisions
 
     # The audit of the read itself. docs/10- wants every decrypt audited, and
@@ -524,7 +536,12 @@ async def append_decision(lead_id: str, body: DecisionRequest) -> dict[str, Any]
 
 @app.get("/v1/leads/{lead_id}/decisions", dependencies=[Depends(require_bearer)])
 async def list_decisions(lead_id: str) -> list[dict[str, Any]]:
-    return await repository_of(app).get_decisions(lead_id)
+    """The same opening as the detail route, through the same helper.
+
+    Two routes that hand back the same sealed field, with only one of them
+    opening it, is how this drifted in the first place.
+    """
+    return opened_decisions(lead_id, await repository_of(app).get_decisions(lead_id))
 
 
 # --- knowledge -----------------------------------------------------------
