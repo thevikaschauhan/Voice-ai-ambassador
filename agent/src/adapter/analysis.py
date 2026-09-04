@@ -189,13 +189,61 @@ async def _fail(
     return False
 
 
+def analysis_body(settings: Any, prompt: str, *, repair: bool) -> dict[str, Any]:
+    """The request body, shaped like `brief.py:_call`.
+
+    A pure function, because the discipline in this dict IS the fix and it
+    should be reviewable without a vendor call. The first version sent `model`
+    and `messages` and nothing else, which left THINKING ON: measured, 16.3s
+    and 1982 reasoning tokens on qwen3.7-flash where this shape returns in
+    1.9-2.4s. Neither the per-request timeout nor the analysis cap could be met
+    on any call.
+
+    Every field earns its place:
+
+      stream=False        one complete JSON object, not deltas.
+      temperature=0.0     a summary that varies between runs cannot be checked
+                          against a rubric.
+      max_tokens          a bound on cost and on time, for output whose useful
+                          size is known.
+      response_format     json_object, so a model that would have written prose
+                          is refused by the endpoint rather than by our
+                          validator one round trip later.
+      reasoning disabled  under the SAME `thinking_disabled` setting the brief
+                          extractor honours (ADR-016), never a hardcoded false:
+                          an operator who turned thinking on has said
+                          something, and this is not the place to overrule them
+                          silently.
+    """
+    body: dict[str, Any] = {
+        "model": settings.analysis_model,
+        "messages": [
+            {
+                "role": "system",
+                "content": _REPAIR_INSTRUCTION if repair else _ANALYSIS_INSTRUCTION,
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+        "temperature": 0.0,
+        # A summary plus six small signal objects. The brief extractor's number
+        # for the same shape of output.
+        "max_tokens": 600,
+        "response_format": {"type": "json_object"},
+    }
+    if settings.thinking_disabled:
+        body["reasoning"] = {"enabled": False}
+    return body
+
+
 def analysis_ask(settings: Any) -> Ask | None:
     """The session-analysis model call, or None when there is no key.
 
     Reuses the OpenRouter endpoint and the brief model the brief extractor
     already uses (`adapter/brief.py`): one vendor, one key, one place the
     boundary is documented. A second provider for one summary would be a new
-    key to leak and a new failure mode on the shutdown path.
+    key to leak and a new failure mode on the shutdown path. It now reuses the
+    request SHAPE too, which is what this first missed.
 
     Bounded per request as well as by the caller's overall budget, because the
     caller's timeout protects the shutdown and this one protects the retry: a
@@ -207,18 +255,11 @@ def analysis_ask(settings: Any) -> Ask | None:
     import httpx
 
     async def ask(prompt: str, *, repair: bool = False) -> str:
-        instruction = _ANALYSIS_INSTRUCTION if not repair else _REPAIR_INSTRUCTION
-        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.post(
                 f"{settings.llm_base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-                json={
-                    "model": settings.analysis_model,
-                    "messages": [
-                        {"role": "system", "content": instruction},
-                        {"role": "user", "content": prompt},
-                    ],
-                },
+                json=analysis_body(settings, prompt, repair=repair),
             )
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"]
@@ -226,9 +267,16 @@ def analysis_ask(settings: Any) -> Ask | None:
     return ask
 
 
-# Half the caller's budget, so a slow first attempt still leaves room for the
-# one repair docs/10- allows.
-_REQUEST_TIMEOUT_SECONDS: Final = 2.0
+# Sized against god's measurements rather than picked: the brief-shaped request
+# returns in 1.9-2.4s on qwen3.7-flash and gemini-2.5-flash, and 1.5s typically
+# on gemini-2.5-flash-lite. 2.5s clears the measured common case. The 3.9s
+# outlier gemini-2.5-flash-lite produced once will time out, and that is the
+# trade: a failed analysis is a state an operator can retry, while a timeout
+# generous enough for every outlier lets two attempts outlive the audit seal.
+#
+# Two attempts have to fit `agent.ANALYSIS_BUDGET_SECONDS`, because docs/10-
+# allows one repair and a repair the budget cannot afford is not a repair.
+REQUEST_TIMEOUT_SECONDS: Final = 2.5
 
 _ANALYSIS_INSTRUCTION: Final = (
     "You are summarising one sales call for an internal admin view. Return ONLY "
