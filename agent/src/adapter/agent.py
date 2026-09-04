@@ -235,6 +235,10 @@ class AmbassadorAgent(Agent):
             recognition_runs=self._recognition_policy_runs,
         )
 
+        # The near miss last put on the stream, turn and reading together, so
+        # two generations for one buyer turn cannot report one goodbye twice.
+        self._candidate_emitted: tuple[int, FarewellReading] | None = None
+
         # The turn on which the MODEL said goodbye without the call ending -
         # the 08:32Z call did this twice. A courtesy-only reply on the very
         # next turn is the buyer answering that goodbye, and letting them say
@@ -936,8 +940,25 @@ class AmbassadorAgent(Agent):
     _TAIL_MISS: Final = 2
 
     def _note_candidate(self, turn: int, reading: FarewellReading) -> None:
+        """Arm the hybrid, and record the near miss ONCE.
+
+        The state is set every time; the event is not. Two generations for one
+        buyer turn is what the framework does when a preemptive generation on a
+        partial is invalidated by the final, so this reads the same utterance
+        twice - and the 08:32Z log carried the same near miss twice, 0.93s
+        apart, for one goodbye. `record_farewell` is guarded the same way for
+        the same reason: the buyer said one thing.
+
+        Re-emitted only when the READING changed, which is the case worth
+        seeing: a longer transcript that puts more in the way is new evidence
+        about why the rule refused, and the count is what this stream exists to
+        tune.
+        """
         self._candidate_turn = turn
         self._candidate_is_tail = reading.unexplained <= self._TAIL_MISS
+        if self._candidate_emitted == (turn, reading):
+            return
+        self._candidate_emitted = (turn, reading)
         self._log.emit(
             "farewell_candidate",
             turn=turn,
