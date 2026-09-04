@@ -19,7 +19,16 @@
 #   courtesies  tokens that may surround a farewell without changing what it
 #               is ("ok, bye then", "thanks so much, goodbye"). A courtesy
 #               NEVER fires on its own - "thank you" mid-call is not an ending,
-#               which is why a phrase match is required as well.
+#               which is why a phrase match is required as well. The ONE
+#               exception is not in this file: when the agent has itself just
+#               said goodbye, the adapter reads a courtesy-only reply as the
+#               buyer answering it, because the alternative is making someone
+#               say goodbye twice to a service that already said it.
+#
+# PHRASES MATCH ON THE STEM, singular or plural. A hosted call said "I don't
+# have any further QUESTION" and was refused over the "s", so a single trailing
+# "s" is tolerated in either direction. One inflection only: a looser rule on a
+# table that can end a call is not worth the coverage.
 #   speech      the authored farewell. Fixed copy, never model-generated, the
 #               same rule as the disclosure and the guardrail bridges
 #               (ADR-013): a farewell that varies is not authored copy. It
@@ -169,6 +178,20 @@ courtesies:
     - "side"
     - "me"
     - "am"
+    # Disfluencies. The recogniser keeps them, and the 08:32Z call was refused
+    # partly over one "uh" - a person thinking is not a change of subject. Safe
+    # as courtesies for the same reason "ok" is: they carry no content, so they
+    # can never be the thing that makes an utterance a question.
+    - "uh"
+    - "uhm"
+    - "um"
+    - "umm"
+    - "er"
+    - "erm"
+    - "ah"
+    - "hmm"
+    - "mhm"
+    - "mm"
   ar: []
   hi: []
 
