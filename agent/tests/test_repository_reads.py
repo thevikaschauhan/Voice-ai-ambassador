@@ -562,3 +562,96 @@ async def test_search_chunks_refuses_an_utterance_where_tokens_are_expected(
     This guard caught three of this file's own older tests during the fix."""
     with pytest.raises(TypeError):
         await repository.search_chunks("pool", project_ids=[], limit=4)
+
+
+# -- the query side must tokenise the way the index side does -----------
+
+# One natural sentence per language, checked against `Language` below rather
+# than hand-listed: a language missing here is a language whose tokenisation
+# nobody compared with Postgres, which is the whole defect this guards.
+PARITY_SENTENCES = {
+    "en": "How much are the Aquarise studios and when is handover?",
+    "ar": "ما هي أسعار الاستوديو في أكوارايز ومتى التسليم؟",
+    "hi": "अक्वाराइज़ में स्टूडियो की कीमत क्या है और हैंडओवर कब है?",
+}
+
+
+def test_every_language_has_a_parity_sentence():
+    from typing import get_args
+
+    from ambassador.schemas import Language
+
+    assert set(PARITY_SENTENCES) == set(get_args(Language))
+
+
+@pytest.mark.parametrize("language", sorted(PARITY_SENTENCES))
+async def test_our_tokens_are_the_lexemes_postgres_would_index(database, language):
+    """Parity with the index side is the property, not any particular regex.
+
+    The first version used `[^\\W_]+`, which is `\\w` minus underscore, and
+    Python's `\\w` does not match combining marks - virama, nukta, the
+    matras. So a Devanagari sentence shredded into fragments
+    (`['अक', 'इज', 'मत', 'डओवर']`) while Postgres indexed whole words, and a
+    Hindi call against a Hindi document could never match. Unpointed Arabic
+    survived only because its letters are category Lo; a diacritic splits it
+    the same way.
+
+    Comparing against `to_tsvector` rather than against an expected list is
+    deliberate: the index is the thing we have to agree with, and it is the
+    only authority on what a word is here.
+    """
+    from adapter.retrieval import tokenise
+
+    sentence = PARITY_SENTENCES[language]
+    connection = await asyncpg.connect(database)
+    try:
+        vector = await connection.fetchval(
+            "SELECT to_tsvector('simple', $1)::text", sentence
+        )
+    finally:
+        await connection.close()
+
+    lexemes = {
+        part.split(":")[0].strip("'").replace("''", "'")
+        for part in vector.split()
+        if part.startswith("'")
+    }
+    assert set(tokenise(sentence)) == lexemes
+
+
+async def test_a_hindi_sentence_finds_a_hindi_chunk(repository):
+    """End to end, because parity is a means and this is the point of it."""
+    from adapter.retrieval import content_tokens
+
+    document_id = await repository.add_document(
+        revision=1,
+        title="Aquarise HI",
+        source_type="txt",
+        original_filename=None,
+        mime_type="text/plain",
+        source_bytes=256,
+        source_sha256="f" * 64,
+        extracted_text="",
+    )
+    chunk_id = await repository.add_chunk(
+        document_id,
+        document_revision=1,
+        ordinal=0,
+        heading=None,
+        body="अक्वाराइज़ में स्टूडियो की कीमत 985,000 दिरहम है और हैंडओवर 2027 में है।",
+        content_sha256="0" * 64,
+    )
+    await repository._pool.execute(
+        "UPDATE knowledge_chunks SET retrieval_scope = 'general_knowledge',"
+        " prompt_body = body WHERE id = $1",
+        chunk_id,
+    )
+    await repository._pool.execute(
+        "UPDATE knowledge_documents SET status = 'published' WHERE id = $1",
+        document_id,
+    )
+
+    rows = await repository.search_chunks(
+        content_tokens(PARITY_SENTENCES["hi"], "hi"), project_ids=[], limit=4
+    )
+    assert [row["id"] for row in rows] == [chunk_id]
