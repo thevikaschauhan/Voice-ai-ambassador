@@ -360,7 +360,7 @@ async def test_the_project_filter_intersects_with_the_other_filters(
     assert await ids_in(client, f"?project_id={SKYRISE}&language={other}") == set()
 
 
-async def test_the_filter_can_use_the_gin_index(database, with_projects):
+async def test_the_containment_predicate_is_index_able(database, with_projects):
     """Measured, because the natural-reading form is the one that cannot.
 
     `project_ids @> ARRAY['x']` uses the GIN index; `'x' = ANY(project_ids)`
@@ -383,3 +383,34 @@ async def test_the_filter_can_use_the_gin_index(database, with_projects):
     finally:
         await connection.close()
     assert "leads_project_ids" in str(plan)
+
+
+def test_the_list_query_uses_containment_and_not_any():
+    """The predicate above is only worth measuring if the call site keeps it.
+
+    A test table is too small for the planner to choose an index, so no
+    end-to-end assertion can prove `list_leads` uses one. This reads the
+    query instead: `= ANY(project_ids)` is the same filter, reads more
+    naturally for a single id, and cannot use the GIN index - so it is
+    exactly what a later simplification would reach for, and nothing else
+    would fail.
+    """
+    import ast
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "src" / "adapter" / "repository.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    (function,) = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "list_leads"
+    ]
+    sql = " ".join(
+        node.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and "FROM leads" in node.value
+    )
+    assert "project_ids @>" in sql
+    assert "ANY(project_ids)" not in sql.replace(" ", "")
