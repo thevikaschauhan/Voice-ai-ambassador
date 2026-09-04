@@ -97,9 +97,14 @@ _PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
 # (`'message': 'insufficient_quota'`), so masking it turns the warning we kept
 # these lines for into a row of markers. The names here are the ones that carry
 # a PAYLOAD echo rather than an explanation.
+# The payload runs to the next UNESCAPED delimiter: `(?:\\.|(?!\2).)*` steps over
+# an escaped pair and otherwise takes any character that is not the delimiter.
+# `(.*?)` stopped at the first quote CHARACTER, so a buyer saying "it\'s" - which
+# a vendor repr escapes - ended the payload four characters in and left the rest
+# of the sentence in the log.
 _ECHOED_TEXT: Final = re.compile(
     r"(?i)(['\"]?(?:prompt|input|content|text|transcript|utterance"
-    r"|echoed_prompt)['\"]?\s*[:=]\s*)(['\"])(.*?)(\2)"
+    r"|echoed_prompt)['\"]?\s*[:=]\s*)(['\"])((?:\\.|(?!\2).)*)(\2)"
 )
 
 
