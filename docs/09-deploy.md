@@ -1094,7 +1094,7 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    **What a correct URL looks like in the logs.** Since `adapter/session_mode.py`,
    both Python services refuse a URL that cannot work, on the shared connect
    path that the migration runner and `Repository.connect` both call - so the
-   refusal happens at `admin-api`'s pre-deploy and at the worker's first write,
+   refusal happens at `admin-api`'s pre-deploy and at the worker's connect,
    not only in one of them. Two refusals, quoted as shapes:
 
    ```
@@ -1112,7 +1112,7 @@ The first step is the one that cannot be undone, so it goes first deliberately.
 
    ```
    database port 5432 (session mode)          # admin-api pre-deploy, before the migration lines
-   lead_store_connected target=<host>:<port>  # the worker, on its first write
+   lead_store_connected target=<host>:<port>  # the worker, once per call
    ```
 
    The first shows the **port** and deliberately nothing else. The second shows
@@ -1155,11 +1155,37 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    them has lost nothing - and a deploy that prints NEITHER has not "kept the
    old schema", it has failed before the runner spoke.
 
-   **The second line is still expected and not yet observed**, and the reason
-   is worth keeping until it is: the worker builds its writer lazily, so this
-   line appears on the first write and its absence means no call has stored a
-   lead - not that the connection is broken. That absence is only readable
-   while the distinction holds. See the smoke 0 record below.
+   **The second line is still expected and not yet observed.** It arrives
+   **once per call**, not once per process and not on the first write: the
+   worker starts the connect as a task at `session_start` and emits
+   `lead_store_connected target=<host>:<port>` when it completes, so every
+   call that reaches a database prints it exactly once.
+
+   Its absence therefore means one of three things, and the worker names which:
+
+   ```
+   lead_store_connected target=<host>:<port>      # the store is up, this call
+   lead_store_disabled reason=no_database_url     # exactly one, nothing else
+   lead_persist_failed stage=connect code=<enum>  # reached the deploy, not the database
+   ```
+
+   That is worth more than the line itself. **"Not configured" and "not wired"
+   used to look identical** - the audit that found the lead path unreachable
+   could only tell them apart by reading source, which is the same
+   cannot-distinguish problem this document keeps running into. Now an unset
+   `DATABASE_URL` says so in one event and emits no other `lead_*` line at all,
+   so a silent worker is a bug rather than a configuration.
+
+   A fourth case fails the deploy instead of reporting: `DATABASE_URL` set with
+   `PII_ENCRYPTION_KEY` or `PII_HASH_KEY` missing refuses at startup and names
+   the variable. Half-configured is the dangerous state, because the two ways
+   it could carry on are writing buyer text in the clear and failing once per
+   call. A connect failure is not treated that way - the lead store is not on
+   the call path, so an unreachable database degrades to a report and the buyer
+   hears everything they were going to hear (ADR-018).
+
+   See the smoke 0 record below for what the absence looked like before any of
+   these events existed.
 
 4. **Set the values as Railway service variables**, using the table below. They
    move from the Supabase dashboard into Railway directly. A connection string
