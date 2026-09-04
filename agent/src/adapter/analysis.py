@@ -25,7 +25,7 @@ import json
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Final
 
-from ambassador.inventory import load_inventory
+from ambassador.inventory import load_inventory, resolve_project_id
 from ambassador.leads import ScoringInputs, load_rubric, score_interest
 from ambassador.schemas import LeadAnalysisDraft, LeadSnapshot
 
@@ -85,6 +85,12 @@ async def finalise_analysis(
 
     try:
         score, project_ids = _score(snapshot, draft)
+    except UnknownProject:
+        # Its own code, because its own operator action: an id that resolves to
+        # nothing means the model named something we do not sell, or the
+        # instruction did not say what we do. `evidence` would send whoever
+        # reads the event to the transcript instead.
+        return await _fail(writer, lead_id, log, stage="score", code="unknown_project")
     except ValueError:
         # The message names the signal and the turn, both of which are ours,
         # but it can also name a project id a model invented - so the event
@@ -133,28 +139,50 @@ def _validate(answer: str) -> LeadAnalysisDraft:
 def _score(snapshot: LeadSnapshot, draft: LeadAnalysisDraft):
     """The rubric's total, and the project ids that survived validation.
 
-    A model-supplied id that does not resolve in inventory raises, the same way
-    an invented turn index does: the lead list is entitled to assume every id
-    in its column is a real project.
+    A model that answers with NAMES is answering the question it was asked -
+    the instruction lists ids now, but a name is still resolved against
+    inventory rather than rejected, because "Binghatti Skyrise" and
+    `binghatti-skyrise` are the same claim about the same call.
+
+    A value that resolves to nothing still raises, the same way an invented
+    turn index does: the lead list is entitled to assume every id in its column
+    is a real project. It raises `UnknownProject` so the failure can be filed
+    under its own code - an operator who sees `evidence` goes to the transcript,
+    and this one is about the inventory and the prompt.
     """
-    inventory = {project.id for project in load_inventory()}
-    unknown = [pid for pid in draft.project_ids if pid not in inventory]
+    projects = load_inventory()
+    resolved: list[str] = []
+    unknown: list[str] = []
+    for value in draft.project_ids:
+        project_id = resolve_project_id(value, projects)
+        if project_id is None:
+            unknown.append(value)
+        elif project_id not in resolved:
+            # Resolution makes duplicates likelier than they were: a model can
+            # send the id and the name for one project. The Projects column
+            # should not list it twice, and the rubric scores the signal rather
+            # than the count, so collapsing them changes no score.
+            resolved.append(project_id)
     if unknown:
-        raise ValueError(
+        raise UnknownProject(
             f"project_ids: {', '.join(unknown)} do not resolve in inventory"
         )
+    # The rubric checks the same thing from core, against the draft it is
+    # handed - so it has to be handed the RESOLVED draft, or it re-raises the
+    # failure this function just resolved. Its check stays worth having: it is
+    # what catches an adapter that forgets to resolve.
     score = score_interest(
         ScoringInputs(
-            draft=draft,
+            draft=draft.model_copy(update={"project_ids": resolved}),
             contact=snapshot.contact,
             started_at=datetime.fromisoformat(snapshot.started_at),
             ended_at=datetime.fromisoformat(snapshot.ended_at),
             buyer_turn_indexes=snapshot.buyer_turn_indexes,
-            project_ids_in_inventory=list(draft.project_ids),
+            project_ids_in_inventory=resolved,
         ),
         load_rubric(),
     )
-    return score, list(draft.project_ids)
+    return score, resolved
 
 
 def _write_code(exc: BaseException) -> str:
@@ -221,10 +249,7 @@ def analysis_body(settings: Any, prompt: str, *, repair: bool) -> dict[str, Any]
     body: dict[str, Any] = {
         "model": settings.analysis_model,
         "messages": [
-            {
-                "role": "system",
-                "content": _REPAIR_INSTRUCTION if repair else _ANALYSIS_INSTRUCTION,
-            },
+            {"role": "system", "content": analysis_instruction(repair=repair)},
             {"role": "user", "content": prompt},
         ],
         "stream": False,
@@ -281,6 +306,35 @@ def analysis_ask(settings: Any) -> Ask | None:
 # allows one repair and a repair the budget cannot afford is not a repair.
 REQUEST_TIMEOUT_SECONDS: Final = 2.5
 
+
+class UnknownProject(ValueError):
+    """A project id or name that resolves to nothing in inventory.
+
+    A `ValueError` still, so every existing handler keeps catching it; a
+    distinct type so the one place that cares can tell it apart.
+    """
+
+
+def analysis_instruction(*, repair: bool) -> str:
+    """The system message, with the inventory ids IN it.
+
+    Built rather than constant because the ids come from `load_inventory()`,
+    the same source `brief.py:_SYSTEM` interpolates. Asking a model for
+    "project ids" without saying what they are is a question it cannot answer,
+    and on the human's 08:32Z call it answered with the names the conversation
+    used - correctly - and lost the whole analysis at the scoring step.
+    """
+    catalogue = "; ".join(f"{p.id} ({p.name})" for p in load_inventory())
+    parts = [
+        _ANALYSIS_INSTRUCTION,
+        "project_ids must be ids from this list only, never names: "
+        f"{catalogue}. Return an empty list [] when no project was named.",
+    ]
+    if repair:
+        parts.insert(0, _REPAIR_PREFIX)
+    return "\n".join(parts)
+
+
 _ANALYSIS_INSTRUCTION: Final = (
     "You are summarising one sales call for an internal admin view. Return ONLY "
     "a JSON object with these keys: summary (2-3 sentences), budget_stated, "
@@ -291,8 +345,7 @@ _ANALYSIS_INSTRUCTION: Final = (
     "return a score, a total or any points: those are computed elsewhere."
 )
 
-_REPAIR_INSTRUCTION: Final = (
+_REPAIR_PREFIX: Final = (
     "Your previous answer was not valid JSON of the required shape. Return ONLY "
-    "the JSON object described, with no prose and no code fence. "
-    + _ANALYSIS_INSTRUCTION
+    "the JSON object described, with no prose and no code fence."
 )

@@ -414,6 +414,116 @@ async def test_a_project_id_that_is_not_in_inventory_fails_the_analysis(
     assert lead["project_ids"] == []
 
 
+async def test_the_names_the_model_returns_reach_the_column_as_ids(
+    database: str,
+) -> None:
+    """The human's 08:32Z call, end to end.
+
+    The model named the three projects the way the conversation did. Before
+    this, `_score` rejected them and the lead was filed failed with no summary,
+    no score and an empty Projects column - a whole call lost to a prompt that
+    never said what an id was.
+    """
+    from adapter.analysis import finalise_analysis
+    from ambassador.schemas import SignalEvidence
+
+    writer, lead_id = await _persisted(database, "sess_" + uuid.uuid4().hex[:8])
+    log = _log()
+    try:
+        completed = await finalise_analysis(
+            snapshot=_snapshot("ignored"),
+            lead_id=lead_id,
+            writer=writer,
+            ask=_answers(
+                _draft(
+                    project_named=SignalEvidence(observed=True, turn_indexes=[1]),
+                    project_ids=[
+                        "Binghatti Skyrise",
+                        "Binghatti Aquarise",
+                        "Binghatti Circle",
+                    ],
+                )
+            ),
+            log=log[0],
+        )
+        lead = await writer.repository.get_lead(lead_id)
+    finally:
+        await writer.close()
+
+    assert completed is True
+    assert lead["analysis_status"] == "complete"
+    assert lead["project_ids"] == [
+        "binghatti-skyrise",
+        "binghatti-aquarise",
+        "binghatti-circle",
+    ]
+
+
+async def test_an_unresolvable_project_is_not_filed_as_evidence(
+    database: str,
+) -> None:
+    """Two different failures with two different operator actions.
+
+    `evidence` means the model cited a turn that never happened: look at the
+    transcript. An unresolvable project means the model named something we do
+    not sell, or the prompt did not tell it what we do: look at the inventory
+    and the instruction. One code for both sent ryan to the wrong place.
+    """
+    from adapter.analysis import finalise_analysis
+    from ambassador.schemas import SignalEvidence
+
+    writer, lead_id = await _persisted(database, "sess_" + uuid.uuid4().hex[:8])
+    log = _log()
+    try:
+        await finalise_analysis(
+            snapshot=_snapshot("ignored"),
+            lead_id=lead_id,
+            writer=writer,
+            ask=_answers(
+                _draft(
+                    project_named=SignalEvidence(observed=True, turn_indexes=[1]),
+                    project_ids=["Binghatti Moonrise"],
+                )
+            ),
+            log=log[0],
+        )
+    finally:
+        await writer.close()
+    await log[0].aclose()
+
+    written = log[1].getvalue()
+    assert '"code": "unknown_project"' in written, written
+    assert '"code": "evidence"' not in written
+    assert "Moonrise" not in written
+
+
+async def test_an_invented_turn_index_is_still_evidence(
+    database: str,
+) -> None:
+    """A GUARD, passing before and after: the new code must take failures FROM
+    the old one, not replace it."""
+    from adapter.analysis import finalise_analysis
+    from ambassador.schemas import SignalEvidence
+
+    writer, lead_id = await _persisted(database, "sess_" + uuid.uuid4().hex[:8])
+    log = _log()
+    try:
+        await finalise_analysis(
+            snapshot=_snapshot("ignored"),
+            lead_id=lead_id,
+            writer=writer,
+            ask=_answers(
+                _draft(budget_stated=SignalEvidence(observed=True, turn_indexes=[99]))
+            ),
+            log=log[0],
+        )
+    finally:
+        await writer.close()
+    await log[0].aclose()
+
+    assert '"code": "evidence"' in log[1].getvalue()
+
+
 def _answers(draft, extra: dict | None = None):
     """A model that returns this draft, optionally with fields it is not
     allowed to send."""

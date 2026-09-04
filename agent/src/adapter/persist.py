@@ -299,6 +299,11 @@ _FAILURE_CODES: Final = (
         ),
     ),
     ("schema", ("UndefinedTableError", "UndefinedColumnError", "SchemaOutOfDate")),
+    # A project id or name the inventory does not have. Ahead of `invalid`
+    # because `UnknownProject` IS a ValueError: the more specific code wins,
+    # and the operator action is different - look at the inventory and the
+    # analysis instruction, not at the model's JSON.
+    ("unknown_project", ("UnknownProject",)),
     # Not a database failure at all: the record could not be BUILT. Distinct
     # from `rejected`, which is Postgres refusing a value it was handed -
     # this one never reached Postgres, so the operator action is to look at

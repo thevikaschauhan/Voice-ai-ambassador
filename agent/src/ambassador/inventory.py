@@ -6,6 +6,7 @@ hand-authored: a computed figure cannot be mistyped, an authored one can.
 """
 
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -24,6 +25,34 @@ def load_inventory(path: Path | None = None) -> list[Project]:
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate project ids in inventory")
     return projects
+
+
+def resolve_project_id(value: str, projects: list[Project] | None = None) -> str | None:
+    """A model-supplied id OR name to an inventory id, or None.
+
+    Deterministic - a lookup against the records we ship, never a guess and
+    never a second model call. It lives here because inventory owns the id
+    vocabulary: the adapter should not be the place that knows "Binghatti
+    Skyrise" and `binghatti-skyrise` are the same project.
+
+    Both sides are normalised the same way (casefolded, runs of non-alphanumeric
+    characters to a single dash), so a name matches its own slug and a model
+    that lower-cased or double-spaced a name has not made a different claim.
+    Names are matched too, not just slugs, because `Bugatti Residences by
+    Binghatti` slugs to something that is not its id.
+    """
+    projects = load_inventory() if projects is None else projects
+    wanted = _slug(value)
+    if not wanted:
+        return None
+    for project in projects:
+        if wanted in (_slug(project.id), _slug(project.name)):
+            return project.id
+    return None
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
 
 
 def derive(project: Project) -> DerivedFigures | None:
