@@ -1728,6 +1728,12 @@ async def shutdown_session(
     # lazy string, so it never raised, it just stopped meaning anything.
     stt_node: stt.STT | None,
     lead_writer: "LeadWriter | None" = None,
+    # The task `entrypoint` started at `session_start`. Awaited HERE rather
+    # than by the caller, because the await itself can raise - a
+    # half-configured store used to surface its ValueError on that line, one
+    # above this function, outside every try. `lead_writer` remains for callers
+    # that already hold one, which is every test that does not need the task.
+    lead_store: "asyncio.Task[LeadWriter | None] | None" = None,
     ask: "Ask | None" = None,
 ) -> None:
     """Close everything the session owns, in order.
@@ -1749,6 +1755,19 @@ async def shutdown_session(
     # `persist_or_report` cannot raise, so nothing here can stop the job
     # ending: ADR-018 is explicit that an unavailable database never blocks a
     # call, and by this point the farewell has already been heard.
+    if lead_writer is None and lead_store is not None:
+        try:
+            lead_writer = await lead_store
+        except Exception as exc:
+            # Reported with `connect` as the stage, the same as a failed
+            # handshake: from operations' side a store that refused its
+            # configuration and one that could not be reached are the same
+            # event - a call with no lead - and one query should find both.
+            # The exception message can name a variable, so only the code goes
+            # on the stream.
+            log.emit("lead_persist_failed", stage="connect", code=_failure_code(exc))
+            lead_writer = None
+
     if lead_writer is not None:
         # Inside the boundary. Building the snapshot is not a database call, so
         # it looked like the safe line - but it validates a model, and a model
@@ -2120,7 +2139,8 @@ async def entrypoint(ctx: JobContext) -> None:
         # never fires.
         if cap is not None:
             cap.cancel()
-        writer = await lead_store
+        # The TASK, not an awaited writer: `shutdown_session` owns the await
+        # because the await can raise, and nothing above the seal may.
         try:
             await shutdown_session(
                 agent=agent,
@@ -2128,12 +2148,14 @@ async def entrypoint(ctx: JobContext) -> None:
                 llm=llm,
                 stt_node=stt_node,
                 bridge=bridge,
-                lead_writer=writer,
+                lead_store=lead_store,
                 ask=analysis_ask(settings),
             )
         finally:
-            if writer is not None:
-                await writer.close()
+            if lead_store.done() and not lead_store.cancelled():
+                writer = None if lead_store.exception() else lead_store.result()
+                if writer is not None:
+                    await writer.close()
 
     ctx.add_shutdown_callback(_shutdown)
 
