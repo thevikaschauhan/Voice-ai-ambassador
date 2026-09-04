@@ -241,3 +241,88 @@ async def test_a_question_after_the_agents_goodbye_is_still_a_question() -> None
     assert [e for e in json_lines(buf) if e["event"] == "call_ended"] == [], (
         "the goodbye was two turns ago and the conversation moved on"
     )
+
+
+def test_the_worker_logs_own_view_of_turn_7_names_the_token_that_vetoed_it(
+    tmp_path: Path,
+) -> None:
+    """Ryan read the worker log, and the detector had SEEN the goodbye.
+
+    At turn 7 `farewell_candidate` fired with `unexplained=1` and
+    `named_ambassador=true`, twice, and never armed the close. One token
+    vetoed a closing the rule had otherwise recognised, and the log could not
+    say which - `farewell_candidate` carries the shape and never the words,
+    which is right and is also why this has to be reconstructed from the data.
+
+    Two things follow, and both are load-bearing. The reading the log recorded
+    was of a PARTIAL that ended at "That's it." - the buyer's last sentence had
+    not been transcribed yet, which is why the count was 1 and not the 6 the
+    whole utterance produces. And the one token was the filler: with "uh"
+    removed from the courtesy table the same partial reproduces the logged
+    numbers exactly, and with it there the partial closes. The ambassador's
+    name was never the problem - `named_ambassador=true` says it was seen and
+    counted as a courtesy, which #66b56c5 had already fixed.
+    """
+    import yaml
+
+    from ambassador.farewell import load_farewells, read_farewell
+
+    partial = "Okay. Uh, Jane, thank you so much. That's it."
+    farewells = load_farewells()
+    assert read_farewell(partial, farewells, "en", names=NAMES).closes, (
+        "the partial the log was reading closes now"
+    )
+
+    # The same table with the fillers taken back out, which is what the worker
+    # was running at 08:34:29.
+    source = Path(__file__).resolve().parents[2] / "data" / "farewells.yaml"
+    raw = yaml.safe_load(source.read_text(encoding="utf-8"))
+    fillers = {"uh", "uhm", "um", "umm", "er", "erm", "ah", "hmm", "mhm", "mm"}
+    raw["courtesies"]["en"] = [
+        word for word in raw["courtesies"]["en"] if word not in fillers
+    ]
+    older = tmp_path / "farewells.yaml"
+    older.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    logged = read_farewell(partial, load_farewells(older), "en", names=NAMES)
+    assert (logged.closes, logged.unexplained, logged.named_ambassador) == (
+        False,
+        1,
+        True,
+    ), "this is the line ryan read: unexplained=1, named_ambassador=true"
+    # And it was the filler, not the name and not "Okay".
+    assert read_farewell(
+        partial.replace("Uh, ", ""), load_farewells(older), "en", names=NAMES
+    ).closes
+
+
+async def test_one_farewell_candidate_per_turn_however_many_partials() -> None:
+    """The log showed the same near miss twice, 0.93s apart, for one goodbye.
+
+    Preemptive generation runs the deterministic seam on a partial and again
+    when the final is not equivalent, so a near miss is READ twice - and the
+    audit counted it twice. The buyer said one thing. `farewell_spoken` is
+    already guarded this way for exactly this reason; the telemetry that exists
+    to tune the detector has to be countable too.
+    """
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    from test_agent import HealthyStream, json_lines, make_agent, run_llm_node, user_ctx
+
+    agent, log, buf, _spy = make_agent(
+        [HealthyStream(["Anything else? "]), HealthyStream(["Anything else? "])]
+    )
+
+    # TWO generations for ONE buyer turn, which is what the framework does when
+    # a preemptive generation on a partial is invalidated by the final: the
+    # tracker is deliberately NOT reset, so both runs are the same turn index.
+    # A near miss in both, so the strict rule refuses it twice.
+    await run_llm_node(agent, user_ctx("that is all, parking"))
+    await run_llm_node(agent, user_ctx("that is all, parking?"))
+    await log.aclose()
+
+    candidates = [e for e in json_lines(buf) if e["event"] == "farewell_candidate"]
+    assert len(candidates) == 1, (
+        f"one goodbye, {len(candidates)} candidate events: the stream that "
+        "exists to tune this rule cannot double-count its own evidence"
+    )
