@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import re
 import unicodedata
 from functools import lru_cache
 from pathlib import Path
@@ -72,13 +71,21 @@ class ChunkSource(Protocol):
 
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
-# Letters, digits and marks in any script. `\w` would do for English and then
-# quietly drop Arabic diacritics and Devanagari matras, which are part of the
-# word rather than punctuation around it.
-_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
+# What counts as a word character: any LETTER, any combining MARK, any
+# NUMBER. Written as Unicode categories rather than as a character class,
+# because `\w` - and `[^\W_]`, which is the same set minus underscore - does
+# NOT match combining marks. The first version of this used `[^\W_]+` under a
+# comment warning about precisely that, and it shredded Devanagari: the
+# virama, the nukta and the matras all read as separators, so
+# "अक्वाराइज़ ... हैंडओवर" tokenised to ['अक', 'इज', 'मत', 'डओवर'] while
+# Postgres indexed the whole words, and a Hindi call could never match a
+# Hindi document. Unpointed Arabic survived only because its letters are
+# category Lo; one diacritic splits it the same way.
+_WORD_CATEGORIES = frozenset("LMN")
 
 # One character is never a content word in any of the three languages, and a
-# single letter matches half the corpus.
+# single letter matches half the corpus. Applied in `content_tokens`, NOT in
+# `tokenise`, so it cannot cost us parity with the index.
 _MINIMUM_TOKEN = 2
 
 
@@ -98,13 +105,36 @@ def load_stopwords(path: Path | None = None) -> dict[str, frozenset[str]]:
 
 
 def _fold(word: str) -> str:
-    """Lowercase and NFKC-normalise, so the list and the utterance agree.
+    """The form used to COMPARE a token against the stopword list.
 
-    Arabic and Hindi both have multiple encodings of the same grapheme, and a
-    stopword list that matches only one of them silently stops working on the
-    other.
+    NFKC because Arabic and Hindi both encode the same grapheme more than one
+    way, and a list matching only one encoding silently stops working on the
+    other. This is deliberately NOT what goes into the query: Postgres's
+    `simple` configuration lowercases and does not normalise, so normalising
+    the query token would be a second way to disagree with the index.
     """
     return unicodedata.normalize("NFKC", word).casefold()
+
+
+def tokenise(utterance: str) -> list[str]:
+    """The words Postgres would index, in the order they were said.
+
+    Parity with the index side is the property this has to hold: a query
+    lexeme that is not an index lexeme matches nothing, however reasonable it
+    looks. Lowercased and not otherwise normalised, because that is exactly
+    what `to_tsvector('simple', ...)` does.
+    """
+    tokens: list[str] = []
+    current: list[str] = []
+    for character in utterance:
+        if unicodedata.category(character)[0] in _WORD_CATEGORIES:
+            current.append(character)
+        elif current:
+            tokens.append("".join(current).lower())
+            current = []
+    if current:
+        tokens.append("".join(current).lower())
+    return tokens
 
 
 def content_tokens(utterance: str, language: str) -> list[str]:
@@ -122,9 +152,8 @@ def content_tokens(utterance: str, language: str) -> list[str]:
     stopwords = load_stopwords().get(language, frozenset())
     seen: set[str] = set()
     tokens: list[str] = []
-    for match in _TOKEN.finditer(utterance):
-        token = _fold(match.group())
-        if len(token) < _MINIMUM_TOKEN or token in stopwords or token in seen:
+    for token in tokenise(utterance):
+        if len(token) < _MINIMUM_TOKEN or _fold(token) in stopwords or token in seen:
             continue
         seen.add(token)
         tokens.append(token)
