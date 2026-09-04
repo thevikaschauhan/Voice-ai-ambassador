@@ -70,7 +70,7 @@ from . import field_paths
 from .crypto import EnvelopeError, Sealer
 from .events import EventLog
 from .ingestion import ParseFailed, parse_document, store_document
-from .repository import ConcurrentDecision, Repository
+from .repository import ConcurrentDecision, NoSuchLead, Repository
 
 _TOKEN_ENV: Final = "ADMIN_API_TOKEN"
 _DSN_ENV: Final = "DATABASE_URL"
@@ -489,12 +489,23 @@ async def append_decision(lead_id: str, body: DecisionRequest) -> dict[str, Any]
     the same lead and deciding differently is the case the counter exists for,
     and the second one has to see the first's decision before repeating theirs.
     """
+    # Sealed by the repository once it has allocated the sequence, because
+    # the sequence is the note's AAD. Nothing here can know it beforehand.
+    seal_note = None
+    if body.note is not None:
+        plaintext = body.note.encode("utf-8")
+
+        def seal_note(sequence: int) -> dict[str, Any]:
+            return sealer_of(app).seal(
+                lead_id, field_paths.decision_note(sequence), plaintext
+            )
+
     try:
         decision_id = await repository_of(app).record_decision(
             lead_id,
             new_status=body.new_status,
             reason_code=body.reason_code,
-            note={"note": body.note} if body.note is not None else None,
+            seal_note=seal_note,
             actor_kind="admin",
             actor_id=None,
             expected_lead_revision=body.expected_lead_revision,
@@ -503,7 +514,10 @@ async def append_decision(lead_id: str, body: DecisionRequest) -> dict[str, Any]
         raise HTTPException(
             status.HTTP_409_CONFLICT, "lead revision has moved"
         ) from None
-    except LookupError:
+    except NoSuchLead:
+        # NOT `LookupError`: `KeyError` is one, so the broader catch reported
+        # any internal mapping error as a confident 404 about a lead that was
+        # sitting right there. That is what hid this note bug.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such lead") from None
     return {"decision_id": str(decision_id)}
 

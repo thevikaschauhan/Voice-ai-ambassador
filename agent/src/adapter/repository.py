@@ -25,7 +25,7 @@ repository that silently encrypted would make the boundary impossible to audit.
 from __future__ import annotations
 
 from datetime import datetime
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import asyncpg
@@ -574,7 +574,7 @@ class Repository:
         *,
         new_status: str,
         reason_code: str,
-        note: dict[str, Any] | None,
+        seal_note: Callable[[int], dict[str, Any] | None] | None = None,
         actor_kind: str,
         actor_id: Any,
         expected_lead_revision: int,
@@ -585,6 +585,16 @@ class Repository:
         its own decision history cannot be reconciled after the fact. The
         revision check makes a concurrent second admin fail rather than
         silently overwrite the first.
+
+        `seal_note` is a CALLBACK rather than an envelope because the note's
+        AAD names the sequence, and the sequence is allocated in here, under
+        the row lock. A caller cannot know it beforehand: guessing would work
+        for the first decision on a lead and fail for every one after. So the
+        caller hands over the sealing, and gets told the number.
+
+        It stays a callback rather than a `Sealer` argument so this layer
+        never learns what a key is. The repository moves envelopes; it does
+        not make them.
         """
         async with self._pool.acquire() as connection:
             async with connection.transaction():
@@ -593,7 +603,7 @@ class Repository:
                     lead_id,
                 )
                 if lead is None:
-                    raise LookupError(f"no lead {lead_id}")
+                    raise NoSuchLead(f"no lead {lead_id}")
                 if lead["revision"] != expected_lead_revision:
                     raise ConcurrentDecision(
                         f"lead {lead_id} moved to revision {lead['revision']} while "
@@ -617,7 +627,9 @@ class Repository:
                     lead["status"],
                     new_status,
                     reason_code,
-                    _envelope_tuple(note),
+                    # Sealed here, with the sequence the transaction just
+                    # allocated, because that number is the note's AAD.
+                    _envelope_tuple(seal_note(sequence) if seal_note else None),
                     actor_kind,
                     actor_id,
                     expected_lead_revision,
@@ -899,6 +911,17 @@ class Repository:
             "SELECT * FROM audit_events WHERE lead_id = $1 ORDER BY id", lead_id
         )
         return [dict(row) for row in rows]
+
+
+class NoSuchLead(LookupError):
+    """The lead is genuinely absent.
+
+    Named rather than a bare `LookupError` because `KeyError` is one too.
+    A route catching `LookupError` to mean "no such lead" turns any
+    internal mapping error into a confident 404 about a lead that exists -
+    which is exactly what hid the unsealed decision note: the admin was
+    told the lead was gone.
+    """
 
 
 class ConcurrentDecision(RuntimeError):
