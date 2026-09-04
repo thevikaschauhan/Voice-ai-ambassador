@@ -2307,9 +2307,16 @@ LEAD_SECTION_BUDGET_SECONDS: Final = 12.0
 # state.
 BRIEF_DRAIN_BUDGET_SECONDS: Final = 2.0
 
-# Unchanged. It is the one stage whose work is a network round trip we cannot
-# shorten, and it now draws from the shared deadline like the others.
-ANALYSIS_BUDGET_SECONDS: Final = 4.0
+# Two model attempts plus their overhead. 4.0 was set before the request shape
+# was measured, and it could not hold one attempt at the measured latency let
+# alone the repair docs/10- allows: 2 x REQUEST_TIMEOUT_SECONDS is 5.0, so 6.0
+# leaves a second for validation, scoring and the write.
+#
+# It exceeds no invariant. The lead stages share ONE deadline
+# (LEAD_SECTION_BUDGET_SECONDS), so their individual ceilings may sum above it;
+# what matters is that no single stage can exceed the deadline and starve the
+# others, and 6.0 < 12.0.
+ANALYSIS_BUDGET_SECONDS: Final = 6.0
 
 _CONNECTING_COMMANDS: Final = frozenset({"start", "dev", "connect"})
 
