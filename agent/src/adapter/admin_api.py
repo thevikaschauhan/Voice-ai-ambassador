@@ -66,6 +66,7 @@ from pydantic import BaseModel, Field
 from ambassador.inventory import load_inventory
 from ambassador.schemas import Language
 
+from . import field_paths
 from .crypto import EnvelopeError, Sealer
 from .events import EventLog
 from .ingestion import ParseFailed, parse_document, store_document
@@ -352,10 +353,10 @@ async def get_lead(lead_id: str) -> dict[str, Any]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such lead") from None
 
     lead["brief"], lead["brief_error"] = open_field(
-        app, lead_id, "brief", lead.get("brief")
+        app, lead_id, field_paths.brief(), lead.get("brief")
     )
     lead["summary"], lead["summary_error"] = open_field(
-        app, lead_id, "summary", lead.get("summary")
+        app, lead_id, field_paths.summary(), lead.get("summary")
     )
 
     # The contact fields become one object rather than five flat columns: the
@@ -373,7 +374,10 @@ async def get_lead(lead_id: str) -> dict[str, Any]:
     }
     for field in ("name", "phone", "email"):
         value, error = open_field(
-            app, lead_id, f"contact.{field}", lead.pop(f"contact_{field}", None)
+            app,
+            lead_id,
+            field_paths.contact(field),
+            lead.pop(f"contact_{field}", None),
         )
         contact[field] = value
         if error:
@@ -384,7 +388,7 @@ async def get_lead(lead_id: str) -> dict[str, Any]:
     for turn in await repository.get_turns(lead_id):
         index = turn.get("turn_index")
         payload, error = open_field(
-            app, lead_id, f"turns.{index}.payload", turn.get("payload")
+            app, lead_id, field_paths.turn_payload(index), turn.get("payload")
         )
         turn["payload"] = payload
         turn["payload_error"] = error
@@ -396,7 +400,7 @@ async def get_lead(lead_id: str) -> dict[str, Any]:
         note, error = open_field(
             app,
             lead_id,
-            f"decisions.{decision.get('sequence')}.note",
+            field_paths.decision_note(decision.get("sequence")),
             decision.get("note"),
         )
         decision["note"] = note

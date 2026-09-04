@@ -29,6 +29,7 @@ from ambassador.schemas import LeadSnapshot
 
 from .config import Settings
 from .crypto import Sealer
+from . import field_paths
 from .events import EventLog
 from .repository import Repository
 
@@ -145,7 +146,9 @@ class LeadWriter:
             await self.repository.put_brief(
                 lead_id,
                 self._sealer.seal(
-                    lead_id, "brief", snapshot.brief.model_dump_json().encode("utf-8")
+                    lead_id,
+                    field_paths.brief(),
+                    snapshot.brief.model_dump_json().encode("utf-8"),
                 ),
             )
 
@@ -155,9 +158,15 @@ class LeadWriter:
             status=contact.status,
             asked_turn_index=contact.asked_turn_index,
             source_turn_index=contact.source_turn_index,
-            name=self._seal_optional(lead_id, "contact.name", contact.name),
-            phone=self._seal_optional(lead_id, "contact.phone", contact.phone),
-            email=self._seal_optional(lead_id, "contact.email", contact.email),
+            name=self._seal_optional(
+                lead_id, field_paths.contact("name"), contact.name
+            ),
+            phone=self._seal_optional(
+                lead_id, field_paths.contact("phone"), contact.phone
+            ),
+            email=self._seal_optional(
+                lead_id, field_paths.contact("email"), contact.email
+            ),
             # Recomputed here rather than trusted from the snapshot: the
             # fingerprint is only meaningful if it came from this key.
             phone_fingerprint=(
@@ -178,7 +187,7 @@ class LeadWriter:
                 audit_incomplete=turn.audit_incomplete,
                 payload=self._sealer.seal(
                     lead_id,
-                    f"turns.{turn.turn_index}",
+                    field_paths.turn_payload(turn.turn_index),
                     turn.model_dump_json().encode("utf-8"),
                 ),
             )

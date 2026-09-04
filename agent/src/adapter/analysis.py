@@ -29,6 +29,7 @@ from ambassador.inventory import load_inventory
 from ambassador.leads import ScoringInputs, load_rubric, score_interest
 from ambassador.schemas import LeadAnalysisDraft, LeadSnapshot
 
+from . import field_paths
 from .events import EventLog
 from .persist import LeadWriter
 
@@ -94,7 +95,9 @@ async def finalise_analysis(
         await writer.repository.put_analysis(
             lead_id,
             status="complete",
-            summary=writer.seal(lead_id, "summary", draft.summary.encode("utf-8")),
+            summary=writer.seal(
+                lead_id, field_paths.summary(), draft.summary.encode("utf-8")
+            ),
             score_total=score.total,
             score_version=score.score_version,
             breakdown=[json.loads(item.model_dump_json()) for item in score.breakdown],
