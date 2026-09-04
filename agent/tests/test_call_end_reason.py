@@ -41,6 +41,14 @@ DOCS = Path(__file__).resolve().parents[2] / "docs" / "02-data-contracts.md"
 LEADS_TS = (
     Path(__file__).resolve().parents[2] / "web" / "src" / "lib" / "admin" / "leads.ts"
 )
+LEADS_SERVER_TS = (
+    Path(__file__).resolve().parents[2]
+    / "web"
+    / "src"
+    / "lib"
+    / "admin"
+    / "leads.server.ts"
+)
 
 # The two methods that put a reason into `_call_end_reason`, directly or by
 # handing it to `_close_call`. Everything else called `reason` in this adapter -
@@ -175,6 +183,10 @@ def _leads_ts_block(name: str) -> str:
     so a rename in leads.ts fails loudly instead of passing on nothing found.
     """
     source = LEADS_TS.read_text(encoding="utf-8")
+    # A missing declaration is the most likely thing this helper meets - it is
+    # how "the web tier does not type this set at all" looks - so it fails with
+    # the name it went looking for rather than with ValueError from `index`.
+    assert name in source, f"{LEADS_TS.name} has no declaration `{name}`"
     start = source.index(name)
     # Declarations in that file are separated by a blank line. END_REASON_LABELS
     # is currently the last one, so end-of-file is a real terminator and not a
@@ -230,6 +242,60 @@ def test_the_web_reader_labels_every_reason_it_types() -> None:
     assert labelled, f"no labels parsed from END_REASON_LABELS: {block!r}"
     missing = sorted(set(get_args(CallEndReason)) - labelled)
     assert not missing, f"END_REASON_LABELS has no label for {missing}"
+
+
+def test_the_web_reader_types_the_same_contact_status_set_as_the_schema() -> None:
+    """The reader's other closed set, guarded before it can drift.
+
+    `contact_status` arrives from `list_leads` and the web tier derives its
+    one-bit contact indicator from it by comparing against `'captured'`. That
+    comparison was written against a field typed `string | null`, so nothing
+    checked the literal: renaming or dropping `captured` in
+    `ambassador/schemas.py` would leave TypeScript compiling happily while
+    every lead silently rendered as having no contact.
+
+    That failure is worse than the `CallEndReason` one this file already
+    guards. A missing END_REASON label rendered BLANK, which looks broken and
+    gets reported. A wrong contact comparison renders a PLAUSIBLE answer - "no
+    contact" - on every row, and looks fine.
+    """
+    from typing import get_args
+
+    from ambassador.schemas import ContactStatus
+
+    block = _leads_ts_block("export type ContactStatus")
+    typed = set(re.findall(r"'([a-z_]+)'", block))
+    assert typed, f"no quoted statuses in the leads.ts union: {block!r}"
+    expected = set(get_args(ContactStatus))
+    assert typed == expected, (
+        f"web types {sorted(typed)} vs schema {sorted(expected)}. The list's "
+        "contact indicator is derived from this set in "
+        "web/src/lib/admin/leads.server.ts."
+    )
+
+
+def test_the_web_contact_indicator_compares_against_a_real_status() -> None:
+    """The magic string, checked against the set rather than by eye.
+
+    The derivation is CORRECT as written - `ambassador/contact.py` records
+    `unconfirmed` when a read-back is not confirmed and deliberately keeps no
+    number, because "a value the buyer has just contradicted is worse than no
+    value" - so only `captured` names a contact a human can act on. What was
+    missing is anything that would notice if that word stopped existing.
+    """
+    from typing import get_args
+
+    from ambassador.schemas import ContactStatus
+
+    source = LEADS_SERVER_TS.read_text(encoding="utf-8")
+    compared = set(re.findall(r"contact_status === '([a-z_]+)'", source))
+    assert compared, "no contact_status comparison found in leads.server.ts"
+    unknown = sorted(compared - set(get_args(ContactStatus)))
+    assert not unknown, (
+        f"the contact indicator compares against {unknown}, which is not a "
+        "ContactStatus - so it can never be true and every lead reads as "
+        "having no contact"
+    )
 
 
 def test_the_call_ended_comment_names_every_reason_it_can_carry() -> None:
