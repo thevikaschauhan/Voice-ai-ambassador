@@ -118,6 +118,7 @@ from .retrieval import KnowledgeRetriever, repository_when_ready
 from .events_bridge import EventsBridge, bridge_from_env
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
 from .levels import apply_gain, gain_for
+from .logmask import install_vendor_log_mask
 from .analysis import Ask, analysis_ask, finalise_analysis
 from .persist import LeadWriter, _failure_code, build_lead_writer
 from .lexicon import load_lexicon, respell_stream
@@ -2185,7 +2186,15 @@ def start_call_duration_cap(
 
 
 def prewarm(proc: JobProcess) -> None:
-    """Load Silero once per worker process, not once per call."""
+    """Load Silero once per worker process, not once per call.
+
+    Also the earliest hook the framework offers INSIDE a job process, which is
+    where the vendor mask goes: it masks at record creation, so it covers this
+    process whatever the framework does with handlers afterwards, but it cannot
+    cover a record logged before it runs. Idempotent, so running once per
+    process is free.
+    """
+    install_vendor_log_mask()
     proc.userdata["vad"] = silero.VAD.load()
 
 
@@ -2556,6 +2565,12 @@ def worker_options() -> WorkerOptions:
 
 
 if __name__ == "__main__":
+    # The main process logs too - registration, drains, the pooler warnings.
+    # Its root has NO handlers here: `cli.run_app` adds one later, inside
+    # `cli.log.setup_logging`. That is why the mask is a record factory and not
+    # a handler filter - the filter version installed here covered nothing at
+    # all. Job processes get their own install from `prewarm`.
+    install_vendor_log_mask()
     _refusal = preflight()
     if _refusal:
         # stderr and a non-zero exit, so the platform sees a failed start rather
