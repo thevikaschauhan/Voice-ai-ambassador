@@ -579,9 +579,25 @@ class AmbassadorAgent(Agent):
             return
         if not self._farewell_detects:
             return
+        if self._contact_awaiting_reply and self._contact_turn_index == (
+            tracker.turn_index
+        ):
+            # THE CONTACT ASK TOOK THIS TURN, and arming a close on it hangs up
+            # on the question we just asked. The deterministic seam read the
+            # goodbye in the partial and deliberately did not arm - the call
+            # has to stay open for the answer - and then this seam read the
+            # same goodbye in the final and closed the call before the buyer
+            # could give a number. Reachable on every voice call that ends
+            # politely, because the ask always takes the turn the goodbye
+            # arrived on, and the read-back has the same shape: a number and a
+            # goodbye in one transcript would close before the digits are
+            # confirmed. The interaction between #132 and this seam, not a
+            # fault in either alone.
+            return
         reading = self._read_farewell(text)
         if reading.closes:
             self._closing_turn = tracker.turn_index
+            self._note_close_from_final(tracker.turn_index, "buyer_farewell")
         elif (
             reading.courtesy_only
             and self._signed_off_turn is not None
@@ -594,8 +610,32 @@ class AmbassadorAgent(Agent):
             # that only appears in the final was never read.
             self._closing_turn = tracker.turn_index
             self._closing_reason = "agent_farewell"
+            self._note_close_from_final(tracker.turn_index, "agent_farewell")
         elif reading.has_phrase and self._candidate_turn != tracker.turn_index:
             self._note_candidate(tracker.turn_index, reading)
+
+    def _note_close_from_final(self, turn: int, reason: str) -> None:
+        """This close came from the FINAL transcript, and what it cost.
+
+        An instrument, not a decision (task-p2-contact-final-transcript-path).
+        A closing recognised only here is one the deterministic seam never saw,
+        because it read the partial - and the turn cannot be taken back to ask
+        for contact, since the model is already answering and cancelling that
+        is the double-goodbye this path exists to avoid. So the ask is skipped,
+        and until now nothing said how often: `call_ended` reads
+        `buyer_farewell` whichever seam armed it.
+
+        `contact_owed` is the cost on the same line as the event. A path that
+        is common and never owes an ask needs no fix; one that is rare and
+        always owes one is a different decision, and a count alone cannot tell
+        those apart.
+        """
+        self._log.emit(
+            "farewell_from_final",
+            turn=turn,
+            reason=reason,
+            contact_owed=self._contact is not None and self._contact.owes_request(),
+        )
 
     def knowledge_use(self) -> list[KnowledgeUse]:
         """This call's buffered retrieval records, for the snapshot.
