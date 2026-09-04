@@ -133,6 +133,58 @@ def test_the_tolerance_is_generic_over_optional_sub_objects() -> None:
     assert Outer.model_validate(cleaned).inner is None
 
 
+def test_a_brief_that_omits_budget_entirely_is_untouched() -> None:
+    """The other two ways to say "no budget", both of which already worked and
+    must keep working: leave the key out, or send `null` for it. The rule reads
+    an OBJECT of nulls; it must not start rewriting anything else."""
+    from ambassador.schemas import LeadBrief
+
+    without = dict(NULL_BUDGET_BRIEF)
+    without.pop("budget")
+    assert LeadBrief.model_validate_json(json.dumps(without)).budget is None
+
+    explicit = dict(NULL_BUDGET_BRIEF, budget=None)
+    assert LeadBrief.model_validate_json(json.dumps(explicit)).budget is None
+
+
+def test_a_payload_that_is_not_a_mapping_is_left_to_pydantic() -> None:
+    """A `before` validator sees whatever was handed to `model_validate`, which
+    is not always a dict - revalidating an existing model passes the INSTANCE.
+    The rule has nothing to say about that, and saying nothing is the whole
+    behaviour: pydantic's own error is better than one from here."""
+    from ambassador.schemas import LeadBrief, all_null_optional_objects_to_none
+
+    for value in ("not a mapping", None, 7):
+        assert all_null_optional_objects_to_none(LeadBrief, value) is value
+
+    brief = LeadBrief.model_validate(json.loads(json.dumps(NULL_BUDGET_BRIEF)))
+    assert LeadBrief.model_validate(brief) == brief
+
+
+def test_every_all_null_sub_object_in_one_payload_is_cleared() -> None:
+    """Two of them, because "the first one" and "each one" are different rules
+    and only one of them is the one we want."""
+    from pydantic import BaseModel
+
+    from ambassador.schemas import all_null_optional_objects_to_none
+
+    class Inner(BaseModel):
+        required_number: float
+
+    class Other(BaseModel):
+        required_text: str
+
+    class Outer(BaseModel):
+        inner: Inner | None = None
+        other: Other | None = None
+
+    cleaned = all_null_optional_objects_to_none(
+        Outer, {"inner": {"required_number": None}, "other": {"required_text": None}}
+    )
+
+    assert cleaned == {"inner": None, "other": None}
+
+
 def test_the_schema_hint_tells_the_model_to_return_null_for_an_unknown_budget() -> None:
     """The validator stops the brief being lost; the hint stops the round trip
     being wasted. The prompt already says "use null for anything the buyer has
