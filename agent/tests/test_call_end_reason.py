@@ -38,6 +38,9 @@ AGENT = Path(__file__).resolve().parents[1] / "src" / "adapter" / "agent.py"
 EVENTS = Path(__file__).resolve().parents[1] / "src" / "adapter" / "events.py"
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 DOCS = Path(__file__).resolve().parents[2] / "docs" / "02-data-contracts.md"
+LEADS_TS = (
+    Path(__file__).resolve().parents[2] / "web" / "src" / "lib" / "admin" / "leads.ts"
+)
 
 # The two methods that put a reason into `_call_end_reason`, directly or by
 # handing it to `_close_call`. Everything else called `reason` in this adapter -
@@ -161,6 +164,72 @@ def test_docs_02_lists_the_same_reason_set_as_the_schema() -> None:
     assert documented, f"no quoted reasons on the docs line: {line!r}"
     expected = set(get_args(CallEndReason))
     assert documented == expected, f"docs {sorted(documented)} vs {sorted(expected)}"
+
+
+def _leads_ts_block(name: str) -> str:
+    """The source of one declaration in `web/src/lib/admin/leads.ts`.
+
+    A parser, not an import: this is the only place in the repo where a Python
+    test reads TypeScript, and the alternative - restating the union here - is
+    the copy that goes stale. Both callers assert the block is non-empty first,
+    so a rename in leads.ts fails loudly instead of passing on nothing found.
+    """
+    source = LEADS_TS.read_text(encoding="utf-8")
+    start = source.index(name)
+    # Declarations in that file are separated by a blank line. END_REASON_LABELS
+    # is currently the last one, so end-of-file is a real terminator and not a
+    # defensive flourish - without it this helper raised ValueError and the
+    # labels test "failed" on the parser rather than on the missing label.
+    end = source.find("\n\n", start)
+    return source[start:] if end == -1 else source[start:end]
+
+
+def test_the_web_reader_types_the_same_reason_set_as_the_schema() -> None:
+    """The reader's copy, which is the one that drifted.
+
+    Found live on 2026-09-04: `CallEndReason` in leads.ts listed five of the
+    six, `buyer_farewell_repeated` absent, and TypeScript could not catch it
+    because `Record<CallEndReason, string>` is satisfied by five keys when the
+    UNION is the wrong copy - the checker was consistent with itself and wrong
+    about the world.
+
+    This test lives in the AGENT suite on purpose. The drift has happened twice
+    now and both times in the same direction: the Python `Literal` is the
+    authority, the writer widens it first, and the reader is what nobody
+    remembers. So the guard has to fail in the gate the person doing the
+    widening actually runs. It is also the fourth place this file compares
+    rather than restates, beside the adapter's ast, the CHECK and docs/02-.
+    """
+    from typing import get_args
+
+    from ambassador.schemas import CallEndReason
+
+    block = _leads_ts_block("export type CallEndReason")
+    typed = set(re.findall(r"'([a-z_]+)'", block))
+    assert typed, f"no quoted reasons in the leads.ts union: {block!r}"
+    expected = set(get_args(CallEndReason))
+    assert typed == expected, (
+        f"web types {sorted(typed)} vs schema {sorted(expected)}. The reader "
+        "must open what the writer sealed: add the member to the union AND to "
+        "END_REASON_LABELS in web/src/lib/admin/leads.ts."
+    )
+
+
+def test_the_web_reader_labels_every_reason_it_types() -> None:
+    """A union member with no label renders blank, which is the visible half of
+    the same bug: both admin render sites index `END_REASON_LABELS` and React
+    prints `undefined` as nothing, so the lead looks like it ended for no
+    reason. Asserted against the schema rather than against the union, so this
+    still fails if the union is right and the labels are not."""
+    from typing import get_args
+
+    from ambassador.schemas import CallEndReason
+
+    block = _leads_ts_block("export const END_REASON_LABELS")
+    labelled = set(re.findall(r"^\s{2}([a-z_]+):", block, re.M))
+    assert labelled, f"no labels parsed from END_REASON_LABELS: {block!r}"
+    missing = sorted(set(get_args(CallEndReason)) - labelled)
+    assert not missing, f"END_REASON_LABELS has no label for {missing}"
 
 
 def test_the_call_ended_comment_names_every_reason_it_can_carry() -> None:

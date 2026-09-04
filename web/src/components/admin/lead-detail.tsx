@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import {
-  END_REASON_LABELS,
+  endReasonLabel,
   REASON_LABELS,
   SIGNAL_LABELS,
 } from '@/lib/admin/leads'
@@ -91,7 +91,7 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
       <section className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
         <h1 className="text-[15px] tracking-[0.1em] text-ink-100">{lead.session_id}</h1>
         <p className="text-[12px] text-ink-500">
-          {END_REASON_LABELS[lead.call_end_reason]}
+          {endReasonLabel(lead.call_end_reason)}
           {lead.ended_cleanly ? '' : ' - incomplete'}
           {' · '}
           {lead.language.toUpperCase()}

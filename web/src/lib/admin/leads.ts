@@ -14,8 +14,19 @@
 
 export type LeadStatus = 'unreviewed' | 'qualified' | 'rejected'
 
+/**
+ * Mirrors `CallEndReason` in agent/src/ambassador/schemas.py, in its order.
+ *
+ * This copy listed five of six until 2026-09-04 - `buyer_farewell_repeated`
+ * absent - and TypeScript could not see it, because `Record<CallEndReason,
+ * string>` below is satisfied by five keys when the union itself is the wrong
+ * copy. The parity guard lives in the agent suite (tests/test_call_end_reason.py),
+ * where the widening happens, because both times this drifted the writer was
+ * changed first and the reader was what nobody remembered.
+ */
 export type CallEndReason =
   | 'buyer_farewell'
+  | 'buyer_farewell_repeated'
   | 'agent_farewell'
   | 'duration_cap'
   | 'buyer_left'
@@ -138,8 +149,31 @@ export const REASON_LABELS: Record<ReasonCode, string> = {
 /** Why a call ended, in words a reviewer can act on. */
 export const END_REASON_LABELS: Record<CallEndReason, string> = {
   buyer_farewell: 'Buyer said goodbye',
+  // Their first goodbye was not clean enough for the strict rule and the
+  // repeat is what ended the call (agent.py, the repeated-closing path). Said
+  // plainly, because "twice" is the operational detail: the ending was polite,
+  // and the buyer had to ask for it more than once.
+  buyer_farewell_repeated: 'Buyer said goodbye twice',
   agent_farewell: 'Ambassador closed the call',
   duration_cap: 'Hit the duration cap',
   buyer_left: 'Buyer left',
   session_error: 'Session error',
+}
+
+/**
+ * The label to show, and never nothing.
+ *
+ * Both render sites used to index `END_REASON_LABELS` directly, so a reason
+ * this tier had not been told about printed as `undefined` - which React
+ * renders as an empty cell. A reviewer saw a lead that looked like it ended
+ * for no reason, with no error anywhere to explain it.
+ *
+ * Falling back to the raw value keeps the failure legible and searchable: the
+ * reviewer can read it out loud and grep for it, which is what turns "the UI
+ * looks broken" into "the writer sends a reason we do not label yet". The
+ * parameter is widened to `string` deliberately - the whole point is a value
+ * from outside the union, which is the case the type cannot express.
+ */
+export function endReasonLabel(reason: string): string {
+  return END_REASON_LABELS[reason as CallEndReason] ?? reason
 }

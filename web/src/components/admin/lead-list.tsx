@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { END_REASON_LABELS } from '@/lib/admin/leads'
+import { endReasonLabel } from '@/lib/admin/leads'
 import type { LeadSummaryRow } from '@/lib/admin/leads'
 
 /**
@@ -59,7 +59,7 @@ export function LeadList({ rows }: { rows: readonly LeadSummaryRow[] }) {
                   {row.session_id}
                 </Link>
                 <p className="mt-1 text-[11px] text-ink-500">
-                  {END_REASON_LABELS[row.call_end_reason]}
+                  {endReasonLabel(row.call_end_reason)}
                   {row.ended_cleanly ? null : (
                     <span className="ml-2 border border-warn-500/40 px-1.5 py-0.5 text-[10px] tracking-[0.1em] text-ink-300 uppercase">
                       incomplete
