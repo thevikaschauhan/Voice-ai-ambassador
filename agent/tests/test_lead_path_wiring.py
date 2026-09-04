@@ -321,3 +321,49 @@ async def test_the_analysis_model_defaults_to_the_brief_model() -> None:
     from test_agent import make_settings
 
     assert make_settings(analysis_model="x").analysis_model == "x"
+
+
+async def test_a_snapshot_that_will_not_validate_still_seals_the_session(
+    database: str, monkeypatch
+) -> None:
+    """The snapshot build was OUTSIDE the never-raises boundary.
+
+    `agent.lead_snapshot()` ran before `persist_or_report` and outside anything
+    that catches, so a snapshot that fails validation raised straight out of the
+    shutdown callback - losing the provider closes, `session_end` and the audit
+    seal. That is precisely the loss the 4s analysis bound exists to prevent,
+    arriving through the door next to it.
+
+    The trigger ryan reproduced is real - a call ending
+    `buyer_farewell_repeated`, which #98 emits and `CallEndReason` does not
+    list - but this case monkeypatches instead, because the enum fix is jim's
+    card and a guard that depended on the bug would pass for the wrong reason
+    the moment he lands it.
+    """
+    from pydantic import ValidationError
+
+    from adapter.agent import shutdown_session
+    from adapter.persist import LeadWriter
+
+    writer = await LeadWriter.connect(database, encryption_key=KEY, hash_key=KEY)
+    agent, log, buf, _ = _agent()
+
+    def explode(**_kwargs):
+        raise ValidationError.from_exception_data("LeadSnapshot", [])
+
+    monkeypatch.setattr(agent, "lead_snapshot", explode)
+    try:
+        await shutdown_session(
+            agent=agent, log=log, llm=_llm(), stt_node=None,
+            lead_writer=writer, ask=_ask(),
+        )
+        leads = await _all_leads(database)
+    finally:
+        await writer.close()
+    await log.aclose()
+
+    written = buf.getvalue()
+    assert "session_end" in written, "the seal must survive an unusable snapshot"
+    assert '"stage": "snapshot"' in written
+    assert '"event": "lead_persist_failed"' in written
+    assert leads == [], "nothing half-written"
