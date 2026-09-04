@@ -15,6 +15,7 @@ carries, because a count is a claim that rots without failing.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import fields
 from pathlib import Path
 from typing import get_args
@@ -179,6 +180,130 @@ def test_the_credential_rule_covers_the_names_this_system_actually_uses():
         "fish_api_key",
         "deepgram_api_key",
     } <= classified
+
+
+# --- credentials that live in the VALUE ----------------------------------
+#
+# Everything above classifies by NAME, and a DSN defeats that on purpose: the
+# password sits inside `database_url`, whose name contains no credential word
+# and never will. This block is the value-shaped half of the rule.
+#
+# The fixture is assembled from parts and every part says NOTAREAL, so no line
+# here resembles a credential to a secret scanner. That is not decoration -
+# GitHub push protection rejects a realistic DSN shape, correctly, and the
+# answer is a fixture that is obviously fake rather than a cleverer string.
+_FAKE_DSN_USER = "notareal" + "_user"
+_FAKE_DSN_PASSWORD = "NOTAREAL" + "-password-" + "NOTAREAL"
+_FAKE_DSN_HOST = "db.notareal" + ".example"
+_FAKE_DSN = (
+    "postgresql://"
+    + _FAKE_DSN_USER
+    + ":"
+    + _FAKE_DSN_PASSWORD
+    + "@"
+    + _FAKE_DSN_HOST
+    + ":5432"
+    + "/postgres"
+    + "?sslmode=require"
+)
+
+# Any emitted value still carrying `scheme://something@` has userinfo in it.
+# Written against the OUTPUT rather than against the masking rule, so it cannot
+# pass by agreeing with the implementation it is guarding.
+_USERINFO = re.compile(r"://[^/@\s]*@")
+
+
+def test_a_dsn_password_does_not_reach_repr_or_the_event_stream(env_file):
+    """The leak this block exists for.
+
+    `database_url` was printed in full by `redacted()` for as long as it
+    existed, beside six credentials that were correctly `<set>`, because the
+    rule asked what the field was CALLED. It reached the worker's deploy log
+    once per call, inside `session_start`.
+    """
+    base = load_settings(env_file).redacted()
+    settings = Settings(**{**base, "database_url": _FAKE_DSN})  # type: ignore[arg-type]
+
+    rendered = repr(settings)
+    dumped = json.dumps(settings.redacted())
+    for surface in (rendered, dumped):
+        assert _FAKE_DSN_PASSWORD not in surface
+        assert _FAKE_DSN_USER not in surface
+
+    # Still diagnostic, which is the whole reason this is not a `<set>`: the
+    # operator can see WHICH database the worker is talking to, and the port
+    # that tells session mode from transaction mode.
+    emitted = settings.redacted()["database_url"]
+    assert emitted == "postgresql://" + _FAKE_DSN_HOST + ":5432/postgres"
+
+
+def _emitted_database_url(env_file, value: str) -> object:
+    """What `session_start` would carry for a given DATABASE_URL."""
+    base = load_settings(env_file).redacted()
+    settings = Settings(**{**base, "database_url": value})  # type: ignore[arg-type]
+    return settings.redacted()["database_url"]
+
+
+def test_the_query_string_goes_too_when_a_url_carries_userinfo(env_file):
+    """A DSN is as likely to hold a credential in `?password=` as in front of
+    the `@`, so a URL that proves it carries credentials keeps neither."""
+    dsn = "postgresql://u:p@" + _FAKE_DSN_HOST + "/db?password=" + _FAKE_DSN_PASSWORD
+    assert _FAKE_DSN_PASSWORD not in str(_emitted_database_url(env_file, dsn))
+
+
+def test_no_value_the_config_emits_carries_userinfo(env_file):
+    """The derived guard, over the OUTPUT of every field at once.
+
+    A future setting holding a second DSN needs no edit here, which is the
+    property the name-based guard could not have.
+    """
+    base = load_settings(env_file).redacted()
+    url_fields = [f.name for f in fields(Settings) if f.name.endswith("_url")]
+    assert url_fields, "no URL-shaped field exists, so this is vacuous"
+
+    canaries = {name: _FAKE_DSN for name in url_fields}
+    settings = Settings(**{**base, **canaries})  # type: ignore[arg-type]
+
+    leaked = [
+        name
+        for name, value in settings.redacted().items()
+        if isinstance(value, str) and _USERINFO.search(value)
+    ]
+    assert not leaked, (
+        "these fields emitted a URL with its userinfo intact, so a password "
+        f"inside the value reaches the event stream: {leaked}"
+    )
+    assert _FAKE_DSN_PASSWORD not in json.dumps(settings.redacted())
+
+
+def test_a_url_without_userinfo_is_left_alone(env_file):
+    """The reason `url` is not in `_CREDENTIAL_WORDS`.
+
+    Masking by name would collapse exactly the two settings an operator most
+    needs to read back out of their own log, and would still have missed the
+    DSN's `?password=`. Shape, not name.
+    """
+    base = load_settings(env_file).redacted()
+    settings = Settings(  # type: ignore[arg-type]
+        **{
+            **base,
+            "livekit_url": "wss://notareal-project.livekit.cloud",
+            "llm_base_url": "https://openrouter.ai/api/v1",
+        }
+    )
+    emitted = settings.redacted()
+    assert emitted["livekit_url"] == "wss://notareal-project.livekit.cloud"
+    assert emitted["llm_base_url"] == "https://openrouter.ai/api/v1"
+    # And a value that merely contains an `@` is not a URL and is not mangled.
+    assert _emitted_database_url(env_file, "someone@e.example") == "someone@e.example"
+
+
+def test_an_unparseable_url_with_an_at_sign_reports_presence_only(env_file):
+    """When the value cannot be parsed we cannot show that it holds no
+    credential, so it collapses to the presence marker rather than being
+    emitted hopefully."""
+    unparseable = "postgresql://u:p@host:notaport/db"
+    assert _emitted_database_url(env_file, unparseable) == "<set>"
 
 
 # Deliberately looser than `_is_credential`: it matches a credential word
