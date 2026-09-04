@@ -25,11 +25,13 @@ Run it:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import json
 import logging
 import os
 import sys
+import time
 from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any, Final, Literal, get_args
@@ -1715,6 +1717,16 @@ def _tracker_sink(
     )
 
 
+def remaining_budget(deadline: float, *, cap: float) -> float:
+    """Seconds a stage may take: whatever is left, never more than its cap.
+
+    Returns 0.0 rather than a negative number once the deadline has passed,
+    because `asyncio.wait_for(..., timeout=-1)` is not a refusal - it is an
+    immediate cancellation with a confusing traceback.
+    """
+    return max(0.0, min(cap, deadline - time.monotonic()))
+
+
 async def shutdown_session(
     *,
     agent: AmbassadorAgent,
@@ -1747,7 +1759,13 @@ async def shutdown_session(
     # Idempotent with `AmbassadorAgent.on_exit`, which fires first when the
     # session closes cleanly; this covers a shutdown that skips it.
     agent.finalise_pending_turn()
-    await agent.brief_extractor.drain()
+    deadline = time.monotonic() + LEAD_SECTION_BUDGET_SECONDS
+    # Capped here, not in the extractor: see BRIEF_DRAIN_BUDGET_SECONDS.
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(
+            agent.brief_extractor.drain(timeout=BRIEF_DRAIN_BUDGET_SECONDS),
+            timeout=BRIEF_DRAIN_BUDGET_SECONDS + 0.5,
+        )
     await agent.brief_extractor.aclose()
     # AFTER the drain and before the providers close: the drain exists so the
     # last turn's brief is awaited, and persisting earlier would lose the best
@@ -1757,7 +1775,9 @@ async def shutdown_session(
     # call, and by this point the farewell has already been heard.
     if lead_writer is None and lead_store is not None:
         try:
-            lead_writer = await lead_store
+            lead_writer = await asyncio.wait_for(
+                lead_store, timeout=remaining_budget(deadline, cap=3.0)
+            )
         except Exception as exc:
             # Reported with `connect` as the stage, the same as a failed
             # handshake: from operations' side a store that refused its
@@ -1782,11 +1802,18 @@ async def shutdown_session(
             # lead whatever stage lost it.
             log.emit("lead_persist_failed", stage="snapshot", code=_failure_code(exc))
             snapshot = None
-        lead_id = (
-            None
-            if snapshot is None
-            else await lead_writer.persist_or_report(snapshot, log=log)
-        )
+        lead_id = None
+        if snapshot is not None:
+            try:
+                lead_id = await asyncio.wait_for(
+                    lead_writer.persist_or_report(snapshot, log=log),
+                    timeout=remaining_budget(deadline, cap=5.0),
+                )
+            except TimeoutError:
+                # `persist_or_report` cannot raise, so this is the budget and
+                # not the write failing. Same event either way: from
+                # operations' side it is a call with no lead.
+                log.emit("lead_persist_failed", stage="write", code="timeout")
         if lead_id is not None and ask is not None:
             # BOUNDED, and the bound is not a style choice. The worker gathers
             # shutdown callbacks with no per-callback timeout and force-closes
@@ -1804,7 +1831,7 @@ async def shutdown_session(
                         ask=ask,
                         log=log,
                     ),
-                    timeout=ANALYSIS_BUDGET_SECONDS,
+                    timeout=remaining_budget(deadline, cap=ANALYSIS_BUDGET_SECONDS),
                 )
             except TimeoutError:
                 log.emit("analysis_failed", stage="ask", code="timeout")
@@ -2179,6 +2206,40 @@ async def entrypoint(ctx: JobContext) -> None:
 # 1.7.0), because the brief drain, the persist, the provider closes and the log
 # drain all come out of the same 10 seconds. Four leaves room for a slow model
 # without putting the audit seal at risk.
+# THE SHUTDOWN BUDGET.
+#
+# `shutdown_process_timeout` decides how long the framework waits before
+# force-closing this job process, and it is absent from the CURRENT public
+# documentation - the server-options page documents `drain_timeout` and not
+# this one. Its value is therefore whatever the pinned version carries (10.0 in
+# livekit-agents 1.7.0), and callbacks are gathered with no per-callback
+# timeout, so an overrun loses the provider closes, `session_end` and the audit
+# seal rather than merely delaying them.
+#
+# So we set it deliberately rather than inherit it. 20s is not "more room for
+# slow code": it is the smallest value that lets a worst-case lead write finish
+# AND leaves the seal a margin it cannot lose. The cost is bounded and paid
+# only on redeploys - Railway's own drain is `--drain-timeout 600`, so ten
+# extra seconds per in-flight job is noise against it.
+SHUTDOWN_PROCESS_TIMEOUT: Final = 20.0
+
+# The lead work - connect, persist, analysis - shares ONE deadline rather than
+# holding fixed per-stage caps. Fixed caps would make a fast persist and a slow
+# analysis fail as often as the reverse; a shared deadline lets a stage that
+# finishes early hand its slack to the next. 12s of 20 leaves 8 for the drain,
+# the provider closes and the seal.
+LEAD_SECTION_BUDGET_SECONDS: Final = 12.0
+
+# The largest single claimant before this card: `drain(timeout=10.0)` is the
+# whole 1.7.0 budget on its own. Capped at the CALL SITE rather than by moving
+# the default, because 10s is right for a caller with time and wrong for one
+# holding the audit seal. What 2s can cost is the very last turn's brief; the
+# last accepted one is already durable, and a missing brief is a retryable
+# state.
+BRIEF_DRAIN_BUDGET_SECONDS: Final = 2.0
+
+# Unchanged. It is the one stage whose work is a network round trip we cannot
+# shorten, and it now draws from the shared deadline like the others.
 ANALYSIS_BUDGET_SECONDS: Final = 4.0
 
 _CONNECTING_COMMANDS: Final = frozenset({"start", "dev", "connect"})
@@ -2264,6 +2325,20 @@ def export_transport_env(argv: list[str] | None = None) -> list[str]:
     return exported
 
 
+def worker_options() -> WorkerOptions:
+    """The worker's options, in one place so the budget is testable.
+
+    `shutdown_process_timeout` is set rather than inherited: it is undocumented
+    publicly, so the default can move between versions, and it is the value
+    that decides whether the audit seal survives a slow lead write.
+    """
+    return WorkerOptions(
+        entrypoint_fnc=entrypoint,
+        prewarm_fnc=prewarm,
+        shutdown_process_timeout=SHUTDOWN_PROCESS_TIMEOUT,
+    )
+
+
 if __name__ == "__main__":
     _refusal = preflight()
     if _refusal:
@@ -2275,4 +2350,4 @@ if __name__ == "__main__":
     # After preflight, so a run that is going to be refused is refused before
     # anything is written to the environment.
     export_transport_env()
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(worker_options())

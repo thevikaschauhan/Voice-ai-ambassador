@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from io import StringIO
 
 import pytest
 
@@ -50,7 +49,7 @@ async def test_the_worst_case_chain_still_seals_inside_the_budget() -> None:
 
     agent, log, buf, _ = _agent()
     writer = _SlowWriter(persist_seconds=30.0)
-    agent.brief_extractor = _SlowDrain(30.0)  # type: ignore[assignment]
+    agent._brief = _SlowDrain(30.0)  # the property is read-only
 
     async def slow_ask(prompt: str, *, repair: bool = False) -> str:
         await asyncio.sleep(30.0)
@@ -58,13 +57,19 @@ async def test_the_worst_case_chain_still_seals_inside_the_budget() -> None:
 
     started = time.monotonic()
     await shutdown_session(
-        agent=agent, log=log, llm=_llm(), stt_node=None,
-        lead_writer=writer, ask=slow_ask,
+        agent=agent,
+        log=log,
+        llm=_llm(),
+        stt_node=None,
+        lead_writer=writer,
+        ask=slow_ask,
     )
     elapsed = time.monotonic() - started
     await log.aclose()
 
-    assert "session_end" in buf.getvalue(), "the seal is the one thing that must survive"
+    assert "session_end" in buf.getvalue(), (
+        "the seal is the one thing that must survive"
+    )
     assert elapsed < SHUTDOWN_PROCESS_TIMEOUT, (
         f"the chain took {elapsed:.1f}s against a {SHUTDOWN_PROCESS_TIMEOUT}s "
         "process budget, so the framework would have killed it mid-shutdown"
@@ -80,7 +85,7 @@ async def test_a_drain_that_never_finishes_does_not_eat_the_whole_budget() -> No
 
     agent, log, buf, _ = _agent()
     drain = _SlowDrain(30.0)
-    agent.brief_extractor = drain  # type: ignore[assignment]
+    agent._brief = drain  # the property is read-only
 
     started = time.monotonic()
     await shutdown_session(agent=agent, log=log, llm=_llm(), stt_node=None)
