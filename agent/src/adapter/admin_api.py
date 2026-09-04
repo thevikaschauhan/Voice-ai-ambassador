@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from functools import lru_cache
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -62,6 +63,7 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 
+from ambassador.inventory import load_inventory
 from ambassador.schemas import Language
 
 from .crypto import EnvelopeError, Sealer
@@ -286,10 +288,18 @@ def open_field(
 LeadStatusFilter = Literal["unreviewed", "qualified", "rejected"]
 
 
+@lru_cache(maxsize=1)
+def _inventory_ids() -> frozenset[str]:
+    """The project ids a filter may name. Cached: inventory is deployed
+    with the image and cannot change inside a process."""
+    return frozenset(project.id for project in load_inventory())
+
+
 @app.get("/v1/leads", dependencies=[Depends(require_bearer)])
 async def list_leads(
     lead_status: Annotated[LeadStatusFilter | None, Query(alias="status")] = None,
     language: Annotated[Language | None, Query()] = None,
+    project_id: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[dict[str, Any]]:
@@ -303,9 +313,26 @@ async def list_leads(
     refused with a 422 naming the parameter instead of being ignored. A filter
     the API silently dropped would show an admin the unfiltered list while they
     believed it was narrowed, and they would act on it.
+
+    `project_id` is a closed set too - `data/inventory.json` - so it gets the
+    same treatment, checked here because inventory is data rather than a
+    Literal. The empty list is the dangerous answer for this one: "no leads
+    for Binghatti Atlantis" reads as a fact about the business when it is a
+    typo. An id that cannot exist is a caller error; a real id nobody
+    shortlisted is a true empty answer. A project retired from inventory
+    becomes unfilterable, which is the acceptable side of that trade.
     """
+    if project_id is not None and project_id not in _inventory_ids():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"project_id is not an inventory project: {project_id}",
+        )
     return await repository_of(app).list_leads(
-        status=lead_status, language=language, limit=limit, offset=offset
+        status=lead_status,
+        language=language,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
     )
 
 

@@ -267,6 +267,7 @@ class Repository:
         *,
         status: str | None = None,
         language: str | None = None,
+        project_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -282,24 +283,41 @@ class Repository:
 
         `contact_status` IS included: whether contact was captured is
         operational, and the value is not. Filters are AND-ed and each is
-        optional, so a caller that passes neither gets the whole list and one
-        that passes both gets the intersection - which is what two dropdowns on
-        a page produce.
+        optional, so a caller that passes none gets the whole list and one that
+        passes several gets the intersection - which is what dropdowns on a
+        page produce.
+
+        `project_ids` is in the projection and in the clear. They are OUR
+        inventory identifiers, already public in the catalogue, and nothing
+        about a buyer is recoverable from one - which is exactly why the same
+        shortlist stays sealed as `LeadBrief.shortlist_ids`: there it sits
+        inside a model-inferred record ABOUT a person, beside their budget and
+        their hesitations. The fix for the list was never to open the brief.
+
+        The project filter is CONTAINMENT (`@>`), not `= ANY`. They are the
+        same filter over the same rows and only `@>` can use the GIN index
+        from migration 0003; on 60k rows `= ANY` measured as a sequential scan
+        of 59,880 rows at 13.4ms against a bitmap index scan at 7.6ms. The
+        natural-reading form is the one that cannot use the index, and nobody
+        reads a WHERE clause and thinks about the plan.
         """
         rows = await self._pool.fetch(
             """
             SELECT id, session_id, created_at, ended_at, call_end_reason,
                    ended_cleanly, language, requested_language,
                    uncertified_fallback, analysis_status, score_total,
-                   score_version, status, revision, contact_status
+                   score_version, status, revision, contact_status,
+                   project_ids
             FROM leads
             WHERE ($1::text IS NULL OR status = $1)
               AND ($2::text IS NULL OR language = $2)
+              AND ($3::text IS NULL OR project_ids @> ARRAY[$3]::text[])
             ORDER BY created_at DESC
-            LIMIT $3 OFFSET $4
+            LIMIT $4 OFFSET $5
             """,
             status,
             language,
+            project_id,
             limit,
             offset,
         )
