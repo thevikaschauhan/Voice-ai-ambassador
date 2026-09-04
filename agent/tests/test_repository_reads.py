@@ -338,3 +338,320 @@ async def test_get_audit_events_returns_the_event_that_was_added(repository, lea
     (event,) = await repository.get_audit_events(lead)
     assert event["event"] == "lead_detail_read"
     assert event["detail"] == '{"by": "admin"}'
+
+
+# -- full-text retrieval (ADR-019) --------------------------------------
+
+
+@pytest.fixture
+async def published(repository):
+    """A published document with three chunks: general, bound project, and
+    one still closed. Only Postgres can settle what the search returns."""
+    document_id = await repository.add_document(
+        revision=1,
+        title="Handbook",
+        source_type="txt",
+        original_filename=None,
+        mime_type="text/plain",
+        source_bytes=512,
+        source_sha256="c" * 64,
+        extracted_text="",
+    )
+    ids = {}
+    for ordinal, (key, body, scope, project) in enumerate(
+        [
+            (
+                "general",
+                "The rooftop pool is open to residents.",
+                "general_knowledge",
+                None,
+            ),
+            (
+                "project",
+                "Canal Residences faces the water.",
+                "project_knowledge",
+                "binghatti-canal",
+            ),
+            ("closed", "Internal margin guidance for the pool.", "admin_only", None),
+        ]
+    ):
+        chunk_id = await repository.add_chunk(
+            document_id,
+            document_revision=1,
+            ordinal=ordinal,
+            heading=None,
+            body=body,
+            content_sha256=f"{ordinal:064d}",
+        )
+        ids[key] = chunk_id
+        if scope != "admin_only":
+            await repository._pool.execute(
+                "UPDATE knowledge_chunks SET retrieval_scope = $2, project_id = $3,"
+                " prompt_body = body WHERE id = $1",
+                chunk_id,
+                scope,
+                project,
+            )
+    await repository._pool.execute(
+        "UPDATE knowledge_documents SET status = 'published' WHERE id = $1",
+        document_id,
+    )
+    return {"document_id": document_id, **ids}
+
+
+async def test_search_returns_reviewed_prose_and_never_a_closed_chunk(
+    repository, published
+):
+    rows = await repository.search_chunks(["pool"], project_ids=[], limit=4)
+    assert [row["id"] for row in rows] == [published["general"]]
+
+
+async def test_search_skips_a_document_that_is_not_published(repository, published):
+    await repository._pool.execute(
+        "UPDATE knowledge_documents SET status = 'draft' WHERE id = $1",
+        published["document_id"],
+    )
+    assert await repository.search_chunks(["pool"], project_ids=[], limit=4) == []
+
+
+async def test_a_bound_project_chunk_ranks_ahead_of_general_knowledge(
+    repository, published
+):
+    """docs/10-: when the turn's project is known its prose sorts first, and
+    general knowledge stays eligible on every turn."""
+    await repository._pool.execute(
+        "UPDATE knowledge_chunks SET prompt_body = 'The rooftop pool faces the water.'"
+        " WHERE id = $1",
+        published["general"],
+    )
+    rows = await repository.search_chunks(
+        ["water"], project_ids=["binghatti-canal"], limit=4
+    )
+    assert rows[0]["id"] == published["project"]
+
+
+async def test_figures_for_chunks_reports_approval_from_the_active_review(
+    repository, published
+):
+    """`approved` is derived from `active_approval_id`, so a revocation reads
+    as False here without a second query."""
+    unapproved = await repository.add_figure(
+        published["document_id"],
+        document_revision=1,
+        chunk_id=published["general"],
+        value="1250000",
+        kind="amount",
+        currency="AED",
+        surface="1,250,000",
+        source_sentence="Prices start at 1,250,000.",
+    )
+    (figure,) = await repository.figures_for_chunks([published["general"]])
+    assert figure["id"] == unapproved
+    assert figure["approved"] is False
+
+
+# -- a buyer speaks sentences, not keywords (ADR-019) --------------------
+
+
+@pytest.fixture
+async def brochure(repository):
+    """One published chunk that answers a real question, so the search can be
+    asked the question a buyer would actually ask."""
+    document_id = await repository.add_document(
+        revision=1,
+        title="Aquarise",
+        source_type="txt",
+        original_filename=None,
+        mime_type="text/plain",
+        source_bytes=256,
+        source_sha256="d" * 64,
+        extracted_text="",
+    )
+    chunk_id = await repository.add_chunk(
+        document_id,
+        document_revision=1,
+        ordinal=0,
+        heading=None,
+        body=(
+            "Aquarise studios start at AED 985,000 with handover in 2027. "
+            "The tower has 24 floors and 3 pools."
+        ),
+        content_sha256="e" * 64,
+    )
+    await repository._pool.execute(
+        "UPDATE knowledge_chunks SET retrieval_scope = 'general_knowledge',"
+        " prompt_body = body WHERE id = $1",
+        chunk_id,
+    )
+    await repository._pool.execute(
+        "UPDATE knowledge_documents SET status = 'published' WHERE id = $1",
+        document_id,
+    )
+    return chunk_id
+
+
+async def test_a_natural_question_finds_the_chunk_that_answers_it(repository, brochure):
+    """The defect this replaces: `plainto_tsquery` ANDs every token and the
+    `simple` configuration strips no stopwords, so "how much are the Aquarise
+    studios and when is handover" required `how` AND `much` AND `are` AND
+    `the` to appear in the chunk and matched nothing. A buyer speaks that
+    sentence; nobody speaks "Aquarise studios handover"."""
+    from adapter.retrieval import content_tokens
+
+    rows = await repository.search_chunks(
+        content_tokens("how much are the Aquarise studios and when is handover", "en"),
+        project_ids=[],
+        limit=4,
+    )
+    assert [row["id"] for row in rows] == [brochure]
+
+
+async def test_an_utterance_sharing_no_content_word_finds_nothing(repository, brochure):
+    """The fix must not be "OR everything", where one stopword in common
+    pulls back the entire corpus."""
+    from adapter.retrieval import content_tokens
+
+    rows = await repository.search_chunks(
+        content_tokens("what is the weather like today", "en"),
+        project_ids=[],
+        limit=4,
+    )
+    assert rows == []
+
+
+async def test_one_matching_word_out_of_several_is_not_a_hit(repository, brochure):
+    """`tower` is in the chunk and nothing else in this question is. A single
+    common word matching must not qualify the chunk, or every chunk
+    containing an ordinary noun answers every question."""
+    from adapter.retrieval import content_tokens
+
+    rows = await repository.search_chunks(
+        content_tokens("is the tower in Dubai Marina a penthouse", "en"),
+        project_ids=[],
+        limit=4,
+    )
+    assert rows == []
+
+
+@pytest.mark.parametrize(
+    "utterance,language",
+    [
+        ("ما هي أسعار الاستوديو في أكوارايز", "ar"),
+        ("अकवाराइज़ में स्टूडियो की कीमत क्या है", "hi"),
+    ],
+)
+async def test_a_non_english_utterance_tokenises_without_erroring(
+    repository, brochure, utterance, language
+):
+    """Tokenisation only. No copy is authored here and none is asserted: the
+    property is that an Arabic or Hindi turn reaches the database and gets an
+    answer or an empty list, never an exception into the voice path."""
+    from adapter.retrieval import content_tokens
+
+    rows = await repository.search_chunks(
+        content_tokens(utterance, language), project_ids=[], limit=4
+    )
+    assert isinstance(rows, list)
+
+
+async def test_search_chunks_refuses_an_utterance_where_tokens_are_expected(
+    repository,
+):
+    """A str IS a Sequence[str], so passing one would iterate characters and
+    search for single letters - a silent wrong answer rather than an error.
+    This guard caught three of this file's own older tests during the fix."""
+    with pytest.raises(TypeError):
+        await repository.search_chunks("pool", project_ids=[], limit=4)
+
+
+# -- the query side must tokenise the way the index side does -----------
+
+# One natural sentence per language, checked against `Language` below rather
+# than hand-listed: a language missing here is a language whose tokenisation
+# nobody compared with Postgres, which is the whole defect this guards.
+PARITY_SENTENCES = {
+    "en": "How much are the Aquarise studios and when is handover?",
+    "ar": "ما هي أسعار الاستوديو في أكوارايز ومتى التسليم؟",
+    "hi": "अक्वाराइज़ में स्टूडियो की कीमत क्या है और हैंडओवर कब है?",
+}
+
+
+def test_every_language_has_a_parity_sentence():
+    from typing import get_args
+
+    from ambassador.schemas import Language
+
+    assert set(PARITY_SENTENCES) == set(get_args(Language))
+
+
+@pytest.mark.parametrize("language", sorted(PARITY_SENTENCES))
+async def test_our_tokens_are_the_lexemes_postgres_would_index(database, language):
+    """Parity with the index side is the property, not any particular regex.
+
+    The first version used `[^\\W_]+`, which is `\\w` minus underscore, and
+    Python's `\\w` does not match combining marks - virama, nukta, the
+    matras. So a Devanagari sentence shredded into fragments
+    (`['अक', 'इज', 'मत', 'डओवर']`) while Postgres indexed whole words, and a
+    Hindi call against a Hindi document could never match. Unpointed Arabic
+    survived only because its letters are category Lo; a diacritic splits it
+    the same way.
+
+    Comparing against `to_tsvector` rather than against an expected list is
+    deliberate: the index is the thing we have to agree with, and it is the
+    only authority on what a word is here.
+    """
+    from adapter.retrieval import tokenise
+
+    sentence = PARITY_SENTENCES[language]
+    connection = await asyncpg.connect(database)
+    try:
+        vector = await connection.fetchval(
+            "SELECT to_tsvector('simple', $1)::text", sentence
+        )
+    finally:
+        await connection.close()
+
+    lexemes = {
+        part.split(":")[0].strip("'").replace("''", "'")
+        for part in vector.split()
+        if part.startswith("'")
+    }
+    assert set(tokenise(sentence)) == lexemes
+
+
+async def test_a_hindi_sentence_finds_a_hindi_chunk(repository):
+    """End to end, because parity is a means and this is the point of it."""
+    from adapter.retrieval import content_tokens
+
+    document_id = await repository.add_document(
+        revision=1,
+        title="Aquarise HI",
+        source_type="txt",
+        original_filename=None,
+        mime_type="text/plain",
+        source_bytes=256,
+        source_sha256="f" * 64,
+        extracted_text="",
+    )
+    chunk_id = await repository.add_chunk(
+        document_id,
+        document_revision=1,
+        ordinal=0,
+        heading=None,
+        body="अक्वाराइज़ में स्टूडियो की कीमत 985,000 दिरहम है और हैंडओवर 2027 में है।",
+        content_sha256="0" * 64,
+    )
+    await repository._pool.execute(
+        "UPDATE knowledge_chunks SET retrieval_scope = 'general_knowledge',"
+        " prompt_body = body WHERE id = $1",
+        chunk_id,
+    )
+    await repository._pool.execute(
+        "UPDATE knowledge_documents SET status = 'published' WHERE id = $1",
+        document_id,
+    )
+
+    rows = await repository.search_chunks(
+        content_tokens(PARITY_SENTENCES["hi"], "hi"), project_ids=[], limit=4
+    )
+    assert [row["id"] for row in rows] == [chunk_id]

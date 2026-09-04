@@ -1,0 +1,171 @@
+# Query-side stopwords, per language.
+#
+# TOKENISATION DATA, NOT COPY. Nothing here is ever spoken, shown, or sent to
+# a model: these words are removed from a buyer's utterance before it is
+# turned into a full-text query, and nowhere else. So this file is not
+# governed by the native-review rule that covers `confirmations.yaml`,
+# `farewells.yaml` and the rest.
+#
+# Why it exists: Postgres's `simple` text-search configuration removes no
+# stopwords at all (that is what makes it right for the INDEX side - ADR-019
+# keeps it because stemming Arabic or Hindi with English rules is worse than
+# not stemming). On the query side the same property is a defect: "how much
+# are the Aquarise studios and when is handover" becomes a query requiring
+# `how` and `much` and `are` and `the`, which no brochure sentence contains.
+#
+# Failure direction, which is why a wrong entry here is cheap: a word listed
+# by mistake is dropped from the query, narrowing the search - a miss, and a
+# miss fails closed. A stopword MISSING from this list only adds noise, and
+# the minimum-match rule in `search_chunks` absorbs it. Neither can cause a
+# figure to be spoken: the numeric guardrail is downstream of all of this.
+#
+# This file does NOT go in the reviewer packet, and that is correct rather
+# than an oversight. The packet collects copy somebody has to SPEAK, in a
+# language they speak; these words are only ever deleted from a query. The
+# failure direction is what settles it: a wrong entry drops a word from the
+# search and narrows it, which is a miss, and a miss fails closed. Nothing
+# here can put a word in the ambassador's mouth, and no figure can be spoken
+# on the strength of it - the numeric guardrail is downstream of all of this.
+#
+# The Arabic and Hindi lists are the ordinary function words of each language
+# and are deliberately short. Adding to them is a search-quality improvement,
+# not a copy review.
+#
+# Every entry is QUOTED, and that is not style. YAML 1.1 reads bare `on`,
+# `off`, `yes`, `no`, `y` and `n` as booleans, so an unquoted `on` in this
+# list loaded as True and the loader crashed on it. Quoting is what keeps a
+# stopword list from depending on which English words happen to look like
+# YAML keywords.
+
+en:
+  - "a"
+  - "about"
+  - "am"
+  - "an"
+  - "and"
+  - "are"
+  - "as"
+  - "at"
+  - "be"
+  - "been"
+  - "but"
+  - "by"
+  - "can"
+  - "could"
+  - "did"
+  - "do"
+  - "does"
+  - "for"
+  - "from"
+  - "had"
+  - "has"
+  - "have"
+  - "how"
+  - "i"
+  - "if"
+  - "in"
+  - "is"
+  - "it"
+  - "its"
+  - "just"
+  - "like"
+  - "many"
+  - "me"
+  - "much"
+  - "my"
+  - "of"
+  - "on"
+  - "or"
+  - "please"
+  - "so"
+  - "some"
+  - "tell"
+  - "that"
+  - "the"
+  - "their"
+  - "them"
+  - "then"
+  - "there"
+  - "these"
+  - "they"
+  - "this"
+  - "to"
+  - "was"
+  - "we"
+  - "were"
+  - "what"
+  - "when"
+  - "where"
+  - "which"
+  - "who"
+  - "why"
+  - "will"
+  - "with"
+  - "would"
+  - "you"
+  - "your"
+
+ar:
+  - "أن"
+  - "أو"
+  - "أين"
+  - "إلى"
+  - "التي"
+  - "الذي"
+  - "على"
+  - "عن"
+  - "في"
+  - "كان"
+  - "كم"
+  - "كيف"
+  - "لا"
+  - "لكن"
+  - "ما"
+  - "ماذا"
+  - "مع"
+  - "متى"
+  - "من"
+  - "هذا"
+  - "هذه"
+  - "هل"
+  - "هم"
+  - "هو"
+  - "هي"
+  - "و"
+  - "يا"
+
+hi:
+  - "अगर"
+  - "और"
+  - "आप"
+  - "इस"
+  - "एक"
+  - "है"
+  - "हैं"
+  - "को"
+  - "कब"
+  - "कहाँ"
+  - "का"
+  - "कि"
+  - "की"
+  - "के"
+  - "कैसे"
+  - "कितना"
+  - "कितनी"
+  - "क्या"
+  - "जो"
+  - "तो"
+  - "था"
+  - "थे"
+  - "पर"
+  - "बताओ"
+  - "भी"
+  - "मुझे"
+  - "में"
+  - "मैं"
+  - "यह"
+  - "ये"
+  - "वह"
+  - "से"
+  - "हम"
+  - "ही"

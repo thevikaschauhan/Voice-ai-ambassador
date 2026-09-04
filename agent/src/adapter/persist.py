@@ -182,6 +182,22 @@ class LeadWriter:
                     turn.model_dump_json().encode("utf-8"),
                 ),
             )
+
+        # After the turns, and it has to be: `knowledge_use` carries a
+        # composite foreign key to `lead_turns (lead_id, turn_index)`, so a
+        # row written before its turn violates it. This is also why these are
+        # buffered in memory during the call instead of written per turn -
+        # during the call there is no lead row and no turn row to point at.
+        for use in snapshot.knowledge_use:
+            await self.repository.record_knowledge_use(
+                lead_id,
+                turn_index=use.turn_index,
+                query_fingerprint=use.query_fingerprint,
+                chunk_refs=use.chunk_refs,
+                figure_review_ids=use.figure_review_ids,
+                withheld_figure_match=use.withheld_figure_match,
+                elapsed_ms=use.elapsed_ms,
+            )
         return lead_id
 
     async def mark_analysis_failed(self, lead_id: Any) -> None:

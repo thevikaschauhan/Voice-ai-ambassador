@@ -100,6 +100,22 @@ class SentenceGuard:
         self.forms = forms
         self.mode = mode
 
+    def with_allowed(self, allowed: AllowedFigures) -> "SentenceGuard":
+        """The same guard, checking against a different figure set.
+
+        ADR-019 extends what ONE turn may speak. Returning a new guard rather
+        than assigning `self.allowed` is the whole safety property: the agent
+        holds one guard for the call, and a document retrieved on turn three
+        must not still be licensing figures on turn nine.
+        """
+        return SentenceGuard(
+            language=self.language,
+            allowed=allowed,
+            patterns=self.patterns,
+            forms=self.forms,
+            mode=self.mode,
+        )
+
     def check(self, raw: str) -> GuardDecision:
         started = time.perf_counter()
         result = process_sentence(

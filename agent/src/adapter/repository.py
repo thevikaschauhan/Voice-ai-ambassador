@@ -25,6 +25,7 @@ repository that silently encrypted would make the boundary impossible to audit.
 from __future__ import annotations
 
 from datetime import datetime
+from collections.abc import Sequence
 from typing import Any
 
 import asyncpg
@@ -406,6 +407,107 @@ class Repository:
             """,
             document_id,
             revision,
+        )
+        return [dict(row) for row in rows]
+
+    async def search_chunks(
+        self, tokens: Sequence[str], *, project_ids: Sequence[str], limit: int = 4
+    ) -> list[dict[str, Any]]:
+        """Full-text search over what a call is allowed to be told.
+
+        Takes TOKENS, not an utterance. `plainto_tsquery` joins every token
+        with AND and the `simple` configuration strips no stopwords, so
+        handing it a spoken sentence produced a query requiring `how` and
+        `much` and `the` to appear in a brochure paragraph - and the seam
+        matched nothing on real speech while every keyword-shaped test
+        passed. `adapter.retrieval.content_tokens` drops the stopwords; this
+        ORs what survives.
+
+        `simple` stays on the INDEX side (ADR-019: stemming Arabic or Hindi
+        with English rules is worse than not stemming), and the query is
+        built from lexemes Postgres itself produced, so nothing user-typed is
+        ever concatenated into SQL.
+
+        Two filters are the security boundary, and only two. A document must
+        be published, and `prompt_body IS NOT NULL` is the schema's own
+        `only_reviewed_scopes_reach_the_prompt` constraint read from the
+        other side. The caller re-checks scope in code, because a query is a
+        filter and the gate is a rule.
+
+        The minimum-match rule is what keeps OR from meaning "everything":
+        two distinct query lexemes must hit, so one ordinary noun in common
+        does not qualify a chunk to answer any question. A one-word question
+        still needs its one word.
+
+        Project chunks bound to a project this turn is about sort first;
+        general knowledge stays eligible on every turn.
+        """
+        if isinstance(tokens, str):
+            raise TypeError("search_chunks takes tokens, not an utterance")
+        terms = [token for token in tokens if token]
+        if not terms:
+            return []
+        rows = await self._pool.fetch(
+            """
+            WITH lexeme AS (
+                SELECT DISTINCT plainto_tsquery('simple', t) AS q
+                FROM unnest($1::text[]) AS t
+                WHERE plainto_tsquery('simple', t) <> ''::tsquery
+            ),
+            query AS (
+                SELECT string_agg(q::text, ' | ')::tsquery AS any_of,
+                       count(*) AS terms
+                FROM lexeme
+            )
+            SELECT c.id, c.document_id, c.document_revision, c.heading,
+                   c.prompt_body, c.retrieval_scope, c.project_id,
+                   c.conflict_code
+            FROM knowledge_chunks c
+            JOIN knowledge_documents d
+              ON d.id = c.document_id AND d.revision = c.document_revision
+            CROSS JOIN query
+            WHERE query.any_of IS NOT NULL
+              AND d.status = 'published'
+              AND c.prompt_body IS NOT NULL
+              AND c.search_vector @@ query.any_of
+              AND (
+                    SELECT count(*) FROM lexeme
+                    WHERE c.search_vector @@ lexeme.q
+                  ) >= least(2, query.terms)
+            ORDER BY (c.retrieval_scope = 'project_knowledge'
+                      AND c.project_id = ANY($2::text[])) DESC,
+                     ts_rank_cd(c.search_vector, query.any_of) DESC,
+                     c.id
+            LIMIT $3
+            """,
+            terms,
+            list(project_ids),
+            limit,
+        )
+        return [dict(row) for row in rows]
+
+    async def figures_for_chunks(
+        self, chunk_ids: Sequence[Any]
+    ) -> list[dict[str, Any]]:
+        """Every occurrence on the retrieved chunks, approved or not.
+
+        The unapproved ones are needed, not filtered away: the caller has to
+        replace their surfaces in the excerpt before the model sees them, and
+        it cannot replace what it was not told about.
+
+        `approved` is derived from `active_approval_id`, which is the
+        projection of the append-only review history - so a revocation reads
+        as False here without a second query.
+        """
+        rows = await self._pool.fetch(
+            """
+            SELECT id, chunk_id, value, kind, currency, unit, surface,
+                   source_sentence, (active_approval_id IS NOT NULL) AS approved
+            FROM knowledge_figures
+            WHERE chunk_id = ANY($1::uuid[])
+            ORDER BY chunk_id, id
+            """,
+            list(chunk_ids),
         )
         return [dict(row) for row in rows]
 
