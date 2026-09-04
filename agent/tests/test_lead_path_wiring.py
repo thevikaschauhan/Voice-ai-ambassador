@@ -371,3 +371,80 @@ async def test_a_snapshot_that_will_not_validate_still_seals_the_session(
     assert '"stage": "snapshot"' in written
     assert '"event": "lead_persist_failed"' in written
     assert leads == [], "nothing half-written"
+
+
+# --- the refusal that fired at the wrong end of the call -------------------
+#
+# `build_lead_writer` raises for DATABASE_URL-set-but-a-PII-key-missing, and
+# that call happens inside the task created at `session_start`. So the raise
+# surfaced at `await lead_store` in the shutdown callback - outside
+# `shutdown_session`, outside any try - on EVERY call. A half-configured worker
+# registered, took calls, and lost the closes, `session_end` and the seal each
+# time.
+#
+# Same class as the snapshot escape one door down, and three places already
+# claimed it "fails at startup" when nothing checked at startup.
+
+
+def test_the_startup_check_refuses_a_half_configured_lead_store(monkeypatch) -> None:
+    """Asserted through the seam the process actually runs - `preflight` is
+    what `__main__` calls before `cli.run_app` - rather than by trusting a
+    docstring that said startup and meant shutdown."""
+    from adapter import agent as adapter_agent
+    from test_agent import make_settings
+
+    for missing, other in (
+        ("pii_encryption_key", "pii_hash_key"),
+        ("pii_hash_key", "pii_encryption_key"),
+    ):
+        monkeypatch.setattr(
+            adapter_agent,
+            "load_settings",
+            lambda missing=missing, other=other: make_settings(
+                livekit_url="wss://x",
+                livekit_api_key="k",
+                livekit_api_secret="s",
+                openrouter_api_key="k",
+                fish_api_key="k",
+                stt_enabled=True,
+                stt_provider="deepgram",
+                deepgram_api_key="k",
+                stt_enabled_explicit=True,
+                database_url="postgresql://u:p@localhost:5435/x",
+                **{missing: "", other: "x" * 43},
+            ),
+        )
+        refusal = adapter_agent.preflight(["start"])
+        assert refusal is not None, missing
+        assert missing.upper() in refusal, refusal
+        assert "x" * 43 not in refusal
+
+
+def test_a_lead_store_task_that_raises_still_seals_the_session() -> None:
+    """The second half: even with the startup check in place, the await must
+    not be the thing that raises. Any exception from that task becomes a
+    report, and the shutdown reaches its seal."""
+    import asyncio
+
+    from adapter.agent import shutdown_session
+
+    agent, log, buf, _ = _agent()
+
+    async def fails() -> None:
+        raise ValueError("PII_ENCRYPTION_KEY is not set")
+
+    async def run() -> None:
+        task = asyncio.create_task(fails())
+        await shutdown_session(
+            agent=agent, log=log, llm=_llm(), stt_node=None, lead_store=task
+        )
+        await log.aclose()
+
+    asyncio.run(run())
+
+    written = buf.getvalue()
+    assert "session_end" in written, "the seal must survive a failed connect task"
+    assert '"event": "lead_persist_failed"' in written
+    assert '"stage": "connect"' in written
+    # The variable name came from the exception message and must not ride along.
+    assert "PII_ENCRYPTION_KEY" not in written
