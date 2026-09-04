@@ -138,3 +138,18 @@ def test_the_repair_instruction_carries_the_ids_too() -> None:
 
     for project in load_inventory():
         assert project.id in repair, project.id
+
+
+def test_a_value_with_nothing_in_it_resolves_to_nothing() -> None:
+    """An empty string is not a project, and neither is punctuation.
+
+    It is also what a model sends when it half-answers a list, so it has to fail
+    the same way an invented name does rather than quietly disappear on the way
+    to the Projects column. Called without an inventory argument on purpose:
+    the default is the production one.
+    """
+    from ambassador.inventory import resolve_project_id
+
+    assert resolve_project_id("") is None
+    assert resolve_project_id("   --  ") is None
+    assert resolve_project_id("binghatti-skyrise") == "binghatti-skyrise"
