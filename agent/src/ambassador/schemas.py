@@ -236,8 +236,24 @@ ScoreSignal = Literal[
     "call_length",
 ]
 
+# One closed set, and the closed set is checked in three other places: the
+# `leads.call_end_reason` CHECK, `docs/02-`'s table, and the comment above
+# `call_ended` in `adapter/events.py`. `buyer_farewell_repeated` was missing
+# here while the adapter could already assign it, so an otherwise ordinary
+# ending - a buyer saying goodbye twice - raised ValidationError and would have
+# lost the lead once the lead path was wired.
+#
+# `session_error` is RESERVED: nothing assigns it today. It stays in the set
+# because a call that dies inside the session has to be recordable as that
+# rather than as a buyer who left, and adding the value later would mean
+# another migration. No behaviour is implied by its presence.
 CallEndReason = Literal[
-    "buyer_farewell", "agent_farewell", "duration_cap", "buyer_left", "session_error"
+    "buyer_farewell",
+    "buyer_farewell_repeated",
+    "agent_farewell",
+    "duration_cap",
+    "buyer_left",
+    "session_error",
 ]
 
 AnalysisStatus = Literal["pending", "complete", "failed"]

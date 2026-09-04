@@ -509,7 +509,7 @@ def _rejection(failure: ParseFailed) -> HTTPException:
     """
     if failure.code == "limit_exceeded":
         return HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, failure.code)
-    return HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, failure.code)
+    return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, failure.code)
 
 
 @app.post(
@@ -623,7 +623,7 @@ async def review_chunk(chunk_id: str, body: ChunkReviewRequest) -> dict[str, Any
         # anything the driver or a future validator decides to include, and
         # this response crosses a service boundary.
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "project_knowledge requires a project_id that resolves to inventory",
         ) from None
     return {"review_id": str(review_id)}
