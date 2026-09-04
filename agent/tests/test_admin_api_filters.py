@@ -238,3 +238,148 @@ async def test_the_filters_are_still_behind_the_bearer(client):
     quietly acquires an unauthenticated path."""
     response = await client.get("/v1/leads?language=en")
     assert response.status_code == 401
+
+
+# --- the project filter (docs/10-:315) ------------------------------------
+
+# Real ids from `data/inventory.json`, read rather than invented: the filter
+# validates against inventory, so a made-up id here would test the refusal
+# path while pretending to test the match.
+SKYRISE = "binghatti-skyrise"
+AQUARISE = "binghatti-aquarise"
+CIRCLE = "binghatti-circle"
+
+
+@pytest.fixture
+async def with_projects(seeded):
+    """Shortlists written the way the finaliser writes them: through
+    `put_analysis`, which intersects against inventory first."""
+    repository, ids = seeded
+    await repository.put_analysis(
+        ids[LANGUAGES[0]],
+        status="complete",
+        summary=None,
+        score_total=40,
+        score_version="2026-09-03.1",
+        breakdown=None,
+        project_ids=[SKYRISE, AQUARISE],
+    )
+    await repository.put_analysis(
+        ids[LANGUAGES[1]],
+        status="complete",
+        summary=None,
+        score_total=20,
+        score_version="2026-09-03.1",
+        breakdown=None,
+        project_ids=[CIRCLE],
+    )
+    return repository, ids
+
+
+async def ids_in(client, query: str) -> set[str]:
+    response = await client.get(f"/v1/leads{query}", headers=auth())
+    assert response.status_code == 200, response.text
+    return {row["id"] for row in response.json()}
+
+
+async def test_the_project_filter_returns_only_leads_that_shortlisted_it(
+    client, with_projects
+):
+    _, ids = with_projects
+    assert await ids_in(client, f"?project_id={CIRCLE}") == {str(ids[LANGUAGES[1]])}
+
+
+async def test_a_lead_matches_on_any_id_in_its_shortlist_not_just_the_first(
+    client, with_projects
+):
+    """The column is an ARRAY and the match is containment. A predicate that
+    only ever compared the first element would pass the test above and fail
+    every buyer who mentioned two towers."""
+    _, ids = with_projects
+    for project in (SKYRISE, AQUARISE):
+        assert await ids_in(client, f"?project_id={project}") == {
+            str(ids[LANGUAGES[0]])
+        }
+
+
+async def test_the_list_carries_project_ids_so_the_filter_is_verifiable(
+    client, with_projects
+):
+    """An admin who filters must be able to see WHY a row matched. The ids are
+    our own inventory identifiers, already public in the catalogue, and
+    nothing about a buyer is recoverable from them - which is why they are in
+    the clear here while `shortlist_ids` inside the brief stays sealed."""
+    response = await client.get(f"/v1/leads?project_id={CIRCLE}", headers=auth())
+    assert response.status_code == 200, response.text
+    (row,) = response.json()
+    assert row["project_ids"] == [CIRCLE]
+
+
+async def test_a_lead_with_no_analysis_has_an_empty_shortlist_not_null(client):
+    """`NOT NULL DEFAULT '{}'` - so the projection has no null branch and the
+    web surface never has to distinguish "no projects" from "no column"."""
+    response = await client.get("/v1/leads", headers=auth())
+    assert response.status_code == 200, response.text
+    assert all(row["project_ids"] == [] for row in response.json())
+
+
+async def test_a_project_id_that_is_not_in_inventory_is_refused_by_name(client):
+    """The same rule as the other two filters, for the same reason: a filter
+    the API silently dropped would show an admin a list they believed was
+    narrowed. Here the empty list is the more dangerous shape - "no leads for
+    Binghatti Atlantis" reads as a fact about the business when it is a typo.
+    """
+    response = await client.get(
+        "/v1/leads?project_id=binghatti-atlantis", headers=auth()
+    )
+    assert response.status_code == 422, response.text
+    assert "project_id" in response.text
+
+
+async def test_a_real_project_nobody_shortlisted_is_an_empty_list_not_a_422(
+    client, with_projects
+):
+    """The other half of the same rule. An id that exists and matched nothing
+    is a true answer; only an id that cannot exist is a caller error."""
+    response = await client.get(
+        f"/v1/leads?project_id={'bugatti-residences'}", headers=auth()
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == []
+
+
+async def test_the_project_filter_intersects_with_the_other_filters(
+    client, with_projects
+):
+    _, ids = with_projects
+    language = LANGUAGES[0]
+    assert await ids_in(client, f"?project_id={SKYRISE}&language={language}") == {
+        str(ids[language])
+    }
+    other = LANGUAGES[1]
+    assert await ids_in(client, f"?project_id={SKYRISE}&language={other}") == set()
+
+
+async def test_the_filter_can_use_the_gin_index(database, with_projects):
+    """Measured, because the natural-reading form is the one that cannot.
+
+    `project_ids @> ARRAY['x']` uses the GIN index; `'x' = ANY(project_ids)`
+    is the same filter with the same rows and CANNOT use it - on 60k rows
+    that was a bitmap index scan at 7.6ms against a sequential scan of 59,880
+    rows at 13.4ms. Nobody reads a WHERE clause and thinks about the plan, so
+    this asserts the predicate stays index-able. `enable_seqscan` is off
+    because the planner would rightly scan a table this small.
+    """
+    import asyncpg
+
+    connection = await asyncpg.connect(database)
+    try:
+        await connection.execute("SET enable_seqscan = off")
+        plan = await connection.fetchval(
+            "EXPLAIN (FORMAT JSON) SELECT id FROM leads"
+            " WHERE project_ids @> ARRAY[$1]::text[]",
+            SKYRISE,
+        )
+    finally:
+        await connection.close()
+    assert "leads_project_ids" in str(plan)
