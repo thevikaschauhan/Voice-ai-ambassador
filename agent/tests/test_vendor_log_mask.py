@@ -372,3 +372,41 @@ def test_our_own_records_are_untouched_by_the_process_wide_hook(
     )
 
     assert USER_ID in stream.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# An echoed payload ends at an UNESCAPED delimiter. CodeRabbit found this on
+# #133 and it is real: `(.*?)(\2)` stops at the first quote character it sees,
+# and a buyer saying "it's" arrives inside the vendor's repr as `it\'s`. The
+# rule masked four characters and left the rest of the sentence in the clear -
+# the exact leak it exists to stop, one apostrophe away.
+
+
+def test_an_escaped_quote_does_not_end_the_echoed_payload_early() -> None:
+    from adapter.logmask import mask_text
+
+    body = (
+        "OpenAI API error: {'error': {'metadata': {'echoed_prompt': "
+        "'turn 3 buyer: it\\'s about two million dirhams'}}}"
+    )
+
+    masked = mask_text(body)
+
+    assert "two million dirhams" not in masked
+    assert "about" not in masked
+    # Still idempotent, which is what lets the mask run in both processes.
+    assert mask_text(masked) == masked
+
+
+def test_the_same_holds_for_a_double_quoted_payload() -> None:
+    """The vendors use both quote styles, sometimes in one body."""
+    from adapter.logmask import mask_text
+
+    body = (
+        'API error: {"echoed_prompt": "turn 3 buyer: she said \\"two million\\" flat"}'
+    )
+
+    masked = mask_text(body)
+
+    assert "two million" not in masked
+    assert "flat" not in masked
