@@ -50,9 +50,14 @@ def test_the_production_entry_passes_a_lead_writer_to_shutdown() -> None:
     assert calls, "shutdown_session is never called from agent.py"
     for call in calls:
         keywords = {keyword.arg for keyword in call.keywords}
-        assert "lead_writer" in keywords, (
-            "a shutdown_session call omits lead_writer, which is how two merged "
-            "cards shipped unreachable"
+        # Either keyword satisfies the claim, and the claim is the point: the
+        # production entry hands the lead path over. It started as
+        # `lead_writer=` and became `lead_store=` when the await moved inside
+        # the never-raises boundary, so pinning the KEYWORD would have failed a
+        # correct change - this test exists to catch an omission, not a rename.
+        assert keywords & {"lead_writer", "lead_store"}, (
+            "a shutdown_session call passes neither lead_writer nor lead_store, "
+            "which is how two merged cards shipped unreachable"
         )
 
 

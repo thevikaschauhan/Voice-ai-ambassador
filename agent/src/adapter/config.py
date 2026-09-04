@@ -364,6 +364,30 @@ class Settings:
         }
         return [name for name, value in required.items() if not value]
 
+    def missing_for_lead_store(self) -> list[str]:
+        """Keys the lead store cannot run without, by name, or empty.
+
+        Conditional in exactly the way `missing_for_voice` is conditional on
+        the selected recogniser: with no `DATABASE_URL` there is no lead store
+        and nothing is required, and with one, both keys are.
+
+        This lives here so `preflight` refuses at PROCESS STARTUP. It used to
+        be enforced only where the writer is built, which runs inside a
+        per-job task - so a half-configured worker registered, took calls, and
+        raised out of the shutdown callback on every one of them. A refusal
+        that arrives once per call, after the call, is not a refusal.
+        """
+        if not self.database_url:
+            return []
+        return [
+            name
+            for name, value in (
+                ("PII_ENCRYPTION_KEY", self.pii_encryption_key),
+                ("PII_HASH_KEY", self.pii_hash_key),
+            )
+            if not value
+        ]
+
     def missing_for_worker(self) -> list[str]:
         """Everything a worker process must have before it registers.
 
@@ -371,7 +395,11 @@ class Settings:
         nothing to register with; then the provider keys, because a worker that
         registers without them takes a call it cannot answer.
         """
-        return self.missing_for_transport() + self.missing_for_voice()
+        return (
+            self.missing_for_transport()
+            + self.missing_for_voice()
+            + self.missing_for_lead_store()
+        )
 
     def undeclared_for_worker(self) -> list[str]:
         """Settings a worker must CHOOSE rather than inherit, by name, or empty.
@@ -398,7 +426,16 @@ _WHERE_TO_SET: Final = (
     "Set them in agent/.env (see agent/.env.example) or in the environment."
 )
 
+_LEAD_STORE_REMEDY = (
+    "DATABASE_URL is set, so the lead store is on and buyer-derived payloads "
+    "are encrypted before they reach Postgres (docs/10-). Any string of at "
+    "least 32 characters works - `openssl rand -base64 32` - or clear "
+    "DATABASE_URL to run with no lead store."
+)
+
 _REMEDIES: Final[dict[str, str]] = {
+    "PII_ENCRYPTION_KEY": _LEAD_STORE_REMEDY,
+    "PII_HASH_KEY": _LEAD_STORE_REMEDY,
     "DEEPGRAM_API_KEY": (
         "Deepgram nova-3 is the recogniser (ADR-017: 258-327ms after endpoint "
         "against the whole-utterance path's p50 1081ms, and it is the only path "
