@@ -235,6 +235,16 @@ class AmbassadorAgent(Agent):
             recognition_runs=self._recognition_policy_runs,
         )
 
+        # The turn on which the MODEL said goodbye without the call ending -
+        # the 08:32Z call did this twice. A courtesy-only reply on the very
+        # next turn is the buyer answering that goodbye, and letting them say
+        # it again is the defect. One turn only: two turns later the
+        # conversation has moved on and "thank you" is an ordinary thank you.
+        self._signed_off_turn: int | None = None
+        # The reason to close with when a turn armed the close for something
+        # other than the buyer's own farewell. Read at the seal.
+        self._closing_reason: str | None = None
+
         # The turn the policies last read, so a tool call splitting one buyer
         # turn across two llm_node invocations cannot make the same utterance
         # count as two of the buyer's three attempts. One gate for all three
@@ -564,14 +574,21 @@ class AmbassadorAgent(Agent):
             return
         if not self._farewell_detects:
             return
-        reading = read_farewell(
-            text,
-            self._farewells,
-            self._settings.language,
-            names=self._ambassador_names,
-        )
+        reading = self._read_farewell(text)
         if reading.closes:
             self._closing_turn = tracker.turn_index
+        elif (
+            reading.courtesy_only
+            and self._signed_off_turn is not None
+            and tracker.turn_index == self._signed_off_turn + 1
+        ):
+            # The same rule as `_answers_the_agents_goodbye`, on the transcript
+            # that actually carries the whole sentence. On the voice path the
+            # partial can be just "Okay" while the final is "Okay. Thank you.",
+            # and the 08:32Z call is why this seam is checked at all: a goodbye
+            # that only appears in the final was never read.
+            self._closing_turn = tracker.turn_index
+            self._closing_reason = "agent_farewell"
         elif reading.has_phrase and self._candidate_turn != tracker.turn_index:
             self._note_candidate(tracker.turn_index, reading)
 
@@ -857,6 +874,36 @@ class AmbassadorAgent(Agent):
                 "the copy in data/farewells.yaml."
             ) from exc
 
+    def _read_farewell(self, utterance: str) -> FarewellReading:
+        """One reading of one utterance, for the two questions asked of it:
+        is this a closing, and is it an answer to a goodbye already said."""
+        return read_farewell(
+            utterance,
+            self._farewells,
+            self._settings.language,
+            names=self._ambassador_names,
+        )
+
+    def _answers_the_agents_goodbye(self, tracker: TurnTracker) -> bool:
+        """Did the buyer just agree to a goodbye the MODEL already said?
+
+        The shape the 08:32Z call ended on twice: the model signed off, the
+        buyer said "Okay. Thank you.", and the call stayed open - so they had
+        to say goodbye a third time to a service that had already said it.
+
+        NOT the model's decision alone. A model that signs off spontaneously
+        must never hang up on a live buyer, which is the asymmetric failure
+        this whole policy is built around, so this still takes two readings:
+        the model's goodbye, and a reply from the buyer that is nothing but
+        courtesy. A question after the sign-off is a question, and the state
+        lasts exactly one turn.
+        """
+        if self._closing or self._signed_off_turn is None:
+            return False
+        if tracker.turn_index != self._signed_off_turn + 1:
+            return False
+        return self._read_farewell(tracker.buyer_utterance).courtesy_only
+
     def _is_closing_line(self, utterance: str, tracker: TurnTracker) -> bool:
         """Has the buyer ended the conversation?
 
@@ -873,12 +920,7 @@ class AmbassadorAgent(Agent):
         """
         if self._closing or not self._farewell_detects:
             return False
-        reading = read_farewell(
-            utterance,
-            self._farewells,
-            self._settings.language,
-            names=self._ambassador_names,
-        )
+        reading = self._read_farewell(utterance)
         if reading.closes:
             return True
         if reading.has_phrase:
@@ -1105,6 +1147,19 @@ class AmbassadorAgent(Agent):
         # as `farewell_candidate`, so calling it twice for one utterance would
         # put two candidates on the stream for one goodbye.
         closing = self._is_closing_line(tracker.buyer_utterance, tracker)
+
+        if not closing and self._answers_the_agents_goodbye(tracker):
+            # ARMED, and the turn is NOT taken back: the model is already
+            # answering this utterance, and cancelling that to insert our own
+            # goodbye is the double-goodbye the farewell policy exists to
+            # avoid. The buyer hears the reply they are owed and the call ends
+            # on its seal. The reason is the agent's, because the agent's
+            # goodbye is what ended this call - the buyer only agreed to it,
+            # and the authored farewell is not spoken for the same reason the
+            # hybrid does not speak it: the model's goodbye WAS the goodbye.
+            self._closing_turn = tracker.turn_index
+            self._closing_reason = "agent_farewell"
+            return None
 
         # The one contact ask sits between the goodbye and the farewell
         # (docs/10- 'Contact capture'): the FIRST farewell is intercepted for
@@ -1789,7 +1844,10 @@ class AmbassadorAgent(Agent):
         # and the audit keeps the farewell turn even as the call ends.
         interrupted = handle is not None and handle.interrupted
         if self._closing_turn == pending.tracker.turn_index:
-            self._close_after_farewell_turn(interrupted=interrupted)
+            self._close_after_farewell_turn(
+                interrupted=interrupted,
+                reason=self._closing_reason or "buyer_farewell",
+            )
         elif self._candidate_turn == pending.tracker.turn_index:
             # The hybrid, resolved here because the model's reply is only known
             # now. The buyer's turn carried a closing phrase but not cleanly
@@ -1816,6 +1874,13 @@ class AmbassadorAgent(Agent):
                 self._close_after_farewell_turn(
                     interrupted=False, reason="agent_farewell"
                 )
+        elif self._agent_said_goodbye(pending.tracker):
+            # The model said goodbye and nothing ended the call: no candidate
+            # to pair it with, because the buyer's utterance carried no closing
+            # phrase. Recorded rather than acted on - see
+            # `_answers_the_agents_goodbye`. The buyer heard a goodbye, so the
+            # next reply may be nothing but courtesy and still be an ending.
+            self._signed_off_turn = pending.tracker.turn_index
         if self._pending is pending:
             self._pending = None
         if pending.chat_ctx is None:

@@ -124,8 +124,32 @@ def load_farewells(path: Path | None = None) -> Farewells:
     return Farewells(phrases=phrases, courtesies=courtesies, speech=speech)
 
 
+def _same_word(spoken: str, listed: str) -> bool:
+    """One token against a phrase's token, tolerating an English plural.
+
+    The recogniser gave us "I don't have any further QUESTION" and the table
+    listed only the plural, so a real closing was refused over an "s". Anchor
+    on the stem rather than adding every phrase twice: a table that has to
+    carry both numbers of every noun is a table that will miss the third
+    inflection somebody says.
+
+    Deliberately narrow - a single trailing "s", either direction, and nothing
+    else. No stemmer, no language pack: "s" is the one English inflection that
+    turns a closing into the same closing, and a looser rule on a table that
+    can hang up a call is not worth the coverage. It cannot misfire in Arabic
+    or Hindi either, because a rule only reaches tokens that a phrase in that
+    language already lines up with, and those tables are empty (AGENTS.md:52).
+    """
+    if spoken == listed:
+        return True
+    return spoken == f"{listed}s" or listed == f"{spoken}s"
+
+
 def _match_at(tokens: list[str], index: int, run: tuple[str, ...]) -> bool:
-    return tuple(tokens[index : index + len(run)]) == run
+    window = tokens[index : index + len(run)]
+    if len(window) != len(run):
+        return False
+    return all(_same_word(spoken, listed) for spoken, listed in zip(window, run))
 
 
 @dataclass(frozen=True)
@@ -153,6 +177,15 @@ class FarewellReading:
     """The buyer used the ambassador's name, which is the likeliest single
     reason a real goodbye fails the strict rule."""
 
+    courtesy_only: bool
+    """Nothing but courtesy: no closing phrase, and every token a courtesy.
+
+    A FACT, not a decision. "Thank you" ends nothing on its own and `closes`
+    stays false for it - that is the rule this module is built on. But it is a
+    closing in one context the core cannot see: the agent has just said
+    goodbye and the buyer answered it. The adapter owns that context, so the
+    core reports the shape and lets it decide (the 08:32Z call, turn 8)."""
+
 
 def read_farewell(
     utterance: str,
@@ -171,7 +204,11 @@ def read_farewell(
     name in two files is a name that can disagree with itself.
     """
     nothing = FarewellReading(
-        closes=False, has_phrase=False, unexplained=0, named_ambassador=False
+        closes=False,
+        has_phrase=False,
+        unexplained=0,
+        named_ambassador=False,
+        courtesy_only=False,
     )
     text = normalise_digits(utterance)
     if not _CONTENT.search(text):
@@ -193,16 +230,28 @@ def read_farewell(
         else:
             leftovers.append(tokens[index])
             index += 1
-    if not matched:
-        return nothing
     lowered = frozenset(name.lower() for name in names)
     courtesies = (farewells.courtesies.get(language) or frozenset()) | lowered
     unexplained = [token for token in leftovers if token not in courtesies]
+    if not matched:
+        # No phrase, so this closes nothing, and `unexplained` stays 0: it
+        # measures how close a NEAR MISS came, and an utterance with no closing
+        # phrase in it is not a near miss - it is an ordinary turn. What is
+        # worth saying is whether it was pure courtesy, which is the shape the
+        # adapter reads when the agent has just said goodbye itself.
+        return FarewellReading(
+            closes=False,
+            has_phrase=False,
+            unexplained=0,
+            named_ambassador=False,
+            courtesy_only=bool(tokens) and not unexplained,
+        )
     return FarewellReading(
         closes=not unexplained,
         has_phrase=True,
         unexplained=len(unexplained),
         named_ambassador=any(token in lowered for token in leftovers),
+        courtesy_only=False,
     )
 
 
