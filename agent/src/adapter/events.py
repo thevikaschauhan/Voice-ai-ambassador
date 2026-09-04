@@ -220,6 +220,10 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     # and transaction mode (ADR-018) - a real thing to get wrong and an
     # invisible one to diagnose without one startup line.
     "lead_store_connected": "a host and port, never the DSN",
+    # Absence has to be readable. Without this line a log cannot tell "no
+    # DATABASE_URL" from "the lead path is not wired", which is the state an
+    # audit had to read source to diagnose.
+    "lead_store_disabled": "one enum reason",
     # The analysis half of finalisation (docs/10- steps 5-6). Enum stages and
     # enum codes only: the model reads the transcript, so its errors and its
     # invalid answers can both quote a buyer, and neither goes on this stream.

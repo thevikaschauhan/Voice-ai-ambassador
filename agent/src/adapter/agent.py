@@ -113,7 +113,8 @@ from .events import EventLog, TurnTracker, _now_iso
 from .events_bridge import EventsBridge, bridge_from_env
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
 from .levels import apply_gain, gain_for
-from .persist import LeadWriter
+from .analysis import Ask, analysis_ask, finalise_analysis
+from .persist import LeadWriter, _failure_code, build_lead_writer
 from .lexicon import load_lexicon, respell_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
 from .stt_factory import build_stt, describe
@@ -774,7 +775,11 @@ class AmbassadorAgent(Agent):
             inventory_version=f"{len(self._projects)}-records",
             ambassador_name=self._ambassador_name,
             turns=turns,
-            brief=self._brief.last_good(),
+            # A property, not a method. Calling it returned None and then
+            # called None - which no test could see until something invoked
+            # `lead_snapshot` for real, because #111 wired the snapshot into a
+            # branch that never ran.
+            brief=self._brief.last_good,
         )
 
     def _compose_farewell(self) -> str:
@@ -1723,6 +1728,7 @@ async def shutdown_session(
     # lazy string, so it never raised, it just stopped meaning anything.
     stt_node: stt.STT | None,
     lead_writer: "LeadWriter | None" = None,
+    ask: "Ask | None" = None,
 ) -> None:
     """Close everything the session owns, in order.
 
@@ -1744,9 +1750,46 @@ async def shutdown_session(
     # ending: ADR-018 is explicit that an unavailable database never blocks a
     # call, and by this point the farewell has already been heard.
     if lead_writer is not None:
-        await lead_writer.persist_or_report(
-            agent.lead_snapshot(ended_at=_now_iso()), log=log
+        # Inside the boundary. Building the snapshot is not a database call, so
+        # it looked like the safe line - but it validates a model, and a model
+        # that will not validate raised straight out of this callback and lost
+        # the closes, `session_end` and the seal. Nothing between here and the
+        # seal may raise, whatever it is doing.
+        try:
+            snapshot = agent.lead_snapshot(ended_at=_now_iso())
+        except Exception as exc:
+            # Through the same closed set as every other failure here, rather
+            # than a literal: one vocabulary, so one query finds every lost
+            # lead whatever stage lost it.
+            log.emit("lead_persist_failed", stage="snapshot", code=_failure_code(exc))
+            snapshot = None
+        lead_id = (
+            None
+            if snapshot is None
+            else await lead_writer.persist_or_report(snapshot, log=log)
         )
+        if lead_id is not None and ask is not None:
+            # BOUNDED, and the bound is not a style choice. The worker gathers
+            # shutdown callbacks with no per-callback timeout and force-closes
+            # the process at `shutdown_process_timeout` (10.0s in
+            # livekit-agents 1.7.0), so an unbounded model call here does not
+            # merely slow the shutdown - it loses the rest of it, including the
+            # audit seal and `session_end`. A timeout is a failed analysis,
+            # which is a state the admin API can retry; a lost seal is not.
+            try:
+                await asyncio.wait_for(
+                    finalise_analysis(
+                        snapshot=snapshot,
+                        lead_id=lead_id,
+                        writer=lead_writer,
+                        ask=ask,
+                        log=log,
+                    ),
+                    timeout=ANALYSIS_BUDGET_SECONDS,
+                )
+            except TimeoutError:
+                log.emit("analysis_failed", stage="ask", code="timeout")
+                await lead_writer.mark_analysis_failed(lead_id)
     if stt_node is not None:
         await stt_node.aclose()
     await llm.aclose()
@@ -1974,6 +2017,16 @@ async def entrypoint(ctx: JobContext) -> None:
         log.emit("events_bridge", host="127.0.0.1", port=bridge.port)
 
     log.emit("session_start", **_session_start_fields(settings))
+
+    # Started as a TASK, not awaited: the pool handshake to Frankfurt must not
+    # sit between the job starting and the buyer hearing the disclosure. It is
+    # awaited in the shutdown callback, by which time the call is over and the
+    # connection has had the whole conversation to complete. Per job rather
+    # than per worker, because a pool held across idle hours is what Supabase's
+    # inactivity pause takes away.
+    lead_store = asyncio.create_task(
+        build_lead_writer(settings, log), name="lead-store-connect"
+    )
     # After session_start, because it explains a value that event already
     # carried. `reason` is empty when the metadata was read successfully.
     log.emit(
@@ -2067,9 +2120,20 @@ async def entrypoint(ctx: JobContext) -> None:
         # never fires.
         if cap is not None:
             cap.cancel()
-        await shutdown_session(
-            agent=agent, log=log, llm=llm, stt_node=stt_node, bridge=bridge
-        )
+        writer = await lead_store
+        try:
+            await shutdown_session(
+                agent=agent,
+                log=log,
+                llm=llm,
+                stt_node=stt_node,
+                bridge=bridge,
+                lead_writer=writer,
+                ask=analysis_ask(settings),
+            )
+        finally:
+            if writer is not None:
+                await writer.close()
 
     ctx.add_shutdown_callback(_shutdown)
 
@@ -2089,6 +2153,12 @@ async def entrypoint(ctx: JobContext) -> None:
 # transport credentials at all, so demanding them would refuse to start the venue
 # plan B over keys it does not use. `download-files` is absent for the same
 # reason - it runs in an image build, where no credential exists yet.
+# Well under the worker's `shutdown_process_timeout` (10.0s in livekit-agents
+# 1.7.0), because the brief drain, the persist, the provider closes and the log
+# drain all come out of the same 10 seconds. Four leaves room for a slow model
+# without putting the audit seal at risk.
+ANALYSIS_BUDGET_SECONDS: Final = 4.0
+
 _CONNECTING_COMMANDS: Final = frozenset({"start", "dev", "connect"})
 
 

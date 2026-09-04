@@ -187,3 +187,61 @@ async def _fail(
     except Exception:
         log.emit("analysis_status_unwritten", stage="write", code="unavailable")
     return False
+
+
+def analysis_ask(settings: Any) -> Ask | None:
+    """The session-analysis model call, or None when there is no key.
+
+    Reuses the OpenRouter endpoint and the brief model the brief extractor
+    already uses (`adapter/brief.py`): one vendor, one key, one place the
+    boundary is documented. A second provider for one summary would be a new
+    key to leak and a new failure mode on the shutdown path.
+
+    Bounded per request as well as by the caller's overall budget, because the
+    caller's timeout protects the shutdown and this one protects the retry: a
+    first attempt that eats the whole budget leaves nothing for the repair.
+    """
+    if not settings.openrouter_api_key:
+        return None
+
+    import httpx
+
+    async def ask(prompt: str, *, repair: bool = False) -> str:
+        instruction = _ANALYSIS_INSTRUCTION if not repair else _REPAIR_INSTRUCTION
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                f"{settings.llm_base_url.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                json={
+                    "model": settings.analysis_model,
+                    "messages": [
+                        {"role": "system", "content": instruction},
+                        {"role": "user", "content": prompt},
+                    ],
+                },
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+
+    return ask
+
+
+# Half the caller's budget, so a slow first attempt still leaves room for the
+# one repair docs/10- allows.
+_REQUEST_TIMEOUT_SECONDS: Final = 2.0
+
+_ANALYSIS_INSTRUCTION: Final = (
+    "You are summarising one sales call for an internal admin view. Return ONLY "
+    "a JSON object with these keys: summary (2-3 sentences), budget_stated, "
+    "project_named, timeline_stated, viewing_or_human_requested (each an object "
+    '{"observed": bool, "turn_indexes": [int]}), project_ids (a list of project '
+    "ids mentioned) and question_turn_indexes (buyer turns that asked a "
+    "question). Cite only turn numbers that appear in the transcript. Do NOT "
+    "return a score, a total or any points: those are computed elsewhere."
+)
+
+_REPAIR_INSTRUCTION: Final = (
+    "Your previous answer was not valid JSON of the required shape. Return ONLY "
+    "the JSON object described, with no prose and no code fence. "
+    + _ANALYSIS_INSTRUCTION
+)
