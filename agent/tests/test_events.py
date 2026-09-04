@@ -348,11 +348,30 @@ def emitted_event_names() -> dict[str, set[str]]:
     classification check below. Dict literals with an "event" key cover
     `_report_backpressure`, which writes straight to the sink.
     """
-    adapter = Path(__file__).resolve().parents[1] / "src" / "adapter"
+    source = Path(__file__).resolve().parents[1] / "src"
+    # `adapter/` plus any CORE module that emits: a pure policy handed the
+    # adapter's log puts its events on the same stream, so leaving core out of
+    # this scan left `contact_asked`, `contact_read_back` and `contact_settled`
+    # (ambassador/contact.py, wired in P2-S05) outside the classification rule
+    # docs/03- states for every emitted event. Selected by looking for `.emit(`
+    # rather than by naming the file, so the next core policy given a log is
+    # covered without anyone remembering to add it here.
+    paths = sorted(source.glob("adapter/*.py")) + [
+        path
+        for path in sorted(source.glob("ambassador/**/*.py"))
+        if ".emit(" in path.read_text(encoding="utf-8")
+    ]
     found: dict[str, set[str]] = {}
     dynamic: list[str] = []
-    for path in sorted(adapter.glob("*.py")):
+    for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        forwarders = {
+            node.args.args[1].arg: (node.lineno, node.end_lineno or node.lineno)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and len(node.args.args) > 1
+            and node.name in ("_emit", "emit")
+        }
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 func = node.func
@@ -361,10 +380,22 @@ def emitted_event_names() -> dict[str, set[str]]:
                     if isinstance(func, ast.Attribute)
                     else (func.id if isinstance(func, ast.Name) else None)
                 )
-                if name in ("emit", "_on_event") and node.args:
+                if name in ("emit", "_emit", "_on_event") and node.args:
                     first = node.args[0]
                     if isinstance(first, ast.Constant) and isinstance(first.value, str):
                         found.setdefault(first.value, set()).add(path.name)
+                    elif (
+                        isinstance(first, ast.Name)
+                        and first.id in forwarders
+                        and forwarders[first.id][0]
+                        <= node.lineno
+                        <= forwarders[first.id][1]
+                    ):
+                        # A wrapper passing its own `event` parameter through -
+                        # `contact.py`'s `_emit` is one. Its callers are the
+                        # call sites, and they are read above, so this is not a
+                        # dynamic event name escaping classification.
+                        continue
                     else:
                         dynamic.append(f"{path.name}:{first.lineno}")
             elif isinstance(node, ast.Dict):

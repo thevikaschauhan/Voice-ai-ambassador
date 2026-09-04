@@ -65,6 +65,7 @@ from livekit.plugins import silero
 
 from ambassador.budget import BudgetPolicy, Decision, load_currency_vocabulary
 from ambassador.confirmation import ConfirmationCoordinator, Step
+from ambassador.contact import ContactPolicy, load_contact_copy
 from ambassador.farewell import (
     FarewellReading,
     contains_closing_phrase,
@@ -73,7 +74,7 @@ from ambassador.farewell import (
 )
 from ambassador.guardrails.prohibited import languages_covered, load_patterns
 from ambassador.knowledge import KnowledgeContext
-from ambassador.schemas import KnowledgeUse, LeadSnapshot
+from ambassador.schemas import ContactCapture, KnowledgeUse, LeadSnapshot
 from ambassador.inventory import (
     build_allowed_figures,
     load_inventory,
@@ -155,7 +156,7 @@ class _OwedTurn:
     """
 
     text: str
-    policy: Literal["budget", "project", "recognition", "farewell"]
+    policy: Literal["budget", "project", "recognition", "farewell", "contact"]
     action: str
 
 
@@ -174,6 +175,7 @@ class AmbassadorAgent(Agent):
         guard_factory: Callable[..., SentenceGuard] = SentenceGuard,
         close_call: Callable[[str], Awaitable[None]] | None = None,
         knowledge: KnowledgeRetriever | None = None,
+        contact: ContactPolicy | None = None,
     ) -> None:
         projects = load_inventory()
         self._projects = projects
@@ -238,6 +240,26 @@ class AmbassadorAgent(Agent):
         # count as two of the buyer's three attempts. One gate for all three
         # policies: the reason is the framework's, not any one policy's.
         self._policy_observed_turn: int | None = None
+
+        # The one contact ask (P2-S05), INJECTED rather than built here: the
+        # defect this fixes was a correct policy nobody constructed, and a
+        # keyword the production entry has to pass is a keyword an ast test can
+        # assert it passes. None is the old behaviour - no ask, contact stays
+        # `not_asked` - which is what the eval harness and every existing test
+        # get.
+        self._contact = contact
+        # Which step of the ask we are in. The policy's own state cannotanswer  this:
+        # `unconfirmed` means BOTH "a read-back is pending" and "the buyer
+        # contradicted the number", and those two need opposite handling of the
+        # next utterance.
+        self._contact_awaiting_reply = False
+        self._contact_awaiting_confirmation = False
+        # `llm_node` can legitimately run twice for one turn (a preemptive
+        # generation invalidated by the final transcript), and reading one
+        # reply twice would spend the ask twice and emit two `contact_settled`.
+        # So the decision is made once per turn index and replayed.
+        self._contact_turn_index: int | None = None
+        self._contact_owed: _OwedTurn | None = None
 
         # Who this ambassador is, by language. Empty is "unnamed" and is a
         # working state, not a gap: the prompt and the disclosure both fall
@@ -804,6 +826,15 @@ class AmbassadorAgent(Agent):
             # `lead_snapshot` for real, because #111 wired the snapshot into a
             # branch that never ran.
             brief=self._brief.last_good,
+            # The reason this card exists: the policy held a settled
+            # ContactCapture and nothing carried it into the record. Absent
+            # policy is `not_asked`, which is the honest reading of a call
+            # where nobody asked.
+            contact=(
+                ContactCapture(status="not_asked")
+                if self._contact is None
+                else self._contact.state
+            ),
         )
 
     def _compose_farewell(self) -> str:
@@ -989,6 +1020,76 @@ class AmbassadorAgent(Agent):
             key, self._confirmations.line(self._settings.language, key)
         )
 
+    def _contact_turn(self, tracker: TurnTracker, *, closing: bool) -> _OwedTurn | None:
+        """The contact ask, its read-back, or the line that closes the call.
+
+        Decided once per turn and replayed, because `llm_node` can run twice
+        for one buyer turn when a preemptive generation is invalidated by the
+        final transcript. Reading one reply twice would spend the single ask
+        twice and put two `contact_settled` on the stream for one answer - the
+        same shape as the double `farewell_spoken` a live run recorded.
+        """
+        if self._contact is None:
+            return None
+        if self._contact_turn_index == tracker.turn_index:
+            return self._contact_owed
+        owed = self._contact_decision(tracker, closing=closing)
+        self._contact_turn_index = tracker.turn_index
+        self._contact_owed = owed
+        return owed
+
+    def _contact_decision(
+        self, tracker: TurnTracker, *, closing: bool
+    ) -> _OwedTurn | None:
+        assert self._contact is not None
+        text = tracker.buyer_utterance
+        turn = tracker.turn_index
+
+        if self._contact_awaiting_reply:
+            # The ONE reply eligible for extraction, or the yes/no on the
+            # digits. Nothing else in the call is offered to the policy, which
+            # is what keeps a number mentioned about a listing from being read
+            # as consent to be called.
+            outcome = (
+                self._contact.observe_confirmation(text, turn)
+                if self._contact_awaiting_confirmation
+                else self._contact.observe_reply(text, turn)
+            )
+            if not outcome.settled:
+                # A phone went to the read-back. The call is not closing yet:
+                # ending here would leave the buyer having read out a number
+                # nobody echoed.
+                self._contact_awaiting_confirmation = True
+                assert outcome.speaks is not None
+                return _OwedTurn(outcome.speaks, "contact", "read_back")
+
+            self._contact_awaiting_reply = False
+            self._contact_awaiting_confirmation = False
+            # Settled - captured, declined or unconfirmed - so the authored
+            # farewell takes THIS turn with the thanks in front of it. Spoken
+            # as one line rather than two turns because the alternative is
+            # waiting for another buyer utterance to say goodbye, and a buyer
+            # who has just declined is already leaving.
+            #
+            # Returned as the `farewell` policy on purpose: that branch records
+            # the farewell and arms the close on this turn's seal, so contact
+            # capture adds no second closing mechanism.
+            line = self._farewell_line
+            if outcome.speaks:
+                line = f"{outcome.speaks.strip()} {line}"
+            return _OwedTurn(line, "farewell", "buyer_farewell")
+
+        if not closing:
+            return None
+        step = self._contact.on_farewell(turn)
+        if step is None:
+            # A second goodbye, an already-settled contact, or a language with
+            # no reviewed ask. All three mean "let the farewell happen", and
+            # the caller does exactly that.
+            return None
+        self._contact_awaiting_reply = True
+        return _OwedTurn(step.speaks, "contact", "ask")
+
     def _deterministic_turn(self, tracker: TurnTracker) -> _OwedTurn | None:
         """Copy to speak instead of running this turn, or None to carry on."""
         # The farewell is checked ABOVE the observed-turn gate, and that
@@ -1000,7 +1101,22 @@ class AmbassadorAgent(Agent):
         # model's own reply played instead, and the call still ended. Re-asking
         # costs nothing: the question is idempotent and spends none of the
         # buyer's policy attempts, which is the only thing the gate protects.
-        if self._is_closing_line(tracker.buyer_utterance, tracker):
+        # Read ONCE, and passed down. `_is_closing_line` records a near miss
+        # as `farewell_candidate`, so calling it twice for one utterance would
+        # put two candidates on the stream for one goodbye.
+        closing = self._is_closing_line(tracker.buyer_utterance, tracker)
+
+        # The one contact ask sits between the goodbye and the farewell
+        # (docs/10- 'Contact capture'): the FIRST farewell is intercepted for
+        # it, and a second is honoured immediately. It also comes ahead of the
+        # closing line because the reply to the ask is frequently itself a
+        # goodbye - "sure, 050..., bye" - and that utterance belongs to the
+        # policy, not to the farewell.
+        owed_contact = self._contact_turn(tracker, closing=closing)
+        if owed_contact is not None:
+            return owed_contact
+
+        if closing:
             # Ahead of the policies too: a buyer who has said goodbye is not
             # owed a budget question, and asking one would be the agent talking
             # past the end of the conversation.
@@ -1279,6 +1395,10 @@ class AmbassadorAgent(Agent):
                 # only place that knows whether the farewell played out or was
                 # talked over.
                 self._closing_turn = tracker.turn_index
+            elif owed.policy == "contact":
+                # `ask` and `read_back` only: the line that settles the contact
+                # comes back as the farewell above, thanks included.
+                tracker.record_contact_line(owed.text, owed.action)
             elif owed.policy == "budget":
                 tracker.record_confirmation(owed.text, owed.action)
             elif owed.policy == "project":
@@ -2089,7 +2209,26 @@ def _session_start_fields(settings: Settings) -> dict[str, object]:
         # orb label, so a mismatch between the page and the voice shows up in
         # one place. Empty means unnamed, which is a working state.
         "ambassador_name": load_ambassadors().name_for(settings.language),
+        # Whether this call can ask for contact at all. Arabic and Hindi have
+        # no reviewed ask in data/contact.yaml, and the policy stays silent
+        # rather than saying an English sentence in a call that is not in
+        # English (AGENTS.md:52). Reported here because silence has to be
+        # READABLE: an operator seeing `contact_status=not_asked` on every
+        # Arabic lead needs to know it was off rather than broken.
+        "contact_ask": load_contact_copy().enabled(settings.language),
     }
+
+
+def build_contact_policy(settings: Settings, log: EventLog) -> ContactPolicy:
+    """The one contact ask, for this call's language.
+
+    A factory rather than a constructor call in the entrypoint so the wiring
+    line stays one line, and so the policy is built from the SETTLED language -
+    room metadata has already been read by the time this runs, and a policy
+    built from the worker default would ask in the wrong language or refuse to
+    ask in the right one.
+    """
+    return ContactPolicy(load_contact_copy(), settings.language, log)
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -2159,6 +2298,7 @@ async def entrypoint(ctx: JobContext) -> None:
             # the language the buyer is actually speaking.
             language=settings.language,
         ),
+        contact=build_contact_policy(settings, log),
     )
 
     stt_node = build_stt(settings)

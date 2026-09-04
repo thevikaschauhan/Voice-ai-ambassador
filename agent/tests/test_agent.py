@@ -130,6 +130,12 @@ def test_the_voice_session_start_matches_the_text_mode_contract():
         # and is covered by fixtures in tests/test_ambassadors.py now that no
         # shipped language exercises it.
         "ambassador_name": "Maya",
+        # Whether this call can ask for contact at all (P2-S05). False here
+        # because Hindi's contact copy is native-review data and stays empty
+        # until a reviewer authors it (AGENTS.md:52) - the ask being OFF is a
+        # working state, and this field is what makes it readable rather than
+        # looking like every Hindi lead lost its contact.
+        "contact_ask": False,
     }
 
 

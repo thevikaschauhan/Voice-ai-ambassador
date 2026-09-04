@@ -190,6 +190,22 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
         "database or the 250ms budget. The reason is a fixed code, never an "
         "exception string, so a database error message cannot reach stdout."
     ),
+    # The contact ask, its read-back and its outcome. `ContactPolicy` is CORE
+    # and emits through the log it is given, so these three names are outside
+    # the adapter scan in `test_events.py` - `test_contact_wiring.py` asserts
+    # they are classified here, and that the policy keeps one emit funnel so
+    # that check stays exhaustive.
+    #
+    # The values are the whole point: a turn index, and a status out of a
+    # closed set. Never the number, never the name, never the reply they came
+    # from. A phone number on this stream is a phone number in every sink the
+    # stream reaches.
+    "contact_asked": "one turn index",
+    "contact_read_back": "one turn index; the digits stay in the sealed record",
+    "contact_settled": "one turn index and an enum status",
+    # Which fixed line was spoken, out of ask/read_back. Shaped like
+    # `farewell_spoken`: the fact and the stage, not the sentence.
+    "contact_line_spoken": "one turn index and an enum stage",
     # `config` has already masked credentials; `model` is the configured LLM
     # slug; `language`, `prompt_mode` and `guardrail_mode` are closed enums;
     # `inventory_version` is a 12-character SHA-256 prompt digest, never the
@@ -932,6 +948,22 @@ class TurnTracker:
         """The warm hand-over after three consecutive unusable turns."""
         self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
         self._log.emit("recognition_escalation_spoken", turn=self.turn_index)
+
+    def record_contact_line(self, text: str, stage: str) -> None:
+        """The one contact request, or the read-back that checks its digits.
+
+        Kept off the emitted stream like the other deterministic lines, and
+        here for the sharpest version of that reason: the read-back
+        interpolates the buyer's own phone number. `contact_read_back` already
+        says a read-back happened, and `stage` says which line was spoken; the
+        digits belong only in the in-process record the audit and the
+        ambassador view read (docs/10- data handling).
+
+        The line that SETTLES the contact is not recorded here - it is the
+        farewell turn, thanks included, and `record_farewell` owns it.
+        """
+        self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
+        self._log.emit("contact_line_spoken", turn=self.turn_index, stage=stage)
 
     def record_farewell(self, text: str) -> None:
         """The authored goodbye that ends the call.
