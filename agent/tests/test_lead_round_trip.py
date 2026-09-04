@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -226,39 +225,69 @@ def test_a_contact_field_sealed_by_the_writer_opens_through_the_detail_route(
 # -- the generalisation -------------------------------------------------
 
 
-def test_no_module_builds_a_field_path_from_a_literal():
+def test_no_module_outside_field_paths_spells_a_field_path():
     """The paths are one vocabulary shared by two services, so they belong in
     one place.
 
     Two f-strings in two files that have to agree, with nothing that fails
     when they stop agreeing, is what put nine unreadable turns on a real
-    lead. This is the same shape as the events registry guard: the rule is
-    that the AAD vocabulary has one definition, and a literal at a call site
-    is a second one.
+    lead. This is the same shape as the events registry guard: the AAD
+    vocabulary has one definition, and a literal anywhere else is a second
+    one.
+
+    It matches the VOCABULARY rather than the call shape. An earlier version
+    flagged any `.open(...)` with a string argument and caught `Path.open`
+    and `wave.open`; the version after that matched bare `brief` and
+    `summary` and flagged thirty dict keys. A guard with false positives is
+    one people learn to skim - the lesson from the column-diff regex that
+    excluded digits - so this one is scoped to the compound paths, where it
+    is exact, and it fires on a stray path built far from any call site.
     """
     import ast
+    import re
     from pathlib import Path
 
+    # Only the STRUCTURED paths. `brief` and `summary` are one bare word
+    # each and are also ordinary dict keys, event names and column names -
+    # matching them flagged thirty innocent lines. They route through
+    # `field_paths` for consistency, but this guard cannot enforce them
+    # without becoming the kind of checker people learn to skim, and a
+    # single word shared by both sides is not where drift happens anyway.
+    # The compound paths are, and those are unambiguous.
+    vocabulary = re.compile(r"^(contact|turns|decisions)\.")
     source_dir = Path(__file__).resolve().parents[1] / "src" / "adapter"
     offenders = []
     for path in sorted(source_dir.glob("*.py")):
         if path.name == "field_paths.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        docstrings = {
+            node.body[0].value
+            for node in ast.walk(tree)
+            if isinstance(
+                node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+            )
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        }
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
+            if node in docstrings:
                 continue
-            name = getattr(node.func, "attr", None)
-            if name not in {"seal", "open", "_seal_optional", "open_field"}:
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                text = node.value
+            elif isinstance(node, ast.JoinedStr):
+                text = "".join(
+                    part.value
+                    for part in node.values
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str)
+                )
+            else:
                 continue
-            for argument in node.args:
-                literal = (
-                    isinstance(argument, ast.Constant)
-                    and isinstance(argument.value, str)
-                ) or isinstance(argument, ast.JoinedStr)
-                if literal:
-                    offenders.append(f"{path.name}:{argument.lineno}")
+            if vocabulary.match(text):
+                offenders.append(f"{path.name}:{node.lineno} {text!r}")
     assert offenders == [], (
-        "field paths must come from adapter.field_paths, not a literal at the "
-        f"call site: {offenders}"
+        "field paths must come from adapter.field_paths, which owns the AAD "
+        f"vocabulary: {offenders}"
     )

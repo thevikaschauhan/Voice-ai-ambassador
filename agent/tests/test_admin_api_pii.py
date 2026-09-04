@@ -90,6 +90,7 @@ async def database() -> str:
 async def sealed(database):
     """A lead whose buyer-derived fields are sealed the way the worker seals
     them - through the same Sealer, with the same AAD."""
+    from adapter import field_paths
     from adapter.crypto import Sealer
     from adapter.repository import Repository
 
@@ -108,7 +109,7 @@ async def sealed(database):
         turn_index=1,
         timestamp=datetime.now(UTC),
         audit_incomplete=False,
-        payload=sealer.seal(lead_id, "turns.1.payload", BUYER_WORDS.encode()),
+        payload=sealer.seal(lead_id, field_paths.turn_payload(1), BUYER_WORDS.encode()),
     )
     await repository.put_analysis(
         lead_id,
@@ -257,6 +258,8 @@ async def test_a_ciphertext_moved_to_another_lead_does_not_open(client, sealed):
     moved a turn would show one buyer's words under another buyer's name, and
     nothing in the response would say so.
     """
+    from adapter import field_paths
+
     repository, lead_id, sealer = sealed
 
     other_id = await repository.start_lead(
@@ -267,7 +270,7 @@ async def test_a_ciphertext_moved_to_another_lead_does_not_open(client, sealed):
         inventory_version="4-records",
         started_at=datetime.now(UTC),
     )
-    stolen = sealer.seal(lead_id, "turns.1.payload", BUYER_WORDS.encode())
+    stolen = sealer.seal(lead_id, field_paths.turn_payload(1), BUYER_WORDS.encode())
     await repository.add_turn(
         other_id,
         turn_index=1,
@@ -309,6 +312,7 @@ async def test_an_unreadable_envelope_is_audited_as_a_failure(client, sealed):
     """A decrypt that fails is the single most interesting thing this service
     can observe - it means tampering, a restore across leads, or a key that
     moved - so it cannot be the one event nobody emits."""
+    from adapter import field_paths
     from adapter import admin_api
     from adapter.events import EventLog
 
@@ -326,7 +330,7 @@ async def test_an_unreadable_envelope_is_audited_as_a_failure(client, sealed):
         turn_index=1,
         timestamp=datetime.now(UTC),
         audit_incomplete=False,
-        payload=sealer.seal(lead_id, "turns.1.payload", BUYER_WORDS.encode()),
+        payload=sealer.seal(lead_id, field_paths.turn_payload(1), BUYER_WORDS.encode()),
     )
 
     records: list[dict] = []
@@ -338,7 +342,7 @@ async def test_an_unreadable_envelope_is_audited_as_a_failure(client, sealed):
 
     failures = [r for r in records if r["event"] == "envelope_unreadable"]
     assert failures, [r["event"] for r in records]
-    assert failures[0]["field_path"] == "turns.1.payload"
+    assert failures[0]["field_path"] == field_paths.turn_payload(1)
     # The field PATH is structural and safe; the value and the reason string
     # are not, and neither appears.
     assert BUYER_WORDS not in repr(failures[0])
