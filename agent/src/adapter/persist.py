@@ -274,6 +274,11 @@ _FAILURE_CODES: Final = (
         ),
     ),
     ("schema", ("UndefinedTableError", "UndefinedColumnError", "SchemaOutOfDate")),
+    # Not a database failure at all: the record could not be BUILT. Distinct
+    # from `rejected`, which is Postgres refusing a value it was handed -
+    # this one never reached Postgres, so the operator action is to look at
+    # the model and the call, not at the database.
+    ("invalid", ("ValidationError", "ValueError", "TypeError", "KeyError")),
 )
 
 

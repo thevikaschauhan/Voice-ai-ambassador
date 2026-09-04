@@ -354,8 +354,12 @@ async def test_a_snapshot_that_will_not_validate_still_seals_the_session(
     monkeypatch.setattr(agent, "lead_snapshot", explode)
     try:
         await shutdown_session(
-            agent=agent, log=log, llm=_llm(), stt_node=None,
-            lead_writer=writer, ask=_ask(),
+            agent=agent,
+            log=log,
+            llm=_llm(),
+            stt_node=None,
+            lead_writer=writer,
+            ask=_ask(),
         )
         leads = await _all_leads(database)
     finally:

@@ -114,7 +114,7 @@ from .events_bridge import EventsBridge, bridge_from_env
 from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
 from .levels import apply_gain, gain_for
 from .analysis import Ask, analysis_ask, finalise_analysis
-from .persist import LeadWriter, build_lead_writer
+from .persist import LeadWriter, _failure_code, build_lead_writer
 from .lexicon import load_lexicon, respell_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
 from .stt_factory import build_stt, describe
@@ -1750,8 +1750,24 @@ async def shutdown_session(
     # ending: ADR-018 is explicit that an unavailable database never blocks a
     # call, and by this point the farewell has already been heard.
     if lead_writer is not None:
-        snapshot = agent.lead_snapshot(ended_at=_now_iso())
-        lead_id = await lead_writer.persist_or_report(snapshot, log=log)
+        # Inside the boundary. Building the snapshot is not a database call, so
+        # it looked like the safe line - but it validates a model, and a model
+        # that will not validate raised straight out of this callback and lost
+        # the closes, `session_end` and the seal. Nothing between here and the
+        # seal may raise, whatever it is doing.
+        try:
+            snapshot = agent.lead_snapshot(ended_at=_now_iso())
+        except Exception as exc:
+            # Through the same closed set as every other failure here, rather
+            # than a literal: one vocabulary, so one query finds every lost
+            # lead whatever stage lost it.
+            log.emit("lead_persist_failed", stage="snapshot", code=_failure_code(exc))
+            snapshot = None
+        lead_id = (
+            None
+            if snapshot is None
+            else await lead_writer.persist_or_report(snapshot, log=log)
+        )
         if lead_id is not None and ask is not None:
             # BOUNDED, and the bound is not a style choice. The worker gathers
             # shutdown callbacks with no per-callback timeout and force-closes
