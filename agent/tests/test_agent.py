@@ -153,7 +153,9 @@ def test_the_session_start_event_carries_no_url_userinfo():
     protection, which is the right behaviour to leave working.
     """
     password = "NOTAREAL" + "-password-" + "NOTAREAL"
-    dsn = "postgresql://notareal_user:" + password + "@db.notareal.example:5432/postgres"
+    dsn = (
+        "postgresql://notareal_user:" + password + "@db.notareal.example:5432/postgres"
+    )
     settings = make_settings(database_url=dsn)
 
     dumped = json.dumps(adapter_agent._session_start_fields(settings))

@@ -7,7 +7,10 @@ start, and handed to the adapter as a frozen value.
 
 Secrets are never printed. `Settings.__repr__` and `Settings.redacted()` mask
 every credential-bearing field, so a settings object can be logged or dropped
-into a traceback without leaking a key.
+into a traceback without leaking a key. Two rules do that, because a field can
+be credential-bearing in two different ways: by NAME, for anything called
+`…_api_key` or `…_api_secret`, and by SHAPE, for a URL that carries its
+password inside the value the way a DSN does.
 
 Two environment variables are read outside `Settings`, both by `events.py`,
 because they configure a sink rather than the session:
@@ -48,6 +51,7 @@ import os
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Final, Literal, get_args
+from urllib.parse import urlsplit, urlunsplit
 
 from ambassador.schemas import Language
 
@@ -96,6 +100,53 @@ def _is_credential(field_name: str) -> bool:
 
 _MASK = "<set>"
 _UNSET = "<unset>"
+
+
+def _without_userinfo(value: object) -> object:
+    """Drop the credential a URL carries inside its own value.
+
+    `_is_credential` above asks what a field is CALLED, and that is the right
+    question for `openrouter_api_key`. It is the wrong question for
+    `database_url`, whose password sits between the `://` and the `@`: no
+    naming convention puts it in the name, so the whole DSN printed through
+    `redacted()` and `__repr__` for as long as DATABASE_URL existed, beside six
+    credentials that masked correctly.
+
+    Adding `url` to `_CREDENTIAL_WORDS` was the cheaper fix and the wrong one.
+    It would collapse `livekit_url` and `llm_base_url` - the two settings an
+    operator most needs to read back out of their own log - and it would still
+    miss the next credential that arrives inside a value under some other name.
+    The list-versus-rule lesson in the comment above `_CREDENTIAL_WORDS` has a
+    second half: a rule keyed on what today's NAMES look like has the same hole
+    one level up. So this one is keyed on SHAPE.
+
+    A string that parses as a URL carrying userinfo comes back as scheme, host
+    and port, with the userinfo removed. Its query and fragment go too, because
+    a DSN is as likely to carry a credential in `?password=` as in front of the
+    `@`, and a URL that has just proved it carries credentials gets no benefit
+    of the doubt about the rest of itself. What survives - which host, which
+    port, which database - is exactly what an operator reads the line for, and
+    is strictly more than the `<set>` a name-based rule would have left.
+
+    Everything else is returned untouched: a plain URL, a model slug, a voice
+    id, and a value that merely contains an `@` without being a URL at all.
+    """
+    if not isinstance(value, str) or "@" not in value:
+        return value
+    try:
+        parts = urlsplit(value)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        # Unparseable, and it contains an `@`. We cannot show that no
+        # credential is in there, so report presence and nothing else - the one
+        # case where this falls back to what a name-based rule would have done.
+        return _MASK
+    if parts.username is None and parts.password is None:
+        return value
+    netloc = host or ""
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -317,7 +368,9 @@ class Settings:
             if _is_credential(field.name):
                 out[field.name] = _MASK if value else _UNSET
             else:
-                out[field.name] = value
+                # Name first, then shape: a field can be a credential because
+                # of what it is called, or because of what its value carries.
+                out[field.name] = _without_userinfo(value)
         return out
 
     def __repr__(self) -> str:
