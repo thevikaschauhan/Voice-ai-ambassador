@@ -6,12 +6,33 @@ BODIES at WARNING, and one of those bodies carried an OpenRouter account user id
 into the worker log. A body that echoes a prompt would put a buyer's words there
 too, beside events that carefully do not carry them.
 
-WHY THIS IS A HANDLER FILTER AND NOT A LOGGER FILTER. `logging` does not apply a
-logger's filters to records from its children - `logging.getLogger("livekit")`
-never sees `livekit.agents.voice.agent_activity` - but the parent's HANDLER
-emits them regardless. A mask on the parent logger would therefore pass its own
-tests and leak exactly where vendor code lives. It goes on the handlers, and the
-record's own name decides whether it is masked.
+WHY THIS IS A RECORD FACTORY. The mask has to be in place before the framework
+attaches its handler, because in the main process it IS: `import adapter.agent`
+finds `logging.getLogger().handlers == []`, and `cli.run_app` only then calls
+`cli.log.setup_logging`, which does `root.addHandler(...)`. The first version of
+this module filtered the handlers, so the main-process install added zero
+filters and every vendor record the main process logged - registration, drains,
+the pooler warnings - went out unmasked. The job path worked only because
+`proc_main` attaches its handler before `prewarm` runs, which is luck, not
+design.
+
+`logging.setLogRecordFactory` has none of that timing: it masks at record
+CREATION, so every handler that exists now or arrives later emits an
+already-masked record. It also sidesteps the trap that a filter on a logger is
+NOT applied to records from its children - `logging.getLogger("livekit")` never
+sees `livekit.agents.voice.agent_activity`, though its handler emits them
+regardless - because the record's own name is what decides.
+
+We WRAP the previous factory rather than replace it, and mark ours so a second
+install is a no-op: `prewarm` runs once per job process and `main` once per
+start.
+
+Two limits, stated rather than papered over. A record created BEFORE the install
+is not covered, in either process (`prewarm` is the earliest hook the framework
+offers inside a job process). And a record forwarded from a job process is
+re-created in the main process by `ipc/log_queue.py` from a pickle, which
+bypasses any factory - it is masked at its origin instead, which is why the
+install belongs in both processes.
 
 MASKED, NEVER SILENCED. Lowering the vendor level would have been less code and
 the wrong trade: the 429 that killed brief extraction was only visible because
@@ -104,41 +125,49 @@ def is_vendor(logger_name: str) -> bool:
     )
 
 
-class VendorMask(logging.Filter):
-    """Applies the house mask to vendor records, on their way to a handler."""
+def mask_record(record: logging.LogRecord) -> None:
+    """Apply the house mask to a vendor record, in place.
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        if not is_vendor(record.name):
-            return True
-        try:
-            rendered = record.getMessage()
-        except Exception:
-            # A record whose own formatting raises is a vendor bug, and one
-            # this filter must not turn into a lost warning.
-            return True
-        masked = mask_text(rendered)
-        if masked != rendered:
-            # Replace the message AND drop the args: the args are where the
-            # unmasked values were, and a formatter would put them back.
-            record.msg = masked
-            record.args = ()
-        return True
-
-
-def install_vendor_log_mask() -> int:
-    """Attach the mask to every root handler. Returns how many it added.
-
-    Idempotent, because `prewarm` runs once per process and `main` once per
-    start: a stacked filter would mask an already-masked line and turn a
-    diagnosis into a row of markers.
-
-    Handlers added AFTER this runs are not covered, which is why the worker
-    calls it after the framework has configured logging rather than before.
+    Renders the message first, because the values live in `args` as often as in
+    `msg`, and then drops the args: a formatter handed the original args would
+    put the unmasked values straight back.
     """
-    root = logging.getLogger()
-    added = 0
-    for handler in root.handlers:
-        if not any(isinstance(f, VendorMask) for f in handler.filters):
-            handler.addFilter(VendorMask())
-            added += 1
-    return added
+    if not is_vendor(record.name):
+        return
+    try:
+        rendered = record.getMessage()
+    except Exception:
+        # A record whose own formatting raises is a vendor bug, and one this
+        # mask must not turn into a lost warning.
+        return
+    masked = mask_text(rendered)
+    if masked != rendered:
+        record.msg = masked
+        record.args = ()
+
+
+# Set on our factory so a second install can recognise its own work. An
+# attribute rather than a module-level flag, because the thing to ask about is
+# the factory that is actually installed, not what this module remembers doing.
+_INSTALLED: Final = "_ambassador_vendor_mask"
+
+
+def install_vendor_log_mask() -> None:
+    """Mask vendor records at creation, for the life of the process.
+
+    Idempotent, and safe at any point relative to the framework's own logging
+    setup: that independence is the whole reason it is a factory. See the module
+    docstring for the order that made the previous handler-filter version dead
+    code in the main process.
+    """
+    previous = logging.getLogRecordFactory()
+    if getattr(previous, _INSTALLED, False):
+        return
+
+    def factory(*args: object, **kwargs: object) -> logging.LogRecord:
+        record = previous(*args, **kwargs)
+        mask_record(record)
+        return record
+
+    setattr(factory, _INSTALLED, True)
+    logging.setLogRecordFactory(factory)

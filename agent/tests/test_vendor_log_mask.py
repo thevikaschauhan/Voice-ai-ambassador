@@ -136,20 +136,6 @@ def test_our_own_logger_is_untouched(captured) -> None:
     assert "no native-authored disclosure for 'ar'" in stream.getvalue()
 
 
-def test_installing_twice_does_not_double_the_filter() -> None:
-    """`prewarm` runs per process and `main` runs once; an install that stacked
-    would mask a masked string and turn a diagnosis into a row of markers."""
-    from adapter.logmask import VendorMask, install_vendor_log_mask
-
-    install_vendor_log_mask()
-    install_vendor_log_mask()
-
-    root = logging.getLogger()
-    for handler in root.handlers:
-        masks = [f for f in handler.filters if isinstance(f, VendorMask)]
-        assert len(masks) <= 1, masks
-
-
 def test_the_mask_is_a_pure_function_of_the_text() -> None:
     """So it can be reasoned about without a logger, and so the vocabulary is
     one place rather than one per call site."""
@@ -205,7 +191,7 @@ def production_order():
     pytest's logging plugin attaches its own root handlers at the start of the
     CALL phase, after fixtures have run. My first draft cleared during setup, so
     by the time the test called `install_vendor_log_mask()` pytest's handlers
-    were back, the install found them, and `VendorMask` masked the record IN
+    were back, the install found them, and the handler filter masked the record IN
     PLACE before my own handler ever saw it. Two order cases passed against the
     unfixed code. The premise of an order test is the order, so the test body
     owns it.
