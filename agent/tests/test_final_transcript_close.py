@@ -212,4 +212,9 @@ async def test_a_goodbye_in_the_final_does_not_hang_up_on_the_ask_it_triggered()
     await preemptive_turn(agent, partial="No thanks", final="No thanks.")
     await log.aclose()
     assert agent._contact.state.status == "declined"
-    assert agent._closing_turn is not None
+    # `_closing`, again: this turn runs to its SEAL, so the close does not stay
+    # armed - it fires, and `_closing_turn` is cleared on the way out.
+    assert agent._closing is True
+    assert [e["reason"] for e in json_lines(buffer) if e["event"] == "call_ended"] == [
+        "buyer_farewell"
+    ]

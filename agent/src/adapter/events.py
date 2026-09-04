@@ -199,6 +199,14 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
         "database or the 250ms budget. The reason is a fixed code, never an "
         "exception string, so a database error message cannot reach stdout."
     ),
+    # Which SEAM armed a close, for the one case where that is not otherwise
+    # knowable: a closing the deterministic seam never saw because it read the
+    # partial. A turn index, the close reason out of `CallEndReason`, and
+    # whether a contact ask was owed at that moment - no transcript, and not
+    # the closing words, which are the buyer's own text like every other
+    # farewell event. It exists to size a known miss
+    # (task-p2-contact-final-transcript-path) rather than to explain a failure.
+    "farewell_from_final": "a turn index, an enum reason and one boolean",
     # The contact ask, its read-back and its outcome. `ContactPolicy` is CORE
     # and emits through the log it is given, so these three names are outside
     # the adapter scan in `test_events.py` - `test_contact_wiring.py` asserts
