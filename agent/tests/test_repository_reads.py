@@ -448,3 +448,107 @@ async def test_figures_for_chunks_reports_approval_from_the_active_review(
     (figure,) = await repository.figures_for_chunks([published["general"]])
     assert figure["id"] == unapproved
     assert figure["approved"] is False
+
+
+# -- a buyer speaks sentences, not keywords (ADR-019) --------------------
+
+
+@pytest.fixture
+async def brochure(repository):
+    """One published chunk that answers a real question, so the search can be
+    asked the question a buyer would actually ask."""
+    document_id = await repository.add_document(
+        revision=1,
+        title="Aquarise",
+        source_type="txt",
+        original_filename=None,
+        mime_type="text/plain",
+        source_bytes=256,
+        source_sha256="d" * 64,
+        extracted_text="",
+    )
+    chunk_id = await repository.add_chunk(
+        document_id,
+        document_revision=1,
+        ordinal=0,
+        heading=None,
+        body=(
+            "Aquarise studios start at AED 985,000 with handover in 2027. "
+            "The tower has 24 floors and 3 pools."
+        ),
+        content_sha256="e" * 64,
+    )
+    await repository._pool.execute(
+        "UPDATE knowledge_chunks SET retrieval_scope = 'general_knowledge',"
+        " prompt_body = body WHERE id = $1",
+        chunk_id,
+    )
+    await repository._pool.execute(
+        "UPDATE knowledge_documents SET status = 'published' WHERE id = $1",
+        document_id,
+    )
+    return chunk_id
+
+
+async def test_a_natural_question_finds_the_chunk_that_answers_it(repository, brochure):
+    """The defect this replaces: `plainto_tsquery` ANDs every token and the
+    `simple` configuration strips no stopwords, so "how much are the Aquarise
+    studios and when is handover" required `how` AND `much` AND `are` AND
+    `the` to appear in the chunk and matched nothing. A buyer speaks that
+    sentence; nobody speaks "Aquarise studios handover"."""
+    from adapter.retrieval import content_tokens
+
+    rows = await repository.search_chunks(
+        content_tokens("how much are the Aquarise studios and when is handover", "en"),
+        project_ids=[],
+        limit=4,
+    )
+    assert [row["id"] for row in rows] == [brochure]
+
+
+async def test_an_utterance_sharing_no_content_word_finds_nothing(repository, brochure):
+    """The fix must not be "OR everything", where one stopword in common
+    pulls back the entire corpus."""
+    from adapter.retrieval import content_tokens
+
+    rows = await repository.search_chunks(
+        content_tokens("what is the weather like today", "en"),
+        project_ids=[],
+        limit=4,
+    )
+    assert rows == []
+
+
+async def test_one_matching_word_out_of_several_is_not_a_hit(repository, brochure):
+    """`tower` is in the chunk and nothing else in this question is. A single
+    common word matching must not qualify the chunk, or every chunk
+    containing an ordinary noun answers every question."""
+    from adapter.retrieval import content_tokens
+
+    rows = await repository.search_chunks(
+        content_tokens("is the tower in Dubai Marina a penthouse", "en"),
+        project_ids=[],
+        limit=4,
+    )
+    assert rows == []
+
+
+@pytest.mark.parametrize(
+    "utterance,language",
+    [
+        ("ما هي أسعار الاستوديو في أكوارايز", "ar"),
+        ("अकवाराइज़ में स्टूडियो की कीमत क्या है", "hi"),
+    ],
+)
+async def test_a_non_english_utterance_tokenises_without_erroring(
+    repository, brochure, utterance, language
+):
+    """Tokenisation only. No copy is authored here and none is asserted: the
+    property is that an Arabic or Hindi turn reaches the database and gets an
+    answer or an empty list, never an exception into the voice path."""
+    from adapter.retrieval import content_tokens
+
+    rows = await repository.search_chunks(
+        content_tokens(utterance, language), project_ids=[], limit=4
+    )
+    assert isinstance(rows, list)

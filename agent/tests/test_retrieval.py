@@ -616,3 +616,28 @@ async def test_a_turn_whose_pool_is_not_connected_yet_skips_and_says_not_connect
     events = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
     (skipped,) = [e for e in events if e.get("event") == "knowledge_retrieval_skipped"]
     assert skipped["reason"] == "not_connected"
+
+
+async def test_an_unexpected_failure_skips_with_a_closed_code_not_a_class_name():
+    """`CLEAR_EVENTS` promises `reason` is a fixed code. `type(exc).__name__`
+    is an open set: a new dependency's exception class would put an
+    unreviewed string on the stream that the classification never approved."""
+    import json
+
+    class Exploding:
+        async def search_chunks(self, *_, **__):
+            raise ZeroDivisionError("nobody planned for this")
+
+        async def figures_for_chunks(self, *_, **__):
+            return []
+
+    agent, _, log, buf = make_agent_with_knowledge(
+        Exploding(), [HealthyStream(["ok "])]
+    )
+    await run_llm_node(agent, user_ctx("tell me about the amenities"))
+    await log.aclose()
+
+    events = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+    (skipped,) = [e for e in events if e.get("event") == "knowledge_retrieval_skipped"]
+    assert skipped["reason"] != "ZeroDivisionError"
+    assert skipped["reason"] == "unknown"
