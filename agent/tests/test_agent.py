@@ -139,6 +139,32 @@ def test_the_voice_session_start_matches_the_text_mode_contract():
     }
 
 
+def test_the_session_start_event_carries_no_url_userinfo():
+    """The guard at the surface that actually leaked.
+
+    `Settings.redacted()` is tested in tests/test_config.py; this asserts the
+    same property one layer out, on the serialised event, because that is the
+    thing that reached the worker's deploy log once per call. A DSN password
+    printed in full here for as long as DATABASE_URL existed, beside six
+    credentials that were correctly `<set>`, because the masking rule asked
+    what each field was CALLED and a DSN carries its password in the value.
+
+    Assembled from NOTAREAL parts: a realistic DSN shape trips GitHub push
+    protection, which is the right behaviour to leave working.
+    """
+    password = "NOTAREAL" + "-password-" + "NOTAREAL"
+    dsn = "postgresql://notareal_user:" + password + "@db.notareal.example:5432/postgres"
+    settings = make_settings(database_url=dsn)
+
+    dumped = json.dumps(adapter_agent._session_start_fields(settings))
+
+    assert password not in dumped
+    assert "notareal_user" not in dumped
+    # The host and port survive: which database, and session mode versus
+    # transaction mode, are what an operator reads this line for.
+    assert "db.notareal.example:5432" in dumped
+
+
 def test_the_session_contract_carries_the_ambassador_name_where_there_is_one():
     """The other half, so the assertion above cannot pass by the field being
     absent from both sides."""
