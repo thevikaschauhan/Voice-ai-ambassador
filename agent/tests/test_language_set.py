@@ -152,3 +152,20 @@ def test_no_module_restates_the_language_set():
         "the language set is spelled out by hand here; derive it with "
         "typing.get_args(schemas.Language) instead:\n  " + "\n  ".join(offenders)
     )
+
+
+def test_the_stopword_file_covers_exactly_these_languages():
+    """`data/stopwords.yaml` is read per turn to build the retrieval query. A
+    language missing from it silently keeps every stopword, which ANDs a
+    spoken sentence into a query that matches nothing - the defect this file
+    exists to stop, in its retrieval form."""
+    stopwords = yaml.safe_load((DATA_DIR / "stopwords.yaml").read_text("utf-8"))
+    assert set(stopwords) == set(LANGUAGES)
+    for language, words in stopwords.items():
+        assert words, f"{language} has an empty stopword list"
+        # YAML 1.1 reads bare `on`, `no`, `yes` and `off` as booleans, and an
+        # unquoted `on` in the English list loaded as True and crashed the
+        # loader. Every entry is quoted; this is what keeps it that way.
+        assert all(isinstance(word, str) for word in words), (
+            f"{language} has a non-string entry; quote the YAML"
+        )

@@ -30,6 +30,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
+import unicodedata
+from functools import lru_cache
+from pathlib import Path
 from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
@@ -42,7 +46,10 @@ from ambassador.knowledge import (
 )
 from ambassador.schemas import AllowedFigures, KnowledgeUse
 
+import yaml
+
 from .events import EventLog
+from .persist import _failure_code
 
 # ADR-019. Not a constant anybody should tune away: it is the share of
 # `llm_ttft` the buyer will not notice, and the whole reason full-text search
@@ -61,6 +68,67 @@ class ChunkSource(Protocol):
     async def figures_for_chunks(
         self, chunk_ids: Sequence[Any]
     ) -> list[dict[str, Any]]: ...
+
+
+_DATA_DIR = Path(__file__).resolve().parents[3] / "data"
+
+# Letters, digits and marks in any script. `\w` would do for English and then
+# quietly drop Arabic diacritics and Devanagari matras, which are part of the
+# word rather than punctuation around it.
+_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
+
+# One character is never a content word in any of the three languages, and a
+# single letter matches half the corpus.
+_MINIMUM_TOKEN = 2
+
+
+@lru_cache(maxsize=1)
+def load_stopwords(path: Path | None = None) -> dict[str, frozenset[str]]:
+    """Query-side stopwords per language, from `data/stopwords.yaml`.
+
+    Cached because it is read on the turn path and the file cannot change
+    inside a call.
+    """
+    source = path or _DATA_DIR / "stopwords.yaml"
+    raw = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+    return {
+        language: frozenset(_fold(word) for word in words or ())
+        for language, words in raw.items()
+    }
+
+
+def _fold(word: str) -> str:
+    """Lowercase and NFKC-normalise, so the list and the utterance agree.
+
+    Arabic and Hindi both have multiple encodings of the same grapheme, and a
+    stopword list that matches only one of them silently stops working on the
+    other.
+    """
+    return unicodedata.normalize("NFKC", word).casefold()
+
+
+def content_tokens(utterance: str, language: str) -> list[str]:
+    """The words worth searching for, in the order the buyer said them.
+
+    Postgres's `simple` configuration removes no stopwords, and
+    `plainto_tsquery` joins what is left with AND. Together those turn "how
+    much are the Aquarise studios and when is handover" into a query that
+    requires `how` and `much` and `are` and `the` to appear in a brochure
+    sentence, which is why the whole seam matched nothing on real speech.
+
+    An unknown language keeps every token rather than raising: a call in a
+    language with no list yet should retrieve noisily, not fail.
+    """
+    stopwords = load_stopwords().get(language, frozenset())
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for match in _TOKEN.finditer(utterance):
+        token = _fold(match.group())
+        if len(token) < _MINIMUM_TOKEN or token in stopwords or token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return tokens
 
 
 def fingerprint(utterance: str) -> str:
@@ -109,6 +177,7 @@ class KnowledgeRetriever:
         source: Callable[[], ChunkSource | None],
         *,
         log: EventLog,
+        language: str = "en",
         limit: int = CHUNK_LIMIT,
         budget_seconds: float = BUDGET_SECONDS,
     ) -> None:
@@ -118,6 +187,7 @@ class KnowledgeRetriever:
         # each turn. Resolved per turn, never awaited.
         self._source = source
         self._log = log
+        self._language = language
         self._limit = limit
         self._budget = budget_seconds
         self._context: KnowledgeContext | None = None
@@ -156,7 +226,10 @@ class KnowledgeRetriever:
         except TimeoutError:
             context = self._miss(turn_index, query, base, started, "budget_exceeded")
         except Exception as exc:  # a paused database must not end the call
-            context = self._miss(turn_index, query, base, started, type(exc).__name__)
+            # A CLOSED code, never the class name. `CLEAR_EVENTS` promises
+            # `reason` is a fixed set, and a new dependency's exception class
+            # would otherwise put an unreviewed string on the stream.
+            context = self._miss(turn_index, query, base, started, _failure_code(exc))
         else:
             self._log.emit(
                 "knowledge_retrieved",
@@ -183,7 +256,9 @@ class KnowledgeRetriever:
             raise LookupError("no repository")
         started = asyncio.get_running_loop().time()
         rows = await repository.search_chunks(
-            query, project_ids=list(project_ids), limit=self._limit
+            content_tokens(query, self._language),
+            project_ids=list(project_ids),
+            limit=self._limit,
         )
         chunks = [_chunk_from_row(row) for row in rows]
         occurrences: list[FigureOccurrence] = []

@@ -411,46 +411,76 @@ class Repository:
         return [dict(row) for row in rows]
 
     async def search_chunks(
-        self, query: str, *, project_ids: Sequence[str], limit: int = 4
+        self, tokens: Sequence[str], *, project_ids: Sequence[str], limit: int = 4
     ) -> list[dict[str, Any]]:
         """Full-text search over what a call is allowed to be told.
 
-        `simple` rather than `english`: ADR-019, and the corpus is trilingual
-        brochure prose where stemming an Arabic or Hindi token with English
-        rules is worse than not stemming at all.
+        Takes TOKENS, not an utterance. `plainto_tsquery` joins every token
+        with AND and the `simple` configuration strips no stopwords, so
+        handing it a spoken sentence produced a query requiring `how` and
+        `much` and `the` to appear in a brochure paragraph - and the seam
+        matched nothing on real speech while every keyword-shaped test
+        passed. `adapter.retrieval.content_tokens` drops the stopwords; this
+        ORs what survives.
 
-        Three filters, and only the first two are the security boundary. A
-        document must be published; `prompt_body IS NOT NULL` is the schema's
-        own `only_reviewed_scopes_reach_the_prompt` constraint read from the
-        other side, so an unreviewed or inventory-governed chunk cannot come
-        back from here at all. The caller still re-checks scope in code
-        (`is_prompt_eligible`), because a query is a filter and the gate is a
-        rule - and a rule that only exists in a WHERE clause is one edit away
-        from not existing.
+        `simple` stays on the INDEX side (ADR-019: stemming Arabic or Hindi
+        with English rules is worse than not stemming), and the query is
+        built from lexemes Postgres itself produced, so nothing user-typed is
+        ever concatenated into SQL.
+
+        Two filters are the security boundary, and only two. A document must
+        be published, and `prompt_body IS NOT NULL` is the schema's own
+        `only_reviewed_scopes_reach_the_prompt` constraint read from the
+        other side. The caller re-checks scope in code, because a query is a
+        filter and the gate is a rule.
+
+        The minimum-match rule is what keeps OR from meaning "everything":
+        two distinct query lexemes must hit, so one ordinary noun in common
+        does not qualify a chunk to answer any question. A one-word question
+        still needs its one word.
 
         Project chunks bound to a project this turn is about sort first;
-        general knowledge stays eligible on every turn. Columns are named:
-        the table carries a `search_vector` tsvector with no JSON form.
+        general knowledge stays eligible on every turn.
         """
+        if isinstance(tokens, str):
+            raise TypeError("search_chunks takes tokens, not an utterance")
+        terms = [token for token in tokens if token]
+        if not terms:
+            return []
         rows = await self._pool.fetch(
             """
+            WITH lexeme AS (
+                SELECT DISTINCT plainto_tsquery('simple', t) AS q
+                FROM unnest($1::text[]) AS t
+                WHERE plainto_tsquery('simple', t) <> ''::tsquery
+            ),
+            query AS (
+                SELECT string_agg(q::text, ' | ')::tsquery AS any_of,
+                       count(*) AS terms
+                FROM lexeme
+            )
             SELECT c.id, c.document_id, c.document_revision, c.heading,
                    c.prompt_body, c.retrieval_scope, c.project_id,
                    c.conflict_code
             FROM knowledge_chunks c
             JOIN knowledge_documents d
               ON d.id = c.document_id AND d.revision = c.document_revision
-            WHERE d.status = 'published'
+            CROSS JOIN query
+            WHERE query.any_of IS NOT NULL
+              AND d.status = 'published'
               AND c.prompt_body IS NOT NULL
-              AND c.search_vector @@ plainto_tsquery('simple', $1)
+              AND c.search_vector @@ query.any_of
+              AND (
+                    SELECT count(*) FROM lexeme
+                    WHERE c.search_vector @@ lexeme.q
+                  ) >= least(2, query.terms)
             ORDER BY (c.retrieval_scope = 'project_knowledge'
                       AND c.project_id = ANY($2::text[])) DESC,
-                     ts_rank(c.search_vector,
-                             plainto_tsquery('simple', $1)) DESC,
+                     ts_rank_cd(c.search_vector, query.any_of) DESC,
                      c.id
             LIMIT $3
             """,
-            query,
+            terms,
             list(project_ids),
             limit,
         )

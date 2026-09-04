@@ -2152,7 +2152,13 @@ async def entrypoint(ctx: JobContext) -> None:
         # keeps this inside Supabase's client limit. It resolves the task per
         # turn and never awaits it, so a turn that arrives before the
         # handshake finishes is a skip, not a wait.
-        knowledge=KnowledgeRetriever(repository_when_ready(lead_store), log=log),
+        knowledge=KnowledgeRetriever(
+            repository_when_ready(lead_store),
+            log=log,
+            # The RESOLVED language, so the query drops the stopwords of
+            # the language the buyer is actually speaking.
+            language=settings.language,
+        ),
     )
 
     stt_node = build_stt(settings)

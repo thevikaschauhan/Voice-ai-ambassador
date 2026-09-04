@@ -402,7 +402,7 @@ async def published(repository):
 async def test_search_returns_reviewed_prose_and_never_a_closed_chunk(
     repository, published
 ):
-    rows = await repository.search_chunks("pool", project_ids=[], limit=4)
+    rows = await repository.search_chunks(["pool"], project_ids=[], limit=4)
     assert [row["id"] for row in rows] == [published["general"]]
 
 
@@ -411,7 +411,7 @@ async def test_search_skips_a_document_that_is_not_published(repository, publish
         "UPDATE knowledge_documents SET status = 'draft' WHERE id = $1",
         published["document_id"],
     )
-    assert await repository.search_chunks("pool", project_ids=[], limit=4) == []
+    assert await repository.search_chunks(["pool"], project_ids=[], limit=4) == []
 
 
 async def test_a_bound_project_chunk_ranks_ahead_of_general_knowledge(
@@ -425,7 +425,7 @@ async def test_a_bound_project_chunk_ranks_ahead_of_general_knowledge(
         published["general"],
     )
     rows = await repository.search_chunks(
-        "water", project_ids=["binghatti-canal"], limit=4
+        ["water"], project_ids=["binghatti-canal"], limit=4
     )
     assert rows[0]["id"] == published["project"]
 
@@ -552,3 +552,13 @@ async def test_a_non_english_utterance_tokenises_without_erroring(
         content_tokens(utterance, language), project_ids=[], limit=4
     )
     assert isinstance(rows, list)
+
+
+async def test_search_chunks_refuses_an_utterance_where_tokens_are_expected(
+    repository,
+):
+    """A str IS a Sequence[str], so passing one would iterate characters and
+    search for single letters - a silent wrong answer rather than an error.
+    This guard caught three of this file's own older tests during the fix."""
+    with pytest.raises(TypeError):
+        await repository.search_chunks("pool", project_ids=[], limit=4)
