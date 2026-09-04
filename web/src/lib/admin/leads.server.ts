@@ -2,7 +2,12 @@ import 'server-only'
 
 import { readForPage } from '@/lib/admin/read'
 import type { PageRead } from '@/lib/admin/read'
-import type { LeadDetailRecord, LeadStatus, LeadSummaryRow } from '@/lib/admin/leads'
+import type {
+  ContactStatus,
+  LeadDetailRecord,
+  LeadStatus,
+  LeadSummaryRow,
+} from '@/lib/admin/leads'
 
 /**
  * Reading leads from the admin API, in the shapes it actually sends.
@@ -14,6 +19,9 @@ import type { LeadDetailRecord, LeadStatus, LeadSummaryRow } from '@/lib/admin/l
  *
  *   the list is a BARE ARRAY, not an envelope
  *   it carries `contact_status`, not `contact_present`
+ *
+ * The status is typed as `ContactStatus` rather than `string`, so the
+ * derivation below compares against a member the compiler knows about.
  *
  * `contact_present` is DERIVED rather than requested. docs/10- asks the list to
  * show contact-present; the API sends the status, which is strictly more
@@ -33,7 +41,15 @@ interface UpstreamLeadRow {
   status: LeadStatus
   score_total: number | null
   analysis_status: LeadSummaryRow['analysis_status']
-  contact_status?: string | null
+  /**
+   * Typed as the union rather than `string`, so `toRow`'s `=== 'captured'`
+   * below is a comparison the compiler checks. As a bare `string` it was a
+   * magic word: the day that member is renamed upstream, an unchecked
+   * comparison keeps compiling and quietly reports every lead as having no
+   * contact - a plausible wrong answer, which is harder to notice than a
+   * blank one.
+   */
+  contact_status?: ContactStatus | null
   /**
    * Not in the list projection yet: docs/10-:315 names project ids as a list
    * field and `list_leads` does not select them (reported as drift item 6,
