@@ -304,7 +304,9 @@ async def test_get_decisions_returns_the_decision_that_was_recorded(repository, 
         lead,
         new_status="qualified",
         reason_code="ready",
-        note=_envelope(b"note"),
+        # The sequence is allocated inside the transaction, so the
+        # caller is handed it rather than guessing it.
+        seal_note=lambda _sequence: _envelope(b"note"),
         actor_kind="admin",
         actor_id=uuid.uuid4(),
         expected_lead_revision=(await repository.get_lead(lead))["revision"],

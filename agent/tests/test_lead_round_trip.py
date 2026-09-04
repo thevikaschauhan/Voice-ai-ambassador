@@ -160,7 +160,8 @@ async def persisted(database):
 
 
 @pytest.fixture
-async def detail(monkeypatch, persisted) -> dict[str, Any]:
+async def client(monkeypatch, persisted):
+    """The real ASGI app over the real repository and the real sealer."""
     from httpx import ASGITransport, AsyncClient
 
     from adapter import admin_api
@@ -175,11 +176,38 @@ async def detail(monkeypatch, persisted) -> dict[str, Any]:
     admin_api.app.state.log = EventLog(session_id="round-trip")
     transport = ASGITransport(app=admin_api.app)
     async with AsyncClient(transport=transport, base_url="http://admin") as http:
-        response = await http.get(
-            f"/v1/leads/{lead_id}", headers={"Authorization": f"Bearer {TOKEN}"}
-        )
+        yield http, writer, lead_id
+
+
+def auth() -> dict[str, str]:
+    return {"Authorization": f"Bearer {TOKEN}"}
+
+
+async def read_detail(client) -> dict[str, Any]:
+    http, _, lead_id = client
+    response = await http.get(f"/v1/leads/{lead_id}", headers=auth())
     assert response.status_code == 200, response.text
     return response.json()
+
+
+async def decide(client, *, note: str | None, new_status: str = "qualified"):
+    http, _, lead_id = client
+    current = await read_detail(client)
+    return await http.post(
+        f"/v1/leads/{lead_id}/decisions",
+        headers=auth(),
+        json={
+            "new_status": new_status,
+            "reason_code": "ready",
+            "note": note,
+            "expected_lead_revision": current["revision"],
+        },
+    )
+
+
+@pytest.fixture
+async def detail(client) -> dict[str, Any]:
+    return await read_detail(client)
 
 
 # -- the defect ---------------------------------------------------------
@@ -291,3 +319,162 @@ def test_no_module_outside_field_paths_spells_a_field_path():
         "field paths must come from adapter.field_paths, which owns the AAD "
         f"vocabulary: {offenders}"
     )
+
+
+# -- a decision note is sealed under its own sequence --------------------
+
+NOTE_TEXT = "Spoke to the buyer, wants a viewing on Saturday."
+
+
+async def test_a_decision_carrying_a_note_is_accepted(client):
+    """The route passed `{"note": ...}` - a plain dict - where an envelope was
+    expected, so `_envelope_tuple` raised `KeyError: 'algorithm'`.
+
+    It did not surface as a 500. `KeyError` IS a `LookupError`, and the route
+    catches `LookupError` to mean "no such lead" - so an admin who added a
+    note was told **404, the lead does not exist**, while the lead sat there
+    and the decision was never recorded. A wrong answer that reads as a
+    legitimate one, which is why nothing looked broken."""
+    response = await decide(client, note=NOTE_TEXT)
+    assert response.status_code < 300, response.text
+
+
+async def test_the_note_reads_back_opened_through_the_detail_route(client):
+    assert (await decide(client, note=NOTE_TEXT)).status_code < 300
+    (decision,) = (await read_detail(client))["decisions"]
+    assert decision["note_error"] is None
+    assert NOTE_TEXT in str(decision["note"])
+
+
+async def test_each_note_opens_under_the_sequence_it_was_actually_given(client):
+    """The AAD carries the sequence, and the sequence is allocated INSIDE the
+    transaction. So the note cannot be sealed before the call - sealing it
+    against a guessed sequence would open for the first decision and fail for
+    every one after it, which is the shape a single-decision test misses."""
+    assert (await decide(client, note="first note")).status_code < 300
+    assert (
+        await decide(client, note="second note", new_status="rejected")
+    ).status_code < 300
+
+    decisions = sorted(
+        (await read_detail(client))["decisions"], key=lambda d: d["sequence"]
+    )
+    assert [d["sequence"] for d in decisions] == [1, 2]
+    assert [d["note_error"] for d in decisions] == [None, None]
+    assert "first note" in str(decisions[0]["note"])
+    assert "second note" in str(decisions[1]["note"])
+
+
+async def test_the_note_is_not_stored_in_the_clear(client):
+    """The whole reason it is sealed. Read the column, not the response."""
+    assert (await decide(client, note=NOTE_TEXT)).status_code < 300
+    _, writer, lead_id = client
+    stored = await writer.repository._pool.fetchval(
+        "SELECT note::text FROM admin_decisions WHERE lead_id = $1", lead_id
+    )
+    assert NOTE_TEXT not in (stored or "")
+
+
+async def test_a_decision_without_a_note_still_records(client):
+    """The guard: notes are optional and the common case must not regress."""
+    assert (await decide(client, note=None)).status_code < 300
+    (decision,) = (await read_detail(client))["decisions"]
+    assert decision["note"] is None
+    assert decision["note_error"] is None
+
+
+async def test_an_internal_failure_is_never_reported_as_a_missing_lead(client):
+    """What made the note bug invisible, fixed separately from it.
+
+    `except LookupError` around a body that can raise `KeyError` turns any
+    internal mapping error into "no such lead". The repository now raises
+    `NoSuchLead`, so the route says 404 only when the lead really is absent.
+    """
+    import uuid as _uuid
+
+    http, _, _ = client
+    absent = await http.post(
+        f"/v1/leads/{_uuid.uuid4()}/decisions",
+        headers=auth(),
+        json={
+            "new_status": "qualified",
+            "reason_code": "ready",
+            "note": None,
+            "expected_lead_revision": 0,
+        },
+    )
+    assert absent.status_code == 404, absent.text
+    assert "no such lead" in absent.text
+
+
+# -- every route that returns a sealed field must open it ----------------
+
+ENVELOPE_KEYS = {"algorithm", "key_version", "nonce", "ciphertext"}
+
+
+def envelopes_in(value: Any, path: str = "$") -> list[str]:
+    """Every sealed envelope left in a response body, by path."""
+    found = []
+    if isinstance(value, dict):
+        if ENVELOPE_KEYS <= set(value):
+            found.append(path)
+        for key, item in value.items():
+            found += envelopes_in(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found += envelopes_in(item, f"{path}[{index}]")
+    return found
+
+
+async def test_the_decisions_list_route_returns_a_noted_decision(client):
+    """It 500s. `get_decisions` hands the sealed note - raw bytes inside a
+    composite - straight to the JSON encoder, which raises
+    `PydanticSerializationError: invalid utf-8 sequence`.
+
+    It only ever worked because no note had ever been sealed. The unsealed-note
+    bug was hiding this one behind it, one step along the same path.
+    """
+    http, _, lead_id = client
+    assert (await decide(client, note=NOTE_TEXT)).status_code < 300
+
+    response = await http.get(f"/v1/leads/{lead_id}/decisions", headers=auth())
+    assert response.status_code == 200, response.text
+
+
+async def test_the_decisions_list_route_opens_the_note(client):
+    """The same helper as the detail route, or the two drift the way the
+    writer and reader drifted over `turns.{i}`."""
+    http, _, lead_id = client
+    assert (await decide(client, note=NOTE_TEXT)).status_code < 300
+
+    response = await http.get(f"/v1/leads/{lead_id}/decisions", headers=auth())
+    assert response.status_code == 200, response.text
+    (decision,) = response.json()
+    assert decision["note_error"] is None
+    assert NOTE_TEXT in str(decision["note"])
+
+
+async def test_no_lead_route_hands_back_a_sealed_envelope(client):
+    """The generalisation, over a lead that has one of everything sealed.
+
+    Three bugs in a row have been an envelope reaching a consumer that could
+    not open it - the wrong AAD on turns, an unsealed note, and now a sealed
+    note serialised raw. What they share is that a route returned a field it
+    never opened, so this asks every lead route the same question at once
+    rather than waiting for the next one to be found in production.
+    """
+    http, _, lead_id = client
+    assert (await decide(client, note=NOTE_TEXT)).status_code < 300
+
+    leaked = {}
+    for route in (
+        "/v1/leads",
+        f"/v1/leads/{lead_id}",
+        f"/v1/leads/{lead_id}/decisions",
+    ):
+        response = await http.get(route, headers=auth())
+        assert response.status_code == 200, f"{route}: {response.text}"
+        found = envelopes_in(response.json())
+        if found:
+            leaked[route] = found
+    assert leaked == {}
