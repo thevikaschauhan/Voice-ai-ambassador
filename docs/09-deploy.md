@@ -1094,7 +1094,7 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    **What a correct URL looks like in the logs.** Since `adapter/session_mode.py`,
    both Python services refuse a URL that cannot work, on the shared connect
    path that the migration runner and `Repository.connect` both call - so the
-   refusal happens at `admin-api`'s pre-deploy and at the worker's first write,
+   refusal happens at `admin-api`'s pre-deploy and at the worker's connect,
    not only in one of them. Two refusals, quoted as shapes:
 
    ```
@@ -1112,7 +1112,7 @@ The first step is the one that cannot be undone, so it goes first deliberately.
 
    ```
    database port 5432 (session mode)          # admin-api pre-deploy, before the migration lines
-   lead_store_connected target=<host>:<port>  # the worker, on its first write
+   lead_store_connected target=<host>:<port>  # the worker, once per call
    ```
 
    The first shows the **port** and deliberately nothing else. The second shows
@@ -1123,6 +1123,69 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    refuses the direct host before either line prints, which is what makes the
    port line meaningful - but it is the worker's line that lets a reader SEE
    the pooler.
+
+   **The first line is now observed rather than expected.** From `admin-api`'s
+   pre-deploy on 2026-09-03 at 19:21:14Z, with the migration line that follows
+   it in the same container:
+
+   ```
+   database port 5432 (session mode)
+   applied 1 migration(s): 0003
+   ```
+
+   Read those two together, because each answers what the other cannot: the
+   port line proves the DSN is session mode and says nothing about whether
+   anything ran, and the migration line proves the runner reached the database
+   and says nothing about which port it used. The pre-deploy container then
+   exits and the start command runs, so `Application startup complete` from
+   `uvicorn` is a third fact and not a restatement of either.
+
+   The very next deploy, thirteen minutes later at 19:34:17Z, carried no new
+   migration and printed the other branch:
+
+   ```
+   database port 5432 (session mode)
+   schema is up to date at version 0003
+   ```
+
+   Both shapes of the migration line are therefore observed, on consecutive
+   deployments. Worth having the pair, because it shows what actually differs
+   between them: whether anything was **outstanding**, not whether the runner
+   worked. Both prove it reached the database, so a reader who sees only one of
+   them has lost nothing - and a deploy that prints NEITHER has not "kept the
+   old schema", it has failed before the runner spoke.
+
+   **The second line is still expected and not yet observed.** It arrives
+   **once per call**, not once per process and not on the first write: the
+   worker starts the connect as a task at `session_start` and emits
+   `lead_store_connected target=<host>:<port>` when it completes, so every
+   call that reaches a database prints it exactly once.
+
+   Its absence therefore means one of three things, and the worker names which:
+
+   ```
+   lead_store_connected target=<host>:<port>      # the store is up, this call
+   lead_store_disabled reason=no_database_url     # exactly one, nothing else
+   lead_persist_failed stage=connect code=<enum>  # reached the deploy, not the database
+   ```
+
+   That is worth more than the line itself. **"Not configured" and "not wired"
+   used to look identical** - the audit that found the lead path unreachable
+   could only tell them apart by reading source, which is the same
+   cannot-distinguish problem this document keeps running into. Now an unset
+   `DATABASE_URL` says so in one event and emits no other `lead_*` line at all,
+   so a silent worker is a bug rather than a configuration.
+
+   A fourth case fails the deploy instead of reporting: `DATABASE_URL` set with
+   `PII_ENCRYPTION_KEY` or `PII_HASH_KEY` missing refuses at startup and names
+   the variable. Half-configured is the dangerous state, because the two ways
+   it could carry on are writing buyer text in the clear and failing once per
+   call. A connect failure is not treated that way - the lead store is not on
+   the call path, so an unreachable database degrades to a report and the buyer
+   hears everything they were going to hear (ADR-018).
+
+   See the smoke 0 record below for what the absence looked like before any of
+   these events existed.
 
 4. **Set the values as Railway service variables**, using the table below. They
    move from the Supabase dashboard into Railway directly. A connection string
@@ -1215,10 +1278,69 @@ the tree rather than from here: this document deliberately quotes no version
 number, because a line that names today's version goes stale the next time
 somebody adds a `.sql` file and no diff to this file will show it.
 
+Step 3 does quote `applied 1 migration(s): 0003`, and that is not an exception
+to this rule. It is a **dated observation** of one deployment, which stays true
+for ever because it names when it was read; the shape above is an
+**expectation**, which is what goes stale. Keep the distinction when you edit
+either: an expectation with a version number in it is the bug this paragraph
+exists to prevent, and it has already been fixed once.
+
 Either shape proves the service reached Postgres and the schema is at the
 version this build expects. Neither proves the port is 5432 - see step 3.
 A pre-deploy that instead exits non-zero with `DATABASE_URL is not set` has
 done its job: the deployment fails, and the previous version keeps serving.
+
+### Smoke 0: what one real call looks like in the worker log
+
+Observed on 2026-09-03 at 19:23Z, one short human call on the deployed
+topology. It is recorded here because the *sequence* is the check: no single
+event in it proves a call was healthy, and a reader who knows only the names
+cannot tell a normal ending from a truncated one.
+
+```
+turn_complete turn=9
+user_turn turn=10
+farewell_candidate turn=10
+call_ended reason=buyer_left
+interrupted turn=10 ; turn_complete turn=10
+process exiting reason=parent process shutdown
+session_end turns=10
+shutting down worker
+```
+
+**Two endings, and only one of them deletes the room.** This matters more than
+it looks, because the shorter sequence is the one a real buyer produces:
+
+| Ending | How it ends | `call_ended reason` | `room_deleted` |
+|---|---|---|---|
+| Farewell | the agent hears a goodbye and hangs up | `buyer_farewell` (or `agent_farewell`, `buyer_farewell_repeated`) | **yes** |
+| Hang-up | the buyer closes the tab or drops the call | `buyer_left` | **no** |
+
+`room_deleted` is emitted from one place only, `end_call` in
+`agent/src/adapter/agent.py`, which runs on the farewell path: deleting the
+room is how the browser learns the call is over, because ending the *job*
+leaves a room with a participant still in it. When the buyer disconnects
+first, LiveKit closes the session, `end_call` never runs, and there is nothing
+left to delete. **So a missing `room_deleted` beside `reason=buyer_left` is a
+correct call, not a lost signal** - do not go looking for it, and do not add it
+to a checklist that both paths are scored against.
+
+The call above is also the reason smoke 0 has a second run. Its lead was never
+stored, and not because anything failed: on that build nothing constructed the
+lead writer, so `lead_store_connected` and `lead_persisted` could not appear.
+**Zero `lead_*` lines was the expected result**, which is only a useful reading
+because the absence was checked against a control - the same log filter returns
+rows for other event names on the same deployment, so the emptiness is the
+worker's and not the query's. A filter that matches nothing and a path that
+runs nothing look identical until you ask one of them a question you know the
+answer to.
+
+Two details from that call are worth knowing before reading a later one, since
+both are visible in the log and neither is a database problem: brief extraction
+failed on every turn behind sustained upstream `429`s from the model provider,
+so a lead persisted from this build would have carried a null brief; and the
+buyer's goodbye did not end the call - two `farewell_candidate` events fired
+without the farewell firing, and the call ended on the hang-up path instead.
 
 ### The pre-demo check
 
