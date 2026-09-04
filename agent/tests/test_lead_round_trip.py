@@ -405,3 +405,76 @@ async def test_an_internal_failure_is_never_reported_as_a_missing_lead(client):
     )
     assert absent.status_code == 404, absent.text
     assert "no such lead" in absent.text
+
+
+# -- every route that returns a sealed field must open it ----------------
+
+ENVELOPE_KEYS = {"algorithm", "key_version", "nonce", "ciphertext"}
+
+
+def envelopes_in(value: Any, path: str = "$") -> list[str]:
+    """Every sealed envelope left in a response body, by path."""
+    found = []
+    if isinstance(value, dict):
+        if ENVELOPE_KEYS <= set(value):
+            found.append(path)
+        for key, item in value.items():
+            found += envelopes_in(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found += envelopes_in(item, f"{path}[{index}]")
+    return found
+
+
+async def test_the_decisions_list_route_returns_a_noted_decision(client):
+    """It 500s. `get_decisions` hands the sealed note - raw bytes inside a
+    composite - straight to the JSON encoder, which raises
+    `PydanticSerializationError: invalid utf-8 sequence`.
+
+    It only ever worked because no note had ever been sealed. The unsealed-note
+    bug was hiding this one behind it, one step along the same path.
+    """
+    http, _, lead_id = client
+    assert (await decide(client, note=NOTE_TEXT)).status_code < 300
+
+    response = await http.get(f"/v1/leads/{lead_id}/decisions", headers=auth())
+    assert response.status_code == 200, response.text
+
+
+async def test_the_decisions_list_route_opens_the_note(client):
+    """The same helper as the detail route, or the two drift the way the
+    writer and reader drifted over `turns.{i}`."""
+    http, _, lead_id = client
+    assert (await decide(client, note=NOTE_TEXT)).status_code < 300
+
+    response = await http.get(f"/v1/leads/{lead_id}/decisions", headers=auth())
+    assert response.status_code == 200, response.text
+    (decision,) = response.json()
+    assert decision["note_error"] is None
+    assert NOTE_TEXT in str(decision["note"])
+
+
+async def test_no_lead_route_hands_back_a_sealed_envelope(client):
+    """The generalisation, over a lead that has one of everything sealed.
+
+    Three bugs in a row have been an envelope reaching a consumer that could
+    not open it - the wrong AAD on turns, an unsealed note, and now a sealed
+    note serialised raw. What they share is that a route returned a field it
+    never opened, so this asks every lead route the same question at once
+    rather than waiting for the next one to be found in production.
+    """
+    http, _, lead_id = client
+    assert (await decide(client, note=NOTE_TEXT)).status_code < 300
+
+    leaked = {}
+    for route in (
+        "/v1/leads",
+        f"/v1/leads/{lead_id}",
+        f"/v1/leads/{lead_id}/decisions",
+    ):
+        response = await http.get(route, headers=auth())
+        assert response.status_code == 200, f"{route}: {response.text}"
+        found = envelopes_in(response.json())
+        if found:
+            leaked[route] = found
+    assert leaked == {}
