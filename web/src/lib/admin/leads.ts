@@ -32,6 +32,20 @@ export type CallEndReason =
   | 'buyer_left'
   | 'session_error'
 
+/**
+ * Mirrors `ContactStatus` in agent/src/ambassador/schemas.py.
+ *
+ * The list does not show these four - docs/10-:316 asks it for contact-present,
+ * one bit - but `leads.server.ts` DERIVES that bit by comparing the API's
+ * `contact_status` against `'captured'`, and that comparison was written
+ * against a field typed `string`. Nothing checked the literal, so renaming this
+ * member upstream would have left the compiler happy while every lead silently
+ * read as having no contact. Typing the set is what makes the comparison a
+ * checked one; the parity guard is in the agent suite, where the widen happens
+ * (tests/test_call_end_reason.py).
+ */
+export type ContactStatus = 'not_asked' | 'captured' | 'declined' | 'unconfirmed'
+
 export type AnalysisStatus = 'pending' | 'complete' | 'failed'
 
 export type ScoreSignal =
