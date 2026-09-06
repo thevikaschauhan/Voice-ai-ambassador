@@ -73,6 +73,7 @@ from ambassador.farewell import (
     read_farewell,
 )
 from ambassador.guardrails.prohibited import languages_covered, load_patterns
+from ambassador.guardrails.vocative import VocativeContext
 from ambassador.knowledge import KnowledgeContext
 from ambassador.schemas import ContactCapture, KnowledgeUse, LeadSnapshot
 from ambassador.inventory import (
@@ -116,7 +117,13 @@ from .disclosure import load_disclosures, resolve_opening
 from .events import EventLog, TurnTracker, _now_iso
 from .retrieval import KnowledgeRetriever, repository_when_ready
 from .events_bridge import EventsBridge, bridge_from_env
-from .interception import FALLBACK_COPY, SentenceGuard, _Sink, guarded_stream
+from .interception import (
+    FALLBACK_COPY,
+    SentenceGuard,
+    _Sink,
+    default_vocative_context,
+    guarded_stream,
+)
 from .levels import apply_gain, gain_for
 from .logmask import install_vendor_log_mask
 from .analysis import Ask, analysis_ask, finalise_analysis
@@ -303,6 +310,7 @@ class AmbassadorAgent(Agent):
             patterns=patterns,
             forms=load_spoken_forms(),
             mode=settings.guardrail_mode,
+            vocatives=self._buyer_vocatives,
         )
         # ADR-011's terminal lines, composed ONCE, here, in front of whoever
         # started the process.
@@ -1123,6 +1131,21 @@ class AmbassadorAgent(Agent):
         return self._fixed_lines.get(
             key, self._confirmations.line(self._settings.language, key)
         )
+
+    def _buyer_vocatives(self) -> VocativeContext:
+        """Validator 5's legitimate-name set, read fresh for every sentence.
+
+        A PROVIDER rather than a value because the buyer's name arrives
+        MID-CALL: a context built at session start would still be refusing the
+        buyer their own name on the last turn of the call. The contact capture
+        is the only component that learns a name, so with no capture wired the
+        set is our own vocabulary alone - which is the state the 08:32Z call
+        was in when it said "You are welcome, Jim."
+        """
+        base = default_vocative_context()
+        if self._contact is None:
+            return base
+        return base.with_names(self._contact.names_given)
 
     def _contact_turn(self, tracker: TurnTracker, *, closing: bool) -> _OwedTurn | None:
         """The contact ask, its read-back, or the line that closes the call.

@@ -27,6 +27,7 @@ quietly repair anything.
 from __future__ import annotations
 
 import time
+from functools import lru_cache
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
@@ -35,6 +36,7 @@ from livekit.agents.voice.io import FlushSentinel
 
 from ambassador.guardrails.pipeline import process_sentence
 from ambassador.guardrails.prohibited import ProhibitedPattern
+from ambassador.guardrails.vocative import VocativeContext, load_vocative_context
 from ambassador.schemas import (
     AllowedFigures,
     GuardrailViolation,
@@ -82,6 +84,18 @@ class GuardDecision:
     elapsed_ms: float
 
 
+@lru_cache(maxsize=1)
+def default_vocative_context() -> VocativeContext:
+    """Our own vocabulary and no buyer name, read once per process.
+
+    That is the correct default for a call that has asked nobody for anything,
+    which is every call until the buyer answers the contact ask - and it is the
+    state the 08:32Z call was in when it said "You are welcome, Jim." A session
+    that knows the buyer's name passes a provider instead (`SentenceGuard`).
+    """
+    return load_vocative_context()
+
+
 class SentenceGuard:
     """Binds the core pipeline to one session's language, inventory and mode."""
 
@@ -93,12 +107,24 @@ class SentenceGuard:
         patterns: list[ProhibitedPattern],
         forms: SpokenForms,
         mode: str = "enforce",
+        vocatives: Callable[[], VocativeContext] | None = None,
     ) -> None:
         self.language = language
         self.allowed = allowed
         self.patterns = patterns
         self.forms = forms
         self.mode = mode
+        # A PROVIDER rather than a value: the buyer's name arrives mid-call
+        # from the contact capture, and a guard built at session start would
+        # otherwise still be refusing it at the end. None is the inventory-only
+        # default, which is the strict direction - it can produce a refusal to
+        # regenerate, never a name spoken that nobody gave.
+        self.vocatives = vocatives
+
+    def _vocative_context(self) -> VocativeContext:
+        return (
+            default_vocative_context() if self.vocatives is None else self.vocatives()
+        )
 
     def with_allowed(self, allowed: AllowedFigures) -> "SentenceGuard":
         """The same guard, checking against a different figure set.
@@ -114,12 +140,18 @@ class SentenceGuard:
             patterns=self.patterns,
             forms=self.forms,
             mode=self.mode,
+            vocatives=self.vocatives,
         )
 
     def check(self, raw: str) -> GuardDecision:
         started = time.perf_counter()
         result = process_sentence(
-            raw, self.language, self.allowed, self.patterns, self.forms
+            raw,
+            self.language,
+            self.allowed,
+            self.patterns,
+            self.forms,
+            self._vocative_context(),
         )
         elapsed_ms = (time.perf_counter() - started) * 1000
 
@@ -138,7 +170,12 @@ class SentenceGuard:
         """Route composed speech through the same single public path, so the
         bridge and fallback are held to the invariant they exist to uphold."""
         result = process_sentence(
-            text, self.language, self.allowed, self.patterns, self.forms
+            text,
+            self.language,
+            self.allowed,
+            self.patterns,
+            self.forms,
+            self._vocative_context(),
         )
         if isinstance(result, SpeakableText):
             return result.text

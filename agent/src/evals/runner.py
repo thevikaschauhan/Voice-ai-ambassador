@@ -78,6 +78,7 @@ from ambassador.schemas import (
     Project,
     SpeakableText,
 )
+from ambassador.guardrails.vocative import VocativeContext, load_vocative_context
 from ambassador.sentences import split_sentences
 from ambassador.verbalise import SpokenForms, load_spoken_forms
 
@@ -104,6 +105,10 @@ class Harness:
     fallbacks: FallbackCopy
     ambassadors: Ambassadors
     inventory_block: str
+    # The harness has no contact capture, so no buyer name is ever known here -
+    # which is the state validator 5 exists for, and the state every real call
+    # is in until the buyer answers the contact ask.
+    vocatives: VocativeContext
 
     @classmethod
     def load(cls) -> Harness:
@@ -118,6 +123,7 @@ class Harness:
             fallbacks=load_fallback_copy(),
             ambassadors=load_ambassadors(),
             inventory_block=serialise_for_prompt(projects),
+            vocatives=load_vocative_context(),
         )
 
     def policy_runs(self, language: Language) -> bool:
@@ -432,7 +438,12 @@ def _speak(
 
     for sentence in sentences:
         result = process_sentence(
-            sentence, language, harness.allowed, harness.patterns, harness.forms
+            sentence,
+            language,
+            harness.allowed,
+            harness.patterns,
+            harness.forms,
+            harness.vocatives,
         )
         if isinstance(result, SpeakableText):
             segments.append(
@@ -478,7 +489,12 @@ def _speak(
             # inside the branch rather than above it.
             reasons.append(f"composed fallback: guardrail (turn {turn_index})")
         composed = process_sentence(
-            copy, language, harness.allowed, harness.patterns, harness.forms
+            copy,
+            language,
+            harness.allowed,
+            harness.patterns,
+            harness.forms,
+            harness.vocatives,
         )
         if not isinstance(composed, SpeakableText):
             # Composed copy that fails our own guardrails is a defect in the
