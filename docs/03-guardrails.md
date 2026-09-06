@@ -124,6 +124,34 @@ The bridge is **read-only**: after the token line it never reads from the socket
 
 It is **off unless `AMBASSADOR_BRIDGE_HANDSHAKE` names a path**, and that same variable is what tells the consumer where to connect, so an enabled bridge always has a reader that was told about it. A listening socket carrying buyer transcripts is not something to have on by default.
 
+## Validator 5 - invented personal details
+
+Added after a live call. On 2026-09-04 at 08:32Z the ambassador closed a turn with:
+
+> You are welcome, Jim.
+
+The buyer confirmed they never gave a name. Nothing in the pipeline could see it: validator 1 inspects figures and validator 2 inspects claims, and a name is neither, so an invented fact about the buyer went to synthesis unexamined. It is the same class of failure as an invented price, and worse in one respect - it sounds like familiarity, and a buyer called by the wrong name knows immediately that nobody is listening.
+
+**The rule is positional, not a name list.** There is no list of personal names worth having: the model can invent any word, so a list catches only the inventions somebody already thought of. What is checkable is the shape of direct address, and the small set of names that are legitimate in that slot.
+
+Three shapes fire, all in `ambassador/guardrails/vocative.py`:
+
+| Shape | Example | Licensed by |
+|---|---|---|
+| Address word then a name | "Hi Jim", "Thanks Jim." | the address word itself |
+| A name then a comma, opening the sentence | "Jim, the payment plan runs over three years." | the position |
+| A comma then a name, closing the sentence | "That is your best option, Jim." | a second-person word or an address word elsewhere in the sentence |
+
+The third needs that licence and the others do not, because English puts places at the end of a sentence and names at the front of one. Without it, "It is in Business Bay, Dubai." reads as an address to somebody called Dubai, and refusing that would refuse most of the product.
+
+**Legitimate names** are the buyer's own (from the contact capture - `ContactPolicy.names_given`, which counts a name the buyer has said even while the phone read-back is still outstanding), the ambassadors' own in every language, the inventory's vocabulary (project names, areas, cities), and forms of address such as "sir" or "madam". An ALL-CAPS token is treated as an acronym rather than a name: "AED" in a vocative slot is a transcription artefact.
+
+**Outcome: block, and regenerate.** Consistent with validators 1 and 2 - the sentence never becomes `SpeakableText`, the model is asked again with the violation named (the offending word is in the detail, because "a name you invented" is not actionable without it), and the composed fallback stands behind that. A false positive here costs a regeneration, not a call, which is why this validator can be strict where the farewell detector cannot.
+
+**Prompt instruction as well as guardrail.** Constraint 11 of the ambassador prompt tells the model never to address the buyer by a name it has not been given. The instruction stops most of it happening and costs one line; the validator is what makes the claim true.
+
+**English only.** The tables in `data/vocatives.yaml` are per-language and `ar`/`hi` are empty until a native reviewer writes them (AGENTS.md - never write copy for a language you do not speak; the reviewer packet asks for them in section 5c). Empty is safe in the direction that matters: with no address vocabulary the validator never fires and the sentence goes through exactly as it does today, whereas a machine-guessed Arabic vocative rule would refuse real Arabic sentences, and a refused sentence is one the buyer never hears.
+
 ## Failure handling
 
 Every path ends in composed, localised speech and a route to a human. The buyer never hears silence, an error tone, or an error message. Every failure emits an event.

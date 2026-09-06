@@ -396,3 +396,60 @@ def test_the_composed_copy_tracks_the_data_file():
     )
     assert BRIDGE_COPY == {k: v.strip() for k, v in raw["bridge"].items()}
     assert FALLBACK_COPY == {k: v.strip() for k, v in raw["fallback"].items()}
+
+
+# --- validator 5: the name the buyer never gave ----------------------------
+#
+# The pure rule is covered in `test_invented_vocative.py`. What is covered HERE
+# is the wiring, which is where the 08:32Z defect actually lived: a validator
+# nothing calls, or one that never learns the buyer's name, is the same bug in
+# a different place.
+
+
+def test_the_guard_refuses_a_name_the_buyer_never_gave(allowed, patterns, forms):
+    """ "You are welcome, Jim." through the real guard, in the state the 08:32Z
+    call was in: nothing asked, nothing given."""
+    guard = SentenceGuard(
+        language="en", allowed=allowed, patterns=patterns, forms=forms
+    )
+    decision = guard.check("You are welcome, Jim.")
+    assert decision.violation is not None
+    assert decision.violation.validator == "invented_vocative"
+    assert decision.spoken is None
+
+
+def test_the_guard_speaks_the_name_once_the_buyer_has_given_it(
+    allowed, patterns, forms
+):
+    """The same sentence, after a contact capture that learned the name. The
+    provider is read per sentence precisely so this changes mid-call."""
+    from ambassador.contact import ContactPolicy, load_contact_copy
+    from adapter.interception import default_vocative_context
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    guard = SentenceGuard(
+        language="en",
+        allowed=allowed,
+        patterns=patterns,
+        forms=forms,
+        vocatives=lambda: default_vocative_context().with_names(policy.names_given),
+    )
+    assert guard.check("You are welcome, Jim.").violation is not None
+
+    policy.on_farewell(4)
+    policy.observe_reply("Jim, jim@example.com", 5)
+
+    after = guard.check("You are welcome, Jim.")
+    assert after.violation is None, after.violation
+    assert after.spoken == "You are welcome, Jim."
+
+
+def test_composed_copy_is_held_to_the_same_rule(allowed, patterns, forms):
+    """`compose` is the other door into the pipeline (ADR-011's fixed lines),
+    and a validator that only guards the streaming path is half a guardrail."""
+    guard = SentenceGuard(
+        language="en", allowed=allowed, patterns=patterns, forms=forms
+    )
+    with pytest.raises(AssertionError):
+        guard.compose("Goodbye, Jim.")
+    assert guard.compose("Goodbye.") == "Goodbye."
