@@ -15,7 +15,7 @@ ProjectStatus = Literal["selling", "branded_enquiry", "sold_out"]
 
 FigureKind = Literal["amount", "percent", "year", "count"]
 
-ValidatorName = Literal["numeric_claims", "prohibited_language"]
+ValidatorName = Literal["numeric_claims", "prohibited_language", "invented_vocative"]
 
 
 # --- Inventory -----------------------------------------------------------

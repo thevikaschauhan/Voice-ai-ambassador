@@ -51,6 +51,23 @@ def resolve_project_id(value: str, projects: list[Project] | None = None) -> str
     return None
 
 
+def vocabulary(projects: list[Project]) -> frozenset[str]:
+    """Every word the inventory itself uses for a project or a place.
+
+    Lower-cased words rather than whole names, because a sentence uses them
+    apart: "Skyrise" for `Binghatti Skyrise`, "Dubai" out of `Dubai Maritime
+    City`. It exists for the invented-name validator (docs/03- validator 5),
+    which has to tell a person from a tower in the one position where English
+    puts both - after a comma - and the inventory is the only place that knows
+    our own vocabulary.
+    """
+    words: set[str] = set()
+    for project in projects:
+        for value in (project.id, project.name, project.area):
+            words.update(part for part in re.split(r"[^\w]+", value.lower()) if part)
+    return frozenset(words)
+
+
 def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
 
