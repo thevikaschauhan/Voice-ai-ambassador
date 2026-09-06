@@ -241,7 +241,7 @@ def test_an_unnamed_prompt_is_byte_identical_to_the_one_that_shipped():
 
 @pytest.mark.parametrize("language", get_args(Language))
 def test_a_name_is_not_a_figure_so_the_guardrail_neither_blocks_nor_checks_it(
-    language: Language, allowed, patterns, forms
+    language: Language, allowed, patterns, forms, vocatives
 ):
     """Stated as a test because a reader might assume the numeric guardrail
     covers the name. It does not, and it should not: a name carries no digits,
@@ -258,6 +258,7 @@ def test_a_name_is_not_a_figure_so_the_guardrail_neither_blocks_nor_checks_it(
         allowed=allowed,
         patterns=patterns,
         forms=forms,
+        vocatives=vocatives,
     )
     assert not isinstance(result, GuardrailViolation), result
     assert "Jane" in result.text

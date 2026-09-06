@@ -83,6 +83,7 @@ NATIVE_COPY_SECTIONS: dict[str, str] = {
     "lexicon.yaml": "## 4. How these names should sound",
     "ambassadors.yaml": "## 4b. What the ambassador is called",
     "prohibited-patterns.yaml": "## 5. Things the agent must never be allowed to say",
+    "vocatives.yaml": "## 5c. Being spoken to by name",
 }
 
 # Described, not quoted. A reviewer cannot read a regular expression, and a
@@ -946,6 +947,62 @@ def main(language: str) -> None:
         w(bullet("Reads naturally to a buyer, or here is what it should say:"))
         w("")
 
+    w("## 5c. Being spoken to by name")
+    w("")
+    w(
+        "On a live call in English the agent thanked the buyer and called them "
+        "Jim. The buyer had never given a name; the model invented one. We now "
+        "refuse any sentence that addresses the buyer by a name they have not "
+        "given us, and to do that in English we needed three small lists of "
+        "words - not a list of names, which would be endless, but the words "
+        "that make a sentence a sentence spoken TO someone."
+    )
+    w("")
+    w(
+        f"None of it exists in {name}. Until it does the check never runs in "
+        f"{name}, and a {name} sentence with an invented name in it is spoken "
+        "exactly as it is today. We have deliberately not guessed: a guessed "
+        "rule would refuse real sentences, and a refused sentence is one the "
+        "buyer never hears."
+    )
+    w("")
+    w(
+        "**Greeting and thanks words.** The words that, when a name follows "
+        'them, mean the name is the person being spoken to - English "hi", '
+        '"hello", "thanks", "thank you", "sorry", "welcome", "goodbye", '
+        '"please", "yes", "no".'
+    )
+    w("")
+    w(bullet(f"{name}:"))
+    w("")
+    w(
+        '**Words for you.** The second-person words - English "you", '
+        '"your", "yours". A sentence carrying one of these is being spoken to '
+        'somebody, which is what tells a name apart from a place: "It is in '
+        'Business Bay, Dubai" names no person, and refusing it would refuse '
+        "most of what we sell."
+    )
+    w("")
+    w(bullet(f"{name}:"))
+    w("")
+    w(
+        "**Polite ways to address someone who is not named.** English "
+        '"sir", "madam", "doctor". These sit exactly where a name would and '
+        "invent nothing, so we have to know them or we would refuse them."
+    )
+    w("")
+    w(bullet(f"{name}:"))
+    w("")
+    w(
+        "**Words that open a sentence before a comma.** English puts an adverb "
+        'in exactly the slot a name goes in - "Actually, the booking amount is '
+        '20 per cent." is not being said to somebody called Actually. In '
+        "English we found these by checking every reply the agent has on "
+        f"record. Which {name} words open a sentence that way?"
+    )
+    w("")
+    w(bullet(f"{name}:"))
+    w("")
     w("## 6. Recordings (20 minutes, at the end)")
     w("")
     w(DIALECT_NOTE[language])
