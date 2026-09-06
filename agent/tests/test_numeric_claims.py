@@ -128,14 +128,16 @@ BYPASSES = [
 
 @pytest.mark.parametrize(("language", "sentence", "why"), BYPASSES)
 def test_a_reproduced_bypass_is_now_blocked(
-    language, sentence, why, allowed, patterns, forms
+    language, sentence, why, allowed, patterns, forms, vocatives
 ):
-    result = process_sentence(sentence, language, allowed, patterns, forms)
+    result = process_sentence(sentence, language, allowed, patterns, forms, vocatives)
     assert isinstance(result, GuardrailViolation), f"{sentence!r}: {why}"
     assert result.validator == "numeric_claims"
 
 
-def test_the_real_sentences_around_those_bypasses_still_pass(allowed, patterns, forms):
+def test_the_real_sentences_around_those_bypasses_still_pass(
+    allowed, patterns, forms, vocatives
+):
     # The fixes are worthless if they block correct replies - a validator that
     # blocks correct output gets switched off by the first engineer who hits it.
     for language, sentence in [
@@ -147,7 +149,9 @@ def test_the_real_sentences_around_those_bypasses_still_pass(allowed, patterns, 
         ("en", "Properties above AED 2,000,000 may qualify; call 80015."),
         ("ar", "يبدأ السعر من ٩٨٥٬٠٠٠ درهم"),
     ]:
-        result = process_sentence(sentence, language, allowed, patterns, forms)
+        result = process_sentence(
+            sentence, language, allowed, patterns, forms, vocatives
+        )
         assert not isinstance(result, GuardrailViolation), sentence
 
 

@@ -51,7 +51,7 @@ def _constraints() -> dict[int, str]:
 def test_the_constraints_parse():
     # Everything below is vacuous if the split silently returns nothing.
     constraints = _constraints()
-    assert set(constraints) == set(range(1, 11))
+    assert set(constraints) == set(range(1, 12))
 
 
 def test_every_escalating_constraint_names_the_tool_in_an_imperative():

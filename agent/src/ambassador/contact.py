@@ -178,6 +178,20 @@ class ContactPolicy:
     def state(self) -> ContactCapture:
         return self._state
 
+    @property
+    def names_given(self) -> frozenset[str]:
+        """Every name the buyer has actually said, settled or not.
+
+        A pending name counts. It becomes pending the moment the buyer says it,
+        and the read-back that is still outstanding is about the NUMBER - so
+        treating the name as unknown until the digits are confirmed would let
+        the invented-name validator (docs/03- validator 5) refuse the buyer
+        their own name for a turn.
+        """
+        return frozenset(
+            name for name in (self._state.name, self._pending_name) if name
+        )
+
     def owes_request(self) -> bool:
         """One ask, and only where there is a line to say it in."""
         return not self._asked and self._copy.enabled(self._language)

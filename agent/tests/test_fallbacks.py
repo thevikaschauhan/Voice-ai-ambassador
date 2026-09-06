@@ -54,7 +54,7 @@ def test_every_language_carries_both_recoveries(copy):
 
 
 def test_every_language_composes_through_the_guardrail_pipeline(
-    copy, allowed, patterns, forms
+    copy, allowed, patterns, forms, vocatives
 ):
     """The recovery copy is held to the invariant it exists to uphold.
 
@@ -67,7 +67,7 @@ def test_every_language_composes_through_the_guardrail_pipeline(
     for language in LANGUAGES:
         for kind, table in (("bridge", copy.bridge), ("fallback", copy.fallback)):
             result = process_sentence(
-                table[language], language, allowed, patterns, forms
+                table[language], language, allowed, patterns, forms, vocatives
             )
             assert isinstance(result, SpeakableText), (
                 f"{kind} copy for {language!r} fails our own guardrails: {result}"

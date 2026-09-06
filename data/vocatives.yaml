@@ -1,0 +1,172 @@
+# Direct address: how the agent can tell it is speaking TO someone by name.
+#
+# The 08:32Z call ended with "You are welcome, Jim." to a buyer who never gave
+# a name (docs/03- validator 5). A name is not a figure and not a claim, so
+# neither existing validator could see it.
+#
+# THERE IS NO LIST OF PERSONAL NAMES HERE, and there should not be: the model
+# can invent any word, so a list would only ever catch the inventions somebody
+# already thought of. What this file carries is the vocabulary of ADDRESS - the
+# words that make a sentence a sentence spoken to someone - and the words that
+# look like a vocative and are not a personal name.
+#
+#   address_words     words that mark the following capitalised token as the
+#                     person being addressed ("Hi Jim", "Thanks Jim"), and
+#                     which also license a comma-vocative at either end of the
+#                     sentence. Without one of these or a second-person
+#                     pronoun, "It is in Business Bay, Dubai" would read as an
+#                     address to somebody called Dubai.
+#   second_person     the other licence, and the one the live sentence used.
+#   forms_of_address  capitalised words in a vocative slot that are not
+#                     personal names. "Yes, sir." invents nothing.
+#   sentence_openers  the words English puts at the front of a sentence with a
+#                     comma after them, which is the same slot a name occupies.
+#                     "Actually, the booking amount is 20 per cent." is not an
+#                     address to a person called Actually. This is a CLOSED
+#                     class of function words - unlike personal names, which
+#                     are open, which is why a list works here and would not
+#                     work there. Both entries below were found by running the
+#                     validator over every recorded model reply in evals/cases:
+#                     2 false positives in 102 sentences, both this shape.
+#
+# Quote every entry: bare no/yes/on/off load as YAML 1.1 BOOLEANS, the trap
+# `currencies.yaml`, `recognition.yaml` and `farewells.yaml` all walked into,
+# and a coerced boolean is a word that can never match. The loader refuses a
+# non-string rather than leaving a dead entry in a table.
+
+address_words:
+  en:
+    - "hi"
+    - "hello"
+    - "hey"
+    - "thanks"
+    - "thank"
+    - "welcome"
+    - "goodbye"
+    - "bye"
+    - "sorry"
+    - "please"
+    - "sure"
+    - "certainly"
+    - "absolutely"
+    - "yes"
+    - "no"
+    - "ok"
+    - "okay"
+    - "congratulations"
+
+  # VERIFY: native-authored. EMPTY, and empty is safe in the direction that
+  # matters: with no address vocabulary the validator never fires in Arabic and
+  # the sentence goes through exactly as it does today. A machine-guessed
+  # Arabic vocative rule would REFUSE real Arabic sentences, and a refused
+  # sentence is one the buyer never hears. Do not translate the English.
+  ar: []
+
+  # VERIFY: native-authored Hindi. Same rule, same reason.
+  hi: []
+
+second_person:
+  en:
+    - "you"
+    - "your"
+    - "yours"
+    - "you're"
+    - "youre"
+  ar: []
+  hi: []
+
+forms_of_address:
+  en:
+    - "sir"
+    - "madam"
+    - "madame"
+    - "maam"
+    - "mister"
+    - "mr"
+    - "mrs"
+    - "ms"
+    - "miss"
+    - "doctor"
+    - "dr"
+    - "professor"
+    - "sheikh"
+    - "sheikha"
+    - "everyone"
+    - "everybody"
+  ar: []
+  hi: []
+
+# The only stop-list in this file, and it is a list of ORDINARY WORDS rather
+# than of names. A leading capitalised word with a comma after it is a vocative
+# in English often enough to be worth checking ("Jim, the payment plan runs
+# over three years.") and an adverbial often enough that checking without this
+# table refuses real replies. Measured, not guessed: the validator run over
+# every recorded model reply in `evals/cases` flagged "Actually," and "Noted,"
+# and nothing else.
+#
+# A word missing here costs a REGENERATION, not a call (docs/03- validator 5),
+# so the list can grow as the model surprises us. Add the word, add the
+# sentence to `test_invented_vocative.py`.
+sentence_openers:
+  en:
+    - "actually"
+    - "additionally"
+    - "again"
+    - "also"
+    - "alternatively"
+    - "apologies"
+    - "broadly"
+    - "currently"
+    - "even"
+    - "finally"
+    - "first"
+    - "firstly"
+    - "fortunately"
+    - "frankly"
+    - "generally"
+    - "granted"
+    - "here"
+    - "honestly"
+    - "however"
+    - "ideally"
+    - "indeed"
+    - "instead"
+    - "meanwhile"
+    - "noted"
+    - "normally"
+    - "now"
+    - "otherwise"
+    - "overall"
+    - "personally"
+    - "practically"
+    - "realistically"
+    - "regardless"
+    - "right"
+    - "second"
+    - "secondly"
+    - "similarly"
+    - "so"
+    - "specifically"
+    - "still"
+    - "then"
+    - "there"
+    - "therefore"
+    - "thereafter"
+    - "third"
+    - "thirdly"
+    - "though"
+    - "thus"
+    - "today"
+    - "tomorrow"
+    - "typically"
+    - "understood"
+    - "unfortunately"
+    - "usually"
+    - "well"
+    - "yesterday"
+
+  # VERIFY: native-authored. Empty, and unused until `address_words` or
+  # `second_person` is filled in - with no address vocabulary the validator
+  # never fires in this language, so a stop-list has nothing to stop.
+  ar: []
+  hi: []
