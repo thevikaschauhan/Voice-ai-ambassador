@@ -1,6 +1,6 @@
 # Eval report - Binghatti voice ambassador
 
-Generated 2026-09-06 15:22 UTC · mode **offline** · model `fixtures (no model called)` · ambassador prompt `1aa83c54d475`
+Generated 2026-09-06 15:28 UTC · mode **offline** · model `fixtures (no model called)` · ambassador prompt `1aa83c54d475`
 
 **Offline mode measures the pipeline, not the model.** Each case replays a model reply recorded or authored beside it and asks what the buyer actually heard. A pass here is the claim "given this reply, the guardrails, the recovery policy and verbalisation produce this speech" - which is the claim the system rests on, and the one that runs in CI with no keys and no spend. It is NOT a claim about how often the model behaves well; only a live run is.
 
