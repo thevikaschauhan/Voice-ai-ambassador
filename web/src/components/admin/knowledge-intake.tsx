@@ -6,6 +6,27 @@ import {
   MAX_UPLOAD_BYTES,
 } from '@/lib/admin/knowledge'
 
+/** The longest a derived title may be; the API caps `title` at 300. */
+const DERIVED_TITLE_MAX = 120
+
+/**
+ * A title for a document the reviewer did not name.
+ *
+ * There is always one available, which is why a missing Title is never a
+ * reason to refuse: an upload is named after its file and a paste after its
+ * first line. Both are what the reviewer would have typed, so deriving it
+ * removes a required field rather than inventing a fact.
+ */
+function derivedTitle(file: File | null, text: string): string {
+  if (file !== null) {
+    // The extension is how the file is stored, not what the document is
+    // called. Only a trailing one goes: "Q4 2026. plan.pdf" keeps its dots.
+    return file.name.replace(/\.[^.]+$/, '').trim().slice(0, DERIVED_TITLE_MAX)
+  }
+  const firstLine = text.split(/\r?\n/).find((line) => line.trim() !== '') ?? ''
+  return firstLine.trim().slice(0, DERIVED_TITLE_MAX)
+}
+
 /**
  * Adding a document: paste a paragraph, or upload a PDF, DOCX or TXT.
  *
@@ -18,6 +39,14 @@ import {
  * The size cap is enforced here AND in the API. The API's is the real gate -
  * this one exists so a reviewer is not asked to upload eight megabytes before
  * being told no, and so the limit can be said out loud beside the control.
+ *
+ * THE SUBMIT CONTROL IS ALWAYS PRESSABLE except while a request is in flight.
+ * It used to disable itself whenever a field was empty, and a reviewer who
+ * pasted a paragraph without typing a Title saw a faded grey label, no reason,
+ * and no request when they clicked it - which is what the human reported on
+ * 2026-09-07 as "there's no CTA to save it". A disabled button takes away the
+ * one thing they can press to find out what is wrong. Pressing it is the
+ * question; `submit` answers it in the status region.
  */
 export function KnowledgeIntake() {
   const [title, setTitle] = useState('')
@@ -57,6 +86,20 @@ export function KnowledgeIntake() {
   const submit = useCallback(async () => {
     if (file !== null && file.size > MAX_UPLOAD_BYTES) return
 
+    // Checked HERE rather than by disabling the control, because a disabled
+    // button takes away the only thing a reviewer can press to find out what
+    // is wrong. Pressing it is how they ask; this is the answer.
+    if (text.trim() === '' && file === null) {
+      setDone(null)
+      setProblem('Paste text or choose a file, then press Add document.')
+      return
+    }
+
+    // Never a reason to refuse: an upload is named after its file and a paste
+    // after its first line, so the reviewer always has a title whether or not
+    // they typed one.
+    const named = title.trim() === '' ? derivedTitle(file, text) : title.trim()
+
     setBusy(true)
     setProblem(null)
     setDone(null)
@@ -66,7 +109,7 @@ export function KnowledgeIntake() {
         // Multipart, so the bytes are not base64-inflated on the way to a
         // service that is going to parse them anyway.
         const form = new FormData()
-        form.set('title', title)
+        form.set('title', named)
         form.set('file', file)
         response = await fetch('/api/admin/knowledge/documents/upload', {
           method: 'POST',
@@ -76,7 +119,7 @@ export function KnowledgeIntake() {
         response = await fetch('/api/admin/knowledge/documents', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ source_type: 'paste', title, text }),
+          body: JSON.stringify({ source_type: 'paste', title: named, text }),
         })
       }
 
@@ -97,8 +140,6 @@ export function KnowledgeIntake() {
     }
   }, [file, text, title])
 
-  const empty = title.trim() === '' || (text.trim() === '' && file === null)
-
   return (
     <form
       className="flex flex-col gap-4 border border-ink-800 px-5 py-4"
@@ -110,7 +151,7 @@ export function KnowledgeIntake() {
     >
       <div className="flex flex-col gap-1.5">
         <label className="text-[11px] tracking-[0.12em] text-ink-400 uppercase" htmlFor="doc-title">
-          Title
+          Title <span className="normal-case">(optional)</span>
         </label>
         <input
           id="doc-title"
@@ -154,8 +195,8 @@ export function KnowledgeIntake() {
 
       <button
         type="submit"
-        disabled={busy || empty}
-        className="w-fit border border-ink-600 px-5 py-2.5 text-[13px] text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
+        disabled={busy}
+        className="w-fit border border-brass-500/60 px-5 py-2.5 text-[13px] text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
       >
         {busy ? 'Adding' : 'Add document'}
       </button>
