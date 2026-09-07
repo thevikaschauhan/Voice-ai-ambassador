@@ -544,7 +544,7 @@ silence was a proxied `GET` sitting in admin-api's log with no counterpart in
 web's - a request that certainly passed through web and left no trace in it. A
 zero from an instrument never seen writing anything is not evidence of absence.
 
-Web now writes two JSON lines of its own, both scoped to the admin surface, and
+Web now writes three JSON lines of its own, all scoped to the admin surface, and
 they are told apart by `event`:
 
 - `web_request` - a request ARRIVED. Fields: `ts`, `level`, `event`, `method`,
@@ -553,13 +553,26 @@ they are told apart by `event`:
 - `admin_proxy` - a proxied call FINISHED. Fields: `ts`, `level`, `event`,
   `method`, `route`, `status`, `duration_ms`. Written by
   `src/lib/admin/proxy.ts`, the single chokepoint every `/api/admin/*` route
-  passes through.
+  passes through - which is to say, every call the BROWSER makes.
+- `admin_page_read` - a page's own read FINISHED. Same fields as `admin_proxy`.
+  Written by `src/lib/admin/read.ts`, the single chokepoint every server
+  component's read passes through.
 
-So one `/api/admin/*` call produces **two** lines, an arrival and an outcome;
-count them separately by `event`, not by adding them up. A page request produces
-only the arrival line, because a server component cannot see its own status.
+So a request produces **two** lines, an arrival and an outcome; count them
+separately by `event`, never by adding them up.
 
-Two properties of the `admin_proxy` line are worth knowing before you read one.
+**Why an outcome has two names.** An admin page does not fetch its own
+`/api/admin/*` route: `read.ts` calls the upstream module directly, because a
+page making an HTTP round trip to itself to reach a service it can already reach
+is a hop that can fail on its own. So a page read never passes `proxy()`, and
+`admin_proxy` counts **only what the browser asked for**. That boundary was
+invisible until the two logs disagreed: over one window web had 43 `web_request`
+and a single `admin_proxy` while admin-api had recorded about ten reads. The fix
+was a third event rather than a wider second one, so that a count of
+`admin_proxy` still means the same thing it meant before `admin_page_read`
+existed.
+
+Two properties of both outcome lines are worth knowing before you read one.
 `route` is a **key of the fixed `UPSTREAM_ROUTES` table** (`leads`, `lead`,
 `documents`, `documentUpload`, ...) and not a pathname, so it is drawn from a
 closed vocabulary and cannot carry a record id - which is a stronger guarantee
@@ -567,9 +580,12 @@ than stripping the query off `/api/admin/leads/<uuid>` and hoping the id is
 uninteresting. And `status` is what the caller was **actually answered with**,
 including web's own 401, 403, 502 and 503 refusals where no upstream call
 happened at all: "nothing reached the server" and "everything was refused at the
-door" are different diagnoses, and a success-only log makes them identical.
+door" are different diagnoses, and a success-only log makes them identical. Both
+emitters use that one vocabulary, so a filter over the log does not need to know
+which of them wrote a line. `admin_page_read` never carries 403, because a page
+read is not a mutation and the same-origin check does not apply to it.
 
-Neither line carries a header, a cookie, a session id, a body, a query string or
+No line carries a header, a cookie, a session id, a body, a query string or
 a client address. That is enforced structurally rather than by convention - the
 emitters in `src/lib/request-log.ts` take positional primitives, so there is no
 field for a caller to slip a cookie into - and asserted in
@@ -582,7 +598,7 @@ so a zero in web's log is evidence about `/admin` and about nothing else:
 
 | what was used | where the request is recorded |
 | --- | --- |
-| an `/admin` page | `web_request` on web |
+| an `/admin` page | `web_request` **and** `admin_page_read` on web (one read per server component that reads), plus the uvicorn access line on admin-api |
 | `/api/admin/*` | `web_request` **and** `admin_proxy` on web, plus the uvicorn access line on admin-api |
 | `/talk`, and the demo APIs it calls | **nothing on web** - the worker's event stream is the only record |
 
@@ -592,6 +608,14 @@ routes it calls (`/api/talk`, `/api/session/room`, `/api/session/stream`,
 a full call produce **no web line at all**. Read a demo call in the worker log,
 never in web's; a web zero says nothing about whether anyone called. Logging
 public page views is a separate decision and has not been taken.
+
+**Do not order events across web and admin-api by timestamp.** admin-api's lines
+have been observed arriving 6.4 to 9.5 seconds later than web's for the same
+request, on the same ingest clock, which is enough to make a caller look like it
+finished before the callee began. It is not Python buffering - the image sets
+`PYTHONUNBUFFERED` - and the mechanism is otherwise undetermined. Within one
+service the ordering is sound; across the two, use the `duration_ms` on web's
+outcome line rather than the gap between two logs.
 
 ### `web`: on `api/session/room`, the reason is the evidence
 
