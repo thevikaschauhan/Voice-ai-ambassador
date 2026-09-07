@@ -70,75 +70,97 @@ export function AdminShell({
   }, [code])
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-[440px] flex-col justify-center gap-6 px-6 py-10">
-      <header className="flex flex-col gap-1.5">
-        <Text as="h1" type="display-3">
-          Admin
-        </Text>
-        <Text as="p" display="block" color="secondary">
-          Leads and the ambassador&rsquo;s knowledge base.
-        </Text>
-      </header>
-
-      {configured ? (
-        <form
-          className="flex flex-col gap-3"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (busy) return
-            void signIn()
-          }}
-        >
+    // The surface, painted here for the reason in the note above. `min-h-dvh`
+    // rather than `min-h-screen`: on a phone the browser chrome makes 100vh
+    // taller than the visible viewport, which left the door scrollable by the
+    // height of the address bar with nothing below the fold to scroll to.
+    <main className="flex min-h-dvh flex-col items-center justify-center bg-[var(--color-background-body)] px-6 py-10">
+      <div className="flex w-full max-w-[380px] flex-col gap-8">
+        <header className="flex flex-col gap-3">
+          <Text as="h1" type="display-2">
+            Binghatti
+          </Text>
           {/*
-            Astryx's own field and button. The LABEL TEXT, the busy wording
-            and the button name are unchanged - the existing cases in
-            admin-shell.test.tsx assert every one of them, which is what
-            makes a restyle safe to do. `isDisabled={busy}` is the
-            silent-disabled rule from #150: never disabled for a missing
-            input, only while the request is in flight.
-
-            THE `id` IS GONE, and it was measured rather than assumed:
-            TextInput generates its own id (`_R_6avivb_` in the build I
-            checked) and silently drops one passed in, so `#admin-code` no
-            longer exists in the DOM. Nothing depends on it - the tests and
-            the label association both go through the accessible name, which
-            Astryx wires itself - but do not write a selector against that
-            id again.
+            The one accent mark on this screen. Brass is allowed to be a rule,
+            a focus ring or a current-state marker and never a fill (AGENTS.md,
+            and the direction for this pass); a hairline stub under the
+            wordmark is the smallest version of that. `aria-hidden` because it
+            is a drawn line, not a separator between two regions a reader
+            navigates.
           */}
-          <TextInput
-            type="password"
-            label="Access code"
-            value={code}
-            onChange={(next) => setCode(next)}
-            // MEASURED GAP in Astryx 0.5.3, not a preference: TextInput
-            // spreads `...rest` onto the input at runtime, so this reaches
-            // the DOM, but `TextInputProps` does not declare it. Dropping it
-            // instead would silently cost a password manager the ability to
-            // fill this field, which is a real regression on a sign-in
-            // screen; asserting it here keeps the affordance and confines
-            // the deviation to one line. DELETE THE CAST once upstream
-            // declares the prop - do not widen it to other props.
-            {...({ autoComplete: 'current-password' } as { autoComplete: string })}
-          />
-          <Button
-            type="submit"
-            label={busy ? 'Checking' : 'Sign in'}
-            variant="primary"
-            isDisabled={busy}
-          />
-        </form>
-      ) : (
-        <Banner
-          status="info"
-          title="This deployment has no admin access configured, so there is nothing to sign in to. An operator sets the access code on the service."
-        />
-      )}
+          <span aria-hidden="true" className="h-px w-10 bg-[var(--color-accent)]" />
+          <Text as="p" display="block" color="secondary">
+            Leads and the ambassador&rsquo;s knowledge base.
+          </Text>
+        </header>
 
-      {refusal !== null ? (
-        <p role="status">
-          <Text as="span">{refusal}</Text>
-        </p>
-      ) : null}
+        {/*
+          One quiet panel rather than a floating pill form. The card surface
+          and the hairline border are both theme roles, so this block carries
+          no colour of its own and follows a direction change without an edit.
+        */}
+        <div className="rounded-[var(--radius-container)] border border-[var(--color-border)] bg-[var(--color-background-card)] p-6">
+          {configured ? (
+            <form
+              className="flex flex-col gap-4"
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (busy) return
+                void signIn()
+              }}
+            >
+              {/*
+                Astryx's own field and button. The LABEL TEXT, the busy wording
+                and the button name are unchanged - the existing cases in
+                admin-shell.test.tsx assert every one of them, which is what
+                makes a restyle safe to do. `isDisabled={busy}` is the
+                silent-disabled rule from #150: never disabled for a missing
+                input, only while the request is in flight.
+
+                THE `id` IS GONE, and it was measured rather than assumed:
+                TextInput generates its own id (`_R_6avivb_` in the build I
+                checked) and silently drops one passed in, so `#admin-code` no
+                longer exists in the DOM. Nothing depends on it - the tests and
+                the label association both go through the accessible name,
+                which Astryx wires itself - but do not write a selector against
+                that id again.
+              */}
+              <TextInput
+                type="password"
+                label="Access code"
+                value={code}
+                onChange={(next) => setCode(next)}
+                // MEASURED GAP in Astryx 0.5.3, not a preference: TextInput
+                // spreads `...rest` onto the input at runtime, so this reaches
+                // the DOM, but `TextInputProps` does not declare it. Dropping
+                // it instead would silently cost a password manager the ability
+                // to fill this field, which is a real regression on a sign-in
+                // screen; asserting it here keeps the affordance and confines
+                // the deviation to one line. DELETE THE CAST once upstream
+                // declares the prop - do not widen it to other props.
+                {...({ autoComplete: 'current-password' } as { autoComplete: string })}
+              />
+              <Button
+                type="submit"
+                label={busy ? 'Checking' : 'Sign in'}
+                variant="primary"
+                isDisabled={busy}
+              />
+            </form>
+          ) : (
+            <Banner
+              status="info"
+              title="This deployment has no admin access configured, so there is nothing to sign in to. An operator sets the access code on the service."
+            />
+          )}
+
+          {refusal !== null ? (
+            <p role="status" className="pt-4">
+              <Text as="span">{refusal}</Text>
+            </p>
+          ) : null}
+        </div>
+      </div>
     </main>
   )
 }

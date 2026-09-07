@@ -274,6 +274,19 @@ jobs:
         working-directory: web
         run: npm run lint
 
+      # The theme is GENERATED: src/theme/binghatti.css and .js are compiled from
+      # binghatti.theme.ts by the Astryx CLI, and they are COMMITTED because
+      # <Theme> injects a <style> tag at hydration when a theme is unbuilt,
+      # which flashes the component overrides on every SSR page load. Committed
+      # output plus a source is two files that can disagree, and the way they
+      # disagree is silent: the app keeps rendering, from the STALE stylesheet,
+      # so an edit to the source appears to do nothing at all. --check
+      # recompiles and compares without writing, and exits non-zero when they
+      # have drifted. Cheap, and it runs before the build for that reason.
+      - name: Gate 10 - astryx theme build --check
+        working-directory: web
+        run: npm run theme:check
+
       # Last, because it is the slowest and the one the other three exist to
       # make cheap. The npm script pins NODE_ENV=production itself. That pin was
       # load-bearing under Next 15, where an inherited NODE_ENV=development made
@@ -281,6 +294,6 @@ jobs:
       # and fail on `<Html>`; under Next 16 the client chunks come out
       # byte-identical either way. The script is still what gets called, so the
       # build is one command here, in the image and on a laptop.
-      - name: Gate 10 - next build
+      - name: Gate 11 - next build
         working-directory: web
         run: npm run build

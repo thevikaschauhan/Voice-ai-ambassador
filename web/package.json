@@ -9,11 +9,15 @@
     "start": "NODE_ENV=production next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "theme:build": "astryx theme build src/theme/binghatti.theme.ts",
+    "theme:check": "astryx theme build src/theme/binghatti.theme.ts --check"
   },
   "dependencies": {
     "@astryxdesign/core": "0.5.3",
     "@astryxdesign/theme-neutral": "0.5.3",
+    "@fontsource/cormorant-garamond": "5.3.0",
+    "@fontsource/manrope": "5.3.0",
     "@stylexjs/stylex": "0.19.0",
     "livekit-client": "2.22.1",
     "livekit-server-sdk": "2.18.0",
