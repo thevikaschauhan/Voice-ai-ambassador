@@ -11,9 +11,15 @@
  * redeploys on `web/**` and `data/**` only (.railway/railway.ts
  * watchPatterns), so a merge that touches neither produces a SKIPPED
  * deployment and this sha stays at the previous commit. That is not a bug to
- * paper over: it is the true identity of the running image, and it is the same
- * identity the deploy sweeps report ("web 3bf4ec63 on 570f96a"). Wording it
- * "built from" makes the page and the sweeps agree.
+ * paper over: it is the true identity of the running image.
+ *
+ * WHICH HALF OF THE SWEEP LINE THIS IS. The deploy sweeps print
+ * "web <deployment id> on <commit>", so the footer's value is the SECOND
+ * token, the commit - not the first. An earlier version of this comment
+ * pointed at the deployment id, which would send the next reader comparing the
+ * footer against the wrong half of the line and concluding the page was
+ * lying. Wording the footer "built from" is what makes it and the sweep's
+ * commit agree.
  *
  * ABSENT IS A REAL ANSWER. Locally, in CI and in every test there is no such
  * variable, and the footer omits its line rather than showing "dev",

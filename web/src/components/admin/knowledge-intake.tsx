@@ -22,6 +22,20 @@ const DERIVED_TITLE_MAX = 120
  * first line. Both are what the reviewer would have typed, so deriving it
  * removes a required field rather than inventing a fact.
  */
+/**
+ * A file size a person can judge, beside its name.
+ *
+ * A reviewer who picked the wrong file usually knows it from the size, which
+ * is the one fact the browser's own "No file chosen" chrome gave them and the
+ * hidden input no longer can. Whole units and no decimals: this is a sanity
+ * check on a 12MB cap, not a measurement.
+ */
+function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${Math.round(bytes / (1024 * 1024))} MB`
+}
+
 function derivedTitle(file: File | null, text: string): string {
   if (file !== null) {
     // The extension is how the file is stored, not what the document is
@@ -196,15 +210,53 @@ export function KnowledgeIntake() {
           MAX_UPLOAD_BYTES / (1024 * 1024),
         )}MB. A scanned PDF has no extractable text and will fail: OCR is deferred.`}
       >
-        <input
-          id="doc-file"
-          aria-describedby="doc-file-desc"
-          ref={fileRef}
-          type="file"
-          accept={ACCEPTED_UPLOAD_EXTENSIONS}
-          onChange={(event) => check(event.target.files?.[0])}
-          className="text-[12px]"
-        />
+        {/*
+          THE HUMAN'S REQUEST, 2026-09-07: "Make choose file in the knowledge
+          screen as a CTA, currently it's just a text."
+
+          A native file input's button is SHADOW DOM and cannot be themed
+          cross-browser, so no amount of CSS on the input was going to make it
+          match "Add document". The fix is a wrapper: a real Astryx Button that
+          forwards its click to the input, and the input itself taken off the
+          screen. `sr-only` and not `display:none` or `hidden` - a display-none
+          input cannot be clicked programmatically in every browser, which
+          would break the very CTA that now drives it.
+
+          The input STAYS in the DOM with its id, its accept string and its
+          ref. See the note above about FileInput: the closure's cases pin that
+          accept string and drive this element with `userEvent.upload`, and the
+          form resets it through `fileRef.current.value`.
+        */}
+        <div data-file-field className="flex flex-wrap items-center gap-3">
+          <input
+            id="doc-file"
+            aria-describedby="doc-file-desc"
+            ref={fileRef}
+            type="file"
+            accept={ACCEPTED_UPLOAD_EXTENSIONS}
+            onChange={(event) => check(event.target.files?.[0])}
+            className="sr-only"
+          />
+          <Button
+            type="button"
+            label="Choose file"
+            // SECONDARY, so "Add document" stays the only primary: two
+            // primaries on one form is two things claiming to be the next
+            // step. This one prepares the submission, it does not make it.
+            variant="secondary"
+            onClick={() => fileRef.current?.click()}
+          />
+          {/*
+            What the browser's chrome used to say, in our own prose. Hiding the
+            input hid "No file chosen" with it, so the chosen file has to be
+            named here or a reviewer cannot tell whether the picker took.
+          */}
+          {file === null ? null : (
+            <Text as="span" type="supporting" color="secondary">
+              {`${file.name}, ${fileSize(file.size)}`}
+            </Text>
+          )}
+        </div>
       </Field>
 
       <Button

@@ -20,6 +20,26 @@ async function load(specifier: string): Promise<Record<string, never>> {
   return (await import(/* @vite-ignore */ specifier)) as Record<string, never>
 }
 
+/**
+ * Where a row click ended up.
+ *
+ * The list navigates by clicking the row's OWN link rather than by calling
+ * `router.push`, so there is no `next/navigation` to mock here - which is
+ * most of the point: the first draft used `useRouter` and instantly broke
+ * `admin-call-end-reason.test.tsx`, which renders this list and knows nothing
+ * about routers. Spying on the anchor prototype tests the real path with no
+ * module mock and no harness for any other file to inherit.
+ */
+function watchLinkClicks(): string[] {
+  const clicked: string[] = []
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    clicked.push(this.getAttribute('href') ?? '')
+  })
+  return clicked
+}
+
 async function renderList(rows: LeadSummaryRow[]) {
   const { LeadList } = (await load('@/components/admin/lead-list')) as unknown as {
     LeadList: (props: { rows: LeadSummaryRow[] }) => ReactElement
@@ -213,6 +233,185 @@ describe('the lead list', () => {
       screen.getByRole('heading', { name: /no calls have been recorded yet/i }),
     ).toBeInTheDocument()
     expect(screen.getByText(/including one that was cut short/i)).toBeInTheDocument()
+  })
+})
+
+/**
+ * The lead list a reviewer can actually work from (finding G4).
+ *
+ * WHAT G4 SAYS IS WRONG. Row identity is a session id - `sess-demo-a` - styled
+ * as an underlined link, and only that id is clickable, so the target for the
+ * one action every row has is a 90px word in a 1400px row. Three badge colour
+ * systems run at once (grey Unreviewed, red Rejected, yellow incomplete) next
+ * to a display-sized "61" beside a red "analysis failed" pill. The When column
+ * wraps to three lines. "none named" repeats down the Projects column. There is
+ * no count, no filter and no sort.
+ *
+ * TWO OF THESE CASES ENCODE A DEPARTURE FROM THE CARD, and it is a privacy
+ * boundary rather than a preference. E asks the primary cell for "contact name
+ * when captured, else the first named project, else Caller + short id". The
+ * list read CANNOT supply a contact name: `list_leads` names its columns
+ * precisely so it cannot leak one ("contact_name, contact_phone and
+ * contact_email are absent from that list. A list page cannot leak a
+ * transcript it was never handed"), docs/10 draws the same line, and E's own
+ * boundaries forbid an API change. Widening that projection to put a buyer's
+ * name on a list would undo what three layers of this codebase are written to
+ * prevent, so the fallback starts at the PROJECT tier. `contact_present` still
+ * shows whether a contact exists, which is the operational bit and not a value.
+ *
+ * ONE BADGE SYSTEM, and the rule is legible rather than aesthetic: neutral for
+ * a state nobody has to act on, brass for one that needs a reviewer, and flag
+ * red ONLY for a failure or a rejection. "Unreviewed" is the whole point of
+ * this screen, so it is the brass one; "Qualified" is finished work and goes
+ * quiet. Every badge keeps its WORD - a badge distinguished only by colour is
+ * a badge a colour-blind reviewer cannot read - so these cases assert the
+ * label AND the variant, not the colour.
+ */
+describe('the lead list a reviewer works from', () => {
+  /** The row element for a lead, found from its own primary text. */
+  function rowFor(text: string | RegExp): HTMLElement {
+    const cell = screen.getByText(text)
+    const row = cell.closest('tr')
+    expect(row).not.toBeNull()
+    return row as HTMLElement
+  }
+
+  it('navigates from a click anywhere in the row', async () => {
+    /*
+     * The behaviour the attribute above only describes. A click on a plain
+     * cell - the language, not the link - has to reach the same destination,
+     * because "the whole row is the target" is about the 1300px of row that
+     * is not the link.
+     */
+    await renderList(ROWS)
+    const clicked = watchLinkClicks()
+    const row = rowFor('binghatti-skyrise')
+    await userEvent.click(within(row).getByText('EN'))
+    expect(clicked).toEqual(['/admin/leads/lead-1'])
+  })
+
+  it('leaves a click on the link itself to the link', async () => {
+    // Otherwise the row handler fires alongside next/link's own navigation,
+    // and a future action button in a cell would navigate away when pressed.
+    await renderList(ROWS)
+    const clicked = watchLinkClicks()
+    const row = rowFor('binghatti-skyrise')
+    await userEvent.click(within(row).getByRole('link'))
+    // The link's own navigation handles it; the row must not click it AGAIN,
+    // which would be a second navigation for one press.
+    expect(clicked).toEqual([])
+  })
+
+  it('makes the whole row the link target, not just the session id', async () => {
+    /*
+     * Astryx's Table exposes no row-level href or click prop - measured, its
+     * TableProps has neither - but it does expose `transformBodyRow` through
+     * the plugin pipeline, which is the supported way to put props on each
+     * <tr>. So the row carries the destination and stays ONE link for a
+     * screen reader rather than becoming seven.
+     */
+    await renderList(ROWS)
+    const row = rowFor('binghatti-skyrise')
+    expect(row).toHaveAttribute('data-row-href', '/admin/leads/lead-1')
+    // The keyboard target stays a real link, so the row is reachable without
+    // a pointer and the destination is announced.
+    const link = within(row).getByRole('link')
+    expect(link).toHaveAttribute('href', '/admin/leads/lead-1')
+    // Exactly one: a row where every cell is a link makes a screen reader
+    // read the same destination seven times.
+    expect(within(row).getAllByRole('link')).toHaveLength(1)
+  })
+
+  it('names the row by its project when there is one, with the session id secondary', async () => {
+    await renderList(ROWS)
+    const row = rowFor('binghatti-skyrise')
+    // The primary cell leads with the project, and the session id is still
+    // present - a reviewer cross-referencing a log needs it - but demoted.
+    expect(within(row).getByText('sess-1')).toBeInTheDocument()
+    expect(within(row).getByRole('link')).toHaveAccessibleName(/binghatti-skyrise/)
+  })
+
+  it('falls back to a caller and the short id when no project was named', async () => {
+    /*
+     * The second tier, not the third: the contact-name tier the card asks for
+     * is not reachable from this projection (see the note above). "Caller"
+     * plus the short id is a human-readable handle that promises nothing the
+     * record does not carry - unlike a person icon or a name it does not have.
+     */
+    await renderList(ROWS)
+    const row = rowFor(/caller/i)
+    expect(within(row).getByText('sess-2')).toBeInTheDocument()
+    expect(within(row).getByRole('link')).toHaveAccessibleName(/caller lead-2/i)
+  })
+
+  it('marks the status needing a reviewer in brass and finished work in neutral', async () => {
+    await renderList(ROWS)
+    // Positive first: both badges are present with their words, so the
+    // variant assertions below are about badges that exist.
+    const unreviewed = screen.getByText('Unreviewed')
+    const rejected = screen.getByText('Rejected')
+    expect(unreviewed.closest('[data-variant]')).toHaveAttribute('data-variant', 'accent')
+    // Flag red is reserved for a failure or a rejection.
+    expect(rejected.closest('[data-variant]')).toHaveAttribute('data-variant', 'error')
+  })
+
+  it('stops using warning yellow for a state that is not a warning', async () => {
+    /*
+     * G4 counts "yellow incomplete" as one of the three colour systems, and
+     * G7 makes the same point about "not approved". A call the buyer cut short
+     * is a FACT about the call, not a problem a reviewer must fix, so it reads
+     * in the neutral scale and keeps its word.
+     */
+    await renderList(ROWS)
+    const incomplete = screen.getByText('incomplete')
+    expect(incomplete.closest('[data-variant]')).toHaveAttribute('data-variant', 'neutral')
+  })
+
+  it('keeps a captured contact in the neutral scale, since it is not an action', async () => {
+    await renderList(ROWS)
+    const captured = screen.getByText('captured')
+    expect(captured.closest('[data-variant]')).toHaveAttribute('data-variant', 'neutral')
+  })
+
+  it('says how many rows are being shown', async () => {
+    await renderList(ROWS)
+    expect(screen.getByText(/2 calls/i)).toBeInTheDocument()
+  })
+
+  it('counts one call in the singular', async () => {
+    // A count that reads "1 calls" is the kind of detail that makes a screen
+    // look unfinished, and it is one branch.
+    await renderList([ROWS[0]])
+    expect(screen.getByText(/^1 call$/i)).toBeInTheDocument()
+  })
+
+  it('puts when the call happened on one line, with the exact time in reach', async () => {
+    /*
+     * G4: "the When column wraps to three lines". A relative age is what a
+     * reviewer scans by; the exact timestamp stays on the element's title and
+     * in `dateTime`, so nothing machine-readable is lost.
+     */
+    await renderList(ROWS)
+    const when = screen.getByTitle('2026-09-03T09:00:00Z')
+    expect(when.tagName.toLowerCase()).toBe('time')
+    expect(when).toHaveAttribute('datetime', '2026-09-03T09:00:00Z')
+    // One line: the duration moves out of this column rather than stacking
+    // under the date.
+    expect(when.textContent).not.toMatch(/\n/)
+  })
+
+  it('shows the score as a compact numeral rather than a display heading', async () => {
+    // A score is data in a column, not a page title. `display-3` made "61"
+    // the largest thing on the row and G4 calls it "a huge 61".
+    await renderList(ROWS)
+    const score = screen.getByText('61')
+    expect(score).toHaveAttribute('data-score')
+    // `?? ''` because getAttribute returns NULL when the attribute is absent,
+    // and `.not.toMatch(null)` throws a TypeError instead of passing - so the
+    // stronger the implementation got (a plain span with no data-type at all),
+    // the more this assertion broke. Astryx's Text reflects its `type` here,
+    // so an empty string is the correct reading of "not a display heading".
+    expect(score.dataset.type ?? '').not.toMatch(/display/)
   })
 })
 

@@ -392,6 +392,236 @@ describe('the document list', () => {
   })
 })
 
+/**
+ * The knowledge list a reviewer can read (finding G6).
+ *
+ * G6's list half: "source shows raw 'PASTE'", "the Draft badge is stretched to
+ * the column width", "timestamps without zone", "no counts, filters or empty
+ * state". The intake half is PR F's.
+ *
+ * THE SOURCE IS THE ONE THAT MATTERS MOST, because it is the only cell on the
+ * row whose value is an ENUM NAME rather than a word. `source_type` is
+ * pdf|docx|txt|paste in the database, and the list rendered it uppercased -
+ * so a pasted paragraph read as "PASTE", which is a database value on a
+ * reviewer's screen and not English. "Word" for `docx` is the same argument
+ * one step further: nobody outside this repository calls a Word document a
+ * docx.
+ *
+ * THE STRETCHED BADGE HAS A CAUSE, not just a symptom. The status cell wraps
+ * its badge in `flex flex-col`, and a flex column stretches its children to
+ * the full cross-axis by default - so the badge grew to the column's width
+ * and a two-word status became a banner. `items-start` is the fix, and these
+ * cases assert the class because that is what the card allows for badge
+ * sizing and what jsdom can actually see: stylex classes carry no computed
+ * width here.
+ */
+/**
+ * The file control as a CTA (human request, 2026-09-07T13:45Z: "Make choose
+ * file in the knowledge screen as a CTA, currently it's just a text").
+ *
+ * WHAT THEY SAW. Under "Or a file", the native `<input type="file">` renders
+ * as the browser's own chrome - the words "Choose File" and "No file chosen" -
+ * sitting next to the themed "Add document" button. It is the one control on
+ * the page that looks like nothing, because a native file input's button is
+ * shadow DOM and cannot be themed cross-browser at all. CSS on the input was
+ * never going to fix it; a wrapper is the fix.
+ *
+ * THE NATIVE INPUT STAYS IN THE DOM, visually hidden rather than replaced.
+ * `knowledge-intake.tsx` explains why Astryx's FileInput was not adopted - it
+ * is controlled by a `File | null` where this form resets through
+ * `fileRef.current.value = ''` - and that reasoning still holds. The closure's
+ * existing cases also pin the input's `accept` string and drive it with
+ * `userEvent.upload`, so removing it would break the path the human reported
+ * a bug on in #147.
+ *
+ * ONE OF THE FOUR ASSERTIONS IN THE CONTRACT IS NOT UNIT-TESTABLE, and saying
+ * so is more useful than faking it. "No file chosen" is BROWSER CHROME, not
+ * DOM text: jsdom never renders it, so `queryByText(/no file chosen/i)` is
+ * null before this change and null after - an assertion that cannot fail in
+ * either direction, which is the vacuous-negative trap. What is testable is
+ * the MECHANISM that removes it: the input is visually hidden. That is pinned
+ * below, and the human-visible half is verified in the browser run with a
+ * before/after screenshot, which is the only place it can be.
+ */
+describe('choosing a file', () => {
+  /** The native input, still the thing the label names. */
+  function nativeInput(): HTMLInputElement {
+    return screen.getByLabelText(/file/i) as HTMLInputElement
+  }
+
+  it('offers a pressable Choose file control, not the browser default', async () => {
+    await renderIntake()
+    const cta = screen.getByRole('button', { name: /choose file/i })
+    expect(cta).toBeInTheDocument()
+    // Inside the field it belongs to, so a screen reader user meets it where
+    // "Or a file" led them rather than somewhere else on the form.
+    expect(cta.closest('[data-file-field]')).not.toBeNull()
+  })
+
+  it('opens the picker by forwarding a click to the native input', async () => {
+    /*
+     * The whole trick: the CTA cannot open a file dialog itself, only a real
+     * file input can. Spying on the input's own click is the honest assertion
+     * - it proves the wiring without pretending jsdom can open a dialog.
+     */
+    await renderIntake()
+    const clicked = vi.spyOn(nativeInput(), 'click').mockImplementation(() => {})
+    await userEvent.click(screen.getByRole('button', { name: /choose file/i }))
+    expect(clicked).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the native input in the DOM, hidden, with its contract intact', async () => {
+    /*
+     * Hidden, NOT removed, and not `display:none` either - a
+     * `display:none`/`hidden` input cannot be clicked programmatically in
+     * every browser, which would break the CTA that now drives it. The
+     * sr-only pattern keeps it in the layout at zero size.
+     *
+     * This is also the mechanism behind the human-visible half of the
+     * request: hiding the input is what removes "Choose File" and "No file
+     * chosen" from the screen.
+     */
+    await renderIntake()
+    const input = nativeInput()
+    expect(input).toBeInTheDocument()
+    expect(input.className).toContain('sr-only')
+    // The contract the closure's other cases depend on, unchanged.
+    expect(input.accept).toBe('.pdf,.docx,.txt')
+    expect(input.id).toBe('doc-file')
+  })
+
+  it('names the chosen file and its size once one is chosen', async () => {
+    await renderIntake()
+    // The positive precondition for the absence below: before choosing
+    // anything there is no file line at all, so the presence after upload is
+    // a change rather than something that was always there.
+    expect(screen.queryByText(/\.pdf/i)).toBeNull()
+    await userEvent.upload(
+      nativeInput(),
+      new File(['%PDF-1.4 payment plan'], 'Payment plan Q4.pdf', {
+        type: 'application/pdf',
+      }),
+    )
+    const chosen = await screen.findByText(/Payment plan Q4\.pdf/)
+    expect(chosen).toBeInTheDocument()
+    // The size in prose beside it: a reviewer who picked the wrong file
+    // usually knows it from the size.
+    expect(chosen.textContent).toMatch(/\d+\s?(B|KB|MB)/)
+  })
+
+  it('leaves Add document as the only primary action', async () => {
+    /*
+     * Two primaries on one form is two things claiming to be the next step.
+     * The CTA is secondary: it prepares the submission, it does not make it.
+     */
+    await renderIntake()
+    const cta = screen.getByRole('button', { name: /choose file/i })
+    const submit = screen.getByRole('button', { name: /add document/i })
+    expect(submit).toHaveAttribute('data-variant', 'primary')
+    expect(cta.getAttribute('data-variant')).not.toBe('primary')
+  })
+})
+
+describe('the knowledge list a reviewer reads', () => {
+  const SPELLED: DocumentRow[] = [
+    {
+      id: 'doc-paste',
+      revision: 1,
+      title: 'A pasted note',
+      source_type: 'paste',
+      status: 'draft',
+      parse_error_code: null,
+      created_at: '2026-09-03T09:00:00Z',
+      published_at: null,
+    },
+    {
+      id: 'doc-docx',
+      revision: 2,
+      title: 'A Word file',
+      source_type: 'docx',
+      status: 'published',
+      parse_error_code: null,
+      created_at: '2026-09-02T09:00:00Z',
+      published_at: '2026-09-02T10:00:00Z',
+    },
+    {
+      id: 'doc-txt',
+      revision: 1,
+      title: 'A text file',
+      source_type: 'txt',
+      status: 'draft',
+      parse_error_code: null,
+      created_at: '2026-09-01T09:00:00Z',
+      published_at: null,
+    },
+    {
+      id: 'doc-pdf',
+      revision: 1,
+      title: 'A PDF',
+      source_type: 'pdf',
+      status: 'draft',
+      parse_error_code: null,
+      created_at: '2026-08-31T09:00:00Z',
+      published_at: null,
+    },
+  ]
+
+  it('spells the source in English rather than showing the enum', async () => {
+    await renderDocuments(SPELLED)
+    for (const spelled of ['Pasted', 'Word', 'Text', 'PDF']) {
+      expect(screen.getByText(spelled), spelled).toBeInTheDocument()
+    }
+    // The raw values are gone, not merely joined by the spelled ones.
+    expect(screen.queryByText('PASTE')).toBeNull()
+    expect(screen.queryByText('DOCX')).toBeNull()
+    expect(screen.queryByText('TXT')).toBeNull()
+  })
+
+  it('keeps the status badge the width of its own words', async () => {
+    await renderDocuments(SPELLED)
+    const badge = screen.getByText('Published')
+    // Positive first: the badge is inside the stack the status cell renders,
+    // so the class assertion below is about that stack and not about some
+    // other element that happens to match.
+    const stack = badge.closest('[data-status-cell]')
+    expect(stack).not.toBeNull()
+    // A flex column stretches its children unless told not to, which is what
+    // turned a two-word badge into a full-width banner.
+    expect(stack?.className).toContain('items-start')
+  })
+
+  it('says when a document arrived without making a reviewer guess the zone', async () => {
+    /*
+     * G6: "timestamps without zone". `2026-09-03 09:00` on its own is
+     * unreadable across a team in two places - it could be Dubai or UTC, and
+     * the difference decides whether a document landed before or after a
+     * call. The relative age is what a reviewer scans; the exact UTC instant
+     * stays on `title` and in `dateTime`.
+     */
+    await renderDocuments(SPELLED)
+    const when = screen.getByTitle('2026-09-03T09:00:00Z')
+    expect(when.tagName.toLowerCase()).toBe('time')
+    expect(when).toHaveAttribute('datetime', '2026-09-03T09:00:00Z')
+  })
+
+  it('says how many documents there are, and how many are published', async () => {
+    /*
+     * Both numbers, because they answer different questions: how much is in
+     * the library, and how much of it the ambassador may actually draw on. A
+     * library of forty drafts and one published document is a very different
+     * state from forty published ones, and the list showed neither.
+     */
+    await renderDocuments(SPELLED)
+    expect(screen.getByText(/4 documents/i)).toBeInTheDocument()
+    expect(screen.getByText(/1 published/i)).toBeInTheDocument()
+  })
+
+  it('counts one document in the singular', async () => {
+    await renderDocuments([SPELLED[0]])
+    expect(screen.getByText(/^1 document, 0 published$/i)).toBeInTheDocument()
+  })
+})
+
 describe('intake', () => {
   it('posts pasted text as its own source type', async () => {
     const sent = stubFetch(201, { id: 'doc-9' })

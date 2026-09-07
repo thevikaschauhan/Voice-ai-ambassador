@@ -77,8 +77,50 @@ function toRow(row: UpstreamLeadRow): LeadSummaryRow {
   }
 }
 
+/**
+ * The filters this tier forwards, and nothing else.
+ *
+ * A WHITELIST RATHER THAN THE PAGE'S QUERY STRING, for two reasons that only
+ * look like caution. The page's own view state - which column a reviewer
+ * sorted - is not the API's business, and FastAPI's tolerance for unknown
+ * query params is a courtesy, not a contract: the day it validates them, a
+ * `?sort=score` somebody bookmarked turns the whole list into a 422 that this
+ * page renders as "the admin API answered 422". And a hand-edited
+ * `?status=deleted` should read as "no filter" rather than as a rejected
+ * request, because `LeadStatusFilter` upstream is a closed set of three.
+ *
+ * Each entry names a filter `list_leads` actually takes (status, language,
+ * project_id - AND-ed, each optional). `limit` and `offset` are deliberately
+ * absent: nothing paginates yet, and forwarding a page size no UI sets would
+ * be an untested path on the one read every admin page depends on.
+ */
+const FORWARDED_FILTERS: Record<string, (value: string) => boolean> = {
+  // The closed set upstream validates. Checked HERE so an unknown value is
+  // dropped rather than turned into a 422.
+  status: (value) => ['unreviewed', 'qualified', 'rejected'].includes(value),
+  // Not enumerated: `Language` is the agent's own union and duplicating it
+  // here is the drift that cost this tier a whole enum once already
+  // (task-web-call-end-reason-drift). A wrong language is a well-formed
+  // request that returns nothing, which is a legible answer; a wrong STATUS
+  // was worth checking because the closed set is three words long and stable.
+  language: (value) => value !== '',
+  project_id: (value) => value !== '',
+}
+
+/** The page's query string, reduced to what the API accepts. */
+export function forwardedSearch(url: string): string {
+  const incoming = new URL(url).searchParams
+  const forwarded = new URLSearchParams()
+  for (const [name, isValid] of Object.entries(FORWARDED_FILTERS)) {
+    const value = incoming.get(name)
+    if (value !== null && isValid(value)) forwarded.set(name, value)
+  }
+  const query = forwarded.toString()
+  return query === '' ? '' : `?${query}`
+}
+
 export async function readLeadRows(request: Request): Promise<PageRead<LeadSummaryRow[]>> {
-  const search = new URL(request.url).search
+  const search = forwardedSearch(request.url)
   const read = await readForPage<UpstreamLeadRow[]>(request.headers.get('cookie'), {
     route: 'leads',
     search,
