@@ -415,6 +415,113 @@ describe('the document list', () => {
  * sizing and what jsdom can actually see: stylex classes carry no computed
  * width here.
  */
+/**
+ * The file control as a CTA (human request, 2026-09-07T13:45Z: "Make choose
+ * file in the knowledge screen as a CTA, currently it's just a text").
+ *
+ * WHAT THEY SAW. Under "Or a file", the native `<input type="file">` renders
+ * as the browser's own chrome - the words "Choose File" and "No file chosen" -
+ * sitting next to the themed "Add document" button. It is the one control on
+ * the page that looks like nothing, because a native file input's button is
+ * shadow DOM and cannot be themed cross-browser at all. CSS on the input was
+ * never going to fix it; a wrapper is the fix.
+ *
+ * THE NATIVE INPUT STAYS IN THE DOM, visually hidden rather than replaced.
+ * `knowledge-intake.tsx` explains why Astryx's FileInput was not adopted - it
+ * is controlled by a `File | null` where this form resets through
+ * `fileRef.current.value = ''` - and that reasoning still holds. The closure's
+ * existing cases also pin the input's `accept` string and drive it with
+ * `userEvent.upload`, so removing it would break the path the human reported
+ * a bug on in #147.
+ *
+ * ONE OF THE FOUR ASSERTIONS IN THE CONTRACT IS NOT UNIT-TESTABLE, and saying
+ * so is more useful than faking it. "No file chosen" is BROWSER CHROME, not
+ * DOM text: jsdom never renders it, so `queryByText(/no file chosen/i)` is
+ * null before this change and null after - an assertion that cannot fail in
+ * either direction, which is the vacuous-negative trap. What is testable is
+ * the MECHANISM that removes it: the input is visually hidden. That is pinned
+ * below, and the human-visible half is verified in the browser run with a
+ * before/after screenshot, which is the only place it can be.
+ */
+describe('choosing a file', () => {
+  /** The native input, still the thing the label names. */
+  function nativeInput(): HTMLInputElement {
+    return screen.getByLabelText(/file/i) as HTMLInputElement
+  }
+
+  it('offers a pressable Choose file control, not the browser default', async () => {
+    await renderIntake()
+    const cta = screen.getByRole('button', { name: /choose file/i })
+    expect(cta).toBeInTheDocument()
+    // Inside the field it belongs to, so a screen reader user meets it where
+    // "Or a file" led them rather than somewhere else on the form.
+    expect(cta.closest('[data-file-field]')).not.toBeNull()
+  })
+
+  it('opens the picker by forwarding a click to the native input', async () => {
+    /*
+     * The whole trick: the CTA cannot open a file dialog itself, only a real
+     * file input can. Spying on the input's own click is the honest assertion
+     * - it proves the wiring without pretending jsdom can open a dialog.
+     */
+    await renderIntake()
+    const clicked = vi.spyOn(nativeInput(), 'click').mockImplementation(() => {})
+    await userEvent.click(screen.getByRole('button', { name: /choose file/i }))
+    expect(clicked).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the native input in the DOM, hidden, with its contract intact', async () => {
+    /*
+     * Hidden, NOT removed, and not `display:none` either - a
+     * `display:none`/`hidden` input cannot be clicked programmatically in
+     * every browser, which would break the CTA that now drives it. The
+     * sr-only pattern keeps it in the layout at zero size.
+     *
+     * This is also the mechanism behind the human-visible half of the
+     * request: hiding the input is what removes "Choose File" and "No file
+     * chosen" from the screen.
+     */
+    await renderIntake()
+    const input = nativeInput()
+    expect(input).toBeInTheDocument()
+    expect(input.className).toContain('sr-only')
+    // The contract the closure's other cases depend on, unchanged.
+    expect(input.accept).toBe('.pdf,.docx,.txt')
+    expect(input.id).toBe('doc-file')
+  })
+
+  it('names the chosen file and its size once one is chosen', async () => {
+    await renderIntake()
+    // The positive precondition for the absence below: before choosing
+    // anything there is no file line at all, so the presence after upload is
+    // a change rather than something that was always there.
+    expect(screen.queryByText(/\.pdf/i)).toBeNull()
+    await userEvent.upload(
+      nativeInput(),
+      new File(['%PDF-1.4 payment plan'], 'Payment plan Q4.pdf', {
+        type: 'application/pdf',
+      }),
+    )
+    const chosen = await screen.findByText(/Payment plan Q4\.pdf/)
+    expect(chosen).toBeInTheDocument()
+    // The size in prose beside it: a reviewer who picked the wrong file
+    // usually knows it from the size.
+    expect(chosen.textContent).toMatch(/\d+\s?(B|KB|MB)/)
+  })
+
+  it('leaves Add document as the only primary action', async () => {
+    /*
+     * Two primaries on one form is two things claiming to be the next step.
+     * The CTA is secondary: it prepares the submission, it does not make it.
+     */
+    await renderIntake()
+    const cta = screen.getByRole('button', { name: /choose file/i })
+    const submit = screen.getByRole('button', { name: /add document/i })
+    expect(submit).toHaveAttribute('data-variant', 'primary')
+    expect(cta.getAttribute('data-variant')).not.toBe('primary')
+  })
+})
+
 describe('the knowledge list a reviewer reads', () => {
   const SPELLED: DocumentRow[] = [
     {
