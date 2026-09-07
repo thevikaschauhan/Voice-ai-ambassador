@@ -4,6 +4,7 @@ import { AppShell } from '@astryxdesign/core/AppShell'
 import { SideNav, SideNavItem } from '@astryxdesign/core/SideNav'
 import { SideNavHeading } from '@astryxdesign/core/SideNav'
 import { Button } from '@astryxdesign/core/Button'
+import { Text } from '@astryxdesign/core/Text'
 import { TopNav, TopNavHeading } from '@astryxdesign/core/TopNav'
 import { usePathname } from 'next/navigation'
 import type { ReactNode } from 'react'
@@ -94,7 +95,20 @@ export function AdminAppShell({
         </SideNav>
       }
     >
-      {children}
+      {/*
+        The page h1, owned by the shell rather than by each page. AppShell
+        renders no heading of its own - its docs say the first heading in the
+        content area is the page h1 - and the title in the top bar is a nav
+        label, not a heading. Putting it here means no page can forget it,
+        which is exactly how all five admin routes lost their h1 when the
+        per-page headers were folded into this shell.
+      */}
+      <div className="flex flex-col gap-6">
+        <Text as="h1" type="display-3">
+          {title}
+        </Text>
+        {children}
+      </div>
     </AppShell>
   )
 }
