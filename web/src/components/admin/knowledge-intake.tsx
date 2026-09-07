@@ -1,6 +1,11 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
+import { Button } from '@astryxdesign/core/Button'
+import { Field } from '@astryxdesign/core/Field'
+import { Text } from '@astryxdesign/core/Text'
+import { TextArea } from '@astryxdesign/core/TextArea'
+import { TextInput } from '@astryxdesign/core/TextInput'
 import {
   ACCEPTED_UPLOAD_EXTENSIONS,
   MAX_UPLOAD_BYTES,
@@ -142,73 +147,83 @@ export function KnowledgeIntake() {
 
   return (
     <form
-      className="flex flex-col gap-4 border border-ink-800 px-5 py-4"
+      className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault()
         if (busy) return
         void submit()
       }}
     >
-      <div className="flex flex-col gap-1.5">
-        <label className="text-[11px] tracking-[0.12em] text-ink-400 uppercase" htmlFor="doc-title">
-          Title <span className="normal-case">(optional)</span>
-        </label>
-        <input
-          id="doc-title"
-          type="text"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          className="max-w-[40ch] border border-ink-700 bg-ink-900 px-4 py-2.5 text-[13px] text-ink-100"
-        />
-      </div>
+      {/*
+        `label="Title (optional)"` rather than Astryx's `isOptional` marker:
+        the words on screen stay the ones that were there. The marker is
+        Astryx's own wording, and this form's copy is not mine to reword.
+      */}
+      <TextInput
+        label="Title (optional)"
+        value={title}
+        onChange={(next) => setTitle(next)}
+        width="40ch"
+      />
 
-      <div className="flex flex-col gap-1.5">
-        <label className="text-[11px] tracking-[0.12em] text-ink-400 uppercase" htmlFor="doc-text">
-          Paste text
-        </label>
-        <textarea
-          id="doc-text"
-          rows={5}
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          className="max-w-[80ch] border border-ink-700 bg-ink-900 px-4 py-2.5 text-[13px] text-ink-100"
-        />
-      </div>
+      <TextArea
+        label="Paste text"
+        rows={5}
+        value={text}
+        onChange={(next) => setText(next)}
+        width="80ch"
+      />
 
-      <div className="flex flex-col gap-1.5">
-        <label className="text-[11px] tracking-[0.12em] text-ink-400 uppercase" htmlFor="doc-file">
-          Or a file
-        </label>
+      {/*
+        A NATIVE file input inside Astryx's Field, and the `description` is the
+        point of this commit: Field derives `${inputID}-desc` for it and its
+        own docs say the consumer wires `aria-describedby`, so the accepted
+        formats and the scanned-PDF warning are now the FIELD'S description
+        rather than a paragraph next to it. A screen reader user on this input
+        used to hear "Or a file" and nothing else.
+
+        Astryx's FileInput is not adopted here: it is controlled by a
+        `File | null` value where this form resets the input through a ref
+        after a successful add, and the closure's cases pin the native input's
+        `accept` string and drive it with `userEvent.upload`. Changing the
+        control would change the behaviour on the exact path the human
+        reported a bug on in #147.
+      */}
+      <Field
+        label="Or a file"
+        inputID="doc-file"
+        description={`PDF, DOCX or TXT, up to ${Math.round(
+          MAX_UPLOAD_BYTES / (1024 * 1024),
+        )}MB. A scanned PDF has no extractable text and will fail: OCR is deferred.`}
+      >
         <input
           id="doc-file"
+          aria-describedby="doc-file-desc"
           ref={fileRef}
           type="file"
           accept={ACCEPTED_UPLOAD_EXTENSIONS}
           onChange={(event) => check(event.target.files?.[0])}
-          className="text-[12px] text-ink-300"
+          className="text-[12px]"
         />
-        <p className="text-[11px] text-ink-600">
-          PDF, DOCX or TXT, up to {Math.round(MAX_UPLOAD_BYTES / (1024 * 1024))}MB. A scanned
-          PDF has no extractable text and will fail: OCR is deferred.
-        </p>
-      </div>
+      </Field>
 
-      <button
+      <Button
         type="submit"
-        disabled={busy}
-        className="w-fit border border-brass-500/60 px-5 py-2.5 text-[13px] text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
-      >
-        {busy ? 'Adding' : 'Add document'}
-      </button>
+        label={busy ? 'Adding' : 'Add document'}
+        variant="primary"
+        /* #147 and #149: never disabled for a missing input. Pressing it with
+           nothing filled in is how a reviewer learns what is missing. */
+        isDisabled={busy}
+      />
 
       {problem !== null ? (
-        <p className="border border-warn-500/40 px-4 py-3 text-[12px] text-ink-300" role="status">
-          {problem}
+        <p role="status">
+          <Text as="span">{problem}</Text>
         </p>
       ) : null}
       {done !== null ? (
-        <p className="text-[12px] text-ink-400" role="status">
-          {done}
+        <p role="status">
+          <Text as="span">{done}</Text>
         </p>
       ) : null}
     </form>
