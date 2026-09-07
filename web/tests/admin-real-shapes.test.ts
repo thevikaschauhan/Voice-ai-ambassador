@@ -38,6 +38,107 @@ const REAL_LEAD_ROW = {
   contact_status: 'captured',
 }
 
+/**
+ * The lead DETAIL, captured from a running admin API rather than written from
+ * what this tier hoped for (task-web-lead-detail-score).
+ *
+ * Captured by sealing two turns and a decision note with `adapter.crypto`'s
+ * own Sealer, inserting them, and reading
+ * `GET /v1/leads/<id>` back through uvicorn. Four differences from what
+ * `readLead` assumes, and every one of them is a live defect:
+ *
+ *   1. THERE IS NO `score` OBJECT. The API sends `score_total`,
+ *      `score_version` and `score_breakdown` as three flat fields -
+ *      `admin_api.py` never assembles one - so `upstream.score` is always
+ *      undefined and the detail has never shown a score.
+ *   2. `score_breakdown` ARRIVES AS A JSON STRING. `get_lead` does
+ *      `SELECT *` and asyncpg hands jsonb back as text; the repository calls
+ *      `json.loads` by hand for `chunk_refs` and nowhere else.
+ *   3. A TURN carries `payload`, a JSON STRING of the sealed turn model, plus
+ *      `payload_error`. There is no `speaker` and no `text` at the top level,
+ *      which is where `LeadTurnView` looks for them.
+ *   4. A DECISION carries `created_at`, NOT `decided_at`. `decided_at` exists
+ *      only in this tier's own type - which is why the render's
+ *      `decision.decided_at.slice(0, 16)` throws and the page 500s for any
+ *      lead that has ever been qualified or rejected.
+ */
+const REAL_LEAD_DETAIL = {
+  id: '33333333-3333-3333-3333-333333333333',
+  session_id: 'sess-score',
+  created_at: '2026-09-06T09:00:00Z',
+  ended_at: '2026-09-06T09:07:30Z',
+  call_end_reason: 'buyer_farewell',
+  ended_cleanly: true,
+  language: 'en',
+  requested_language: 'en',
+  uncertified_fallback: false,
+  inventory_version: 'inv-1',
+  ambassador_name: '',
+  project_ids: [],
+  retention_expires_at: null,
+  analysis_status: 'complete',
+  status: 'unreviewed',
+  revision: 3,
+  brief: null,
+  brief_error: null,
+  summary: null,
+  summary_error: null,
+  score_total: 61,
+  score_version: 'v1',
+  // A STRING, not an array. Copied byte for byte from the response.
+  score_breakdown:
+    '[{"signal": "budget_stated", "observed": true, "raw_value": 2000000, "points_awarded": 15, "max_points": 15, "evidence_turn_indexes": [4]}, {"signal": "timeline_stated", "observed": false, "raw_value": false, "points_awarded": 0, "max_points": 10, "evidence_turn_indexes": []}]',
+  contact: {
+    status: 'not_asked',
+    asked_turn_index: null,
+    source_turn_index: null,
+    permission: false,
+    confirmed: false,
+    phone_fingerprint: null,
+    email_fingerprint: null,
+    name: null,
+    phone: null,
+    email: null,
+  },
+  turns: [
+    {
+      lead_id: '33333333-3333-3333-3333-333333333333',
+      turn_index: 4,
+      timestamp: '2026-09-06T09:01:00Z',
+      audit_incomplete: false,
+      payload:
+        '{"turn_index": 4, "speaker": "buyer", "text": "My budget is two million dirhams.", "timestamp": "2026-09-06T09:01:00Z", "audit_incomplete": false}',
+      payload_error: null,
+    },
+    {
+      lead_id: '33333333-3333-3333-3333-333333333333',
+      turn_index: 5,
+      timestamp: '2026-09-06T09:01:00Z',
+      audit_incomplete: false,
+      payload:
+        '{"turn_index": 5, "speaker": "agent", "text": "Understood.", "timestamp": "2026-09-06T09:01:00Z", "audit_incomplete": false}',
+      payload_error: null,
+    },
+  ],
+  decisions: [
+    {
+      id: 'fba4a2b8-fc34-4f97-8f2d-fa5db4b3467f',
+      lead_id: '33333333-3333-3333-3333-333333333333',
+      sequence: 1,
+      previous_status: 'unreviewed',
+      new_status: 'rejected',
+      reason_code: 'follow_up',
+      note: 'called back later',
+      actor_kind: 'admin',
+      actor_id: null,
+      // `created_at`, and there is no `decided_at` anywhere in the response.
+      created_at: '2026-09-06T10:00:00Z',
+      expected_lead_revision: 3,
+      note_error: null,
+    },
+  ],
+}
+
 /** `get_document` puts chunks and figures on the document, side by side. */
 const REAL_DOCUMENT = {
   id: 'doc-1',
@@ -166,6 +267,67 @@ describe('the lead list against the real response', () => {
     // boolean that is already implied.
     expect(rows.data[0].contact_present).toBe(true)
     expect(rows.data[1].contact_present).toBe(false)
+  })
+})
+
+describe('the lead detail against the real response', () => {
+  async function detail() {
+    stubUpstream(REAL_LEAD_DETAIL)
+    const { readLead } = await import('@/lib/admin/leads.server')
+    const read = await readLead(
+      new Request('https://demo.example/admin/leads/x', {
+        headers: { cookie: await session() },
+      }),
+      REAL_LEAD_DETAIL.id,
+    )
+    if (read.state !== 'ok') throw new Error(`expected ok, got ${read.state}`)
+    return read.data
+  }
+
+  it('assembles the score from the three fields the API actually sends', async () => {
+    // There is no `score` object in the response and never has been, so
+    // `upstream.score` is undefined and every detail page has rendered "No
+    // score: the analysis has not completed" for a completed analysis.
+    const lead = await detail()
+    expect(lead.score).not.toBeNull()
+    expect(lead.score?.total).toBe(61)
+    expect(lead.score?.score_version).toBe('v1')
+  })
+
+  it('parses the breakdown, which arrives as a JSON string', async () => {
+    // asyncpg hands jsonb back as text and `get_lead` does `SELECT *` with no
+    // codec, so this is a string on the wire. docs/10 "Interest score" makes
+    // the per-signal evidence the thing that separates a reviewable score from
+    // an asserted one, so it is the breakdown that matters here, not the total.
+    const lead = await detail()
+    expect(lead.score?.breakdown).toHaveLength(2)
+    expect(lead.score?.breakdown[0].signal).toBe('budget_stated')
+    expect(lead.score?.breakdown[0].points_awarded).toBe(15)
+    expect(lead.score?.breakdown[0].evidence_turn_indexes).toEqual([4])
+    // The signal that scored nothing is kept, or the total cannot be
+    // reconciled with the rows under it.
+    expect(lead.score?.breakdown[1].observed).toBe(false)
+  })
+
+  it('reads a turn out of the payload string it arrives in', async () => {
+    // The API sends the sealed turn model as a JSON string in `payload`;
+    // `speaker` and `text` are inside it, not on the turn.
+    const lead = await detail()
+    expect(lead.turns).toHaveLength(2)
+    expect(lead.turns[0].text).toBe('My budget is two million dirhams.')
+    expect(lead.turns[0].speaker).toBe('buyer')
+    expect(lead.turns[0].turn_index).toBe(4)
+  })
+
+  it('takes the decision timestamp from created_at, which is the one sent', async () => {
+    // `decided_at` exists only in this tier's own type. The render does
+    // `decision.decided_at.slice(0, 16)`, so undefined here is not a missing
+    // timestamp - it is a TypeError and a 500 on the whole page, for any lead
+    // that has ever been qualified or rejected.
+    const lead = await detail()
+    expect(lead.decisions).toHaveLength(1)
+    expect(lead.decisions[0].decided_at).toBe('2026-09-06T10:00:00Z')
+    expect(lead.decisions[0].note).toBe('called back later')
   })
 })
 
