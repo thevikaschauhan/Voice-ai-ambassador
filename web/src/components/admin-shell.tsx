@@ -43,6 +43,22 @@ export function AdminShell({
   const [refusal, setRefusal] = useState<string | null>(null)
 
   const signIn = useCallback(async () => {
+    // Answered HERE rather than by disabling the control, because a disabled
+    // button takes away the one thing a visitor can press to find out what is
+    // wrong - and on this page there is nothing else to reason from. Pressing
+    // it is the question; this is the answer.
+    //
+    // It says what to do and NOTHING about what was typed. The value is a
+    // secret, so a message reporting its length or shape would be a worse
+    // defect than the silence it replaced.
+    if (code.trim() === '') {
+      setRefusal('Enter the access code.')
+      return
+    }
+    // An empty code is not a wrong code, so it never reaches the door: sending
+    // it would spend one of the rate limiter's attempts on a press that
+    // carried nothing.
+
     setBusy(true)
     setRefusal(null)
     try {
@@ -82,7 +98,7 @@ export function AdminShell({
             className="flex flex-col gap-3"
             onSubmit={(event) => {
               event.preventDefault()
-              if (busy || code.trim() === '') return
+              if (busy) return
               void signIn()
             }}
           >
@@ -102,8 +118,8 @@ export function AdminShell({
             />
             <button
               type="submit"
-              disabled={busy || code.trim() === ''}
-              className="border border-ink-600 px-5 py-2.5 text-[13px] tracking-wide text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
+              disabled={busy}
+              className="border border-brass-500/60 px-5 py-2.5 text-[13px] tracking-wide text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
             >
               {busy ? 'Checking' : 'Sign in'}
             </button>
