@@ -394,3 +394,82 @@ describe('the document detail against the real response', () => {
     expect(shown).not.toContain('fig-9')
   })
 })
+
+/**
+ * A MARKDOWN document, captured from a REAL admin-api at b458f04.
+ *
+ * Not typed from `DocumentRow` and not written from the card: uploaded as a
+ * synthetic NOTAREAL .md through the real `POST /v1/knowledge/documents/upload`
+ * against a local admin-api at schema 0005, then copied out of
+ * `GET /v1/knowledge/documents` byte for byte. The rule this file exists for
+ * is that a fixture of the VIEW type says nothing about the wire, and
+ * `source_type: 'md'` is a wire value that did not exist a day ago.
+ *
+ * `figures_pending` is here because the response carries it (#157). The web
+ * tier does not read it yet - the third "Needs attention" panel is a separate
+ * card - and pinning it now means the day that panel is built, the field is
+ * already known to be real rather than hoped for.
+ */
+const REAL_MARKDOWN_DOCUMENT_ROW = {
+  id: '6c6f6bf6-3543-4ccf-ac03-240ce7936420',
+  revision: 1,
+  title: 'NOTAREAL markdown capture',
+  source_type: 'md',
+  original_filename: 'NOTAREAL.md',
+  mime_type: 'text/markdown',
+  source_bytes: 109,
+  status: 'draft',
+  parse_error_code: null,
+  created_at: '2026-09-07T16:53:07.612999Z',
+  updated_at: '2026-09-07T16:53:07.612999Z',
+  published_at: null,
+  figures_pending: 2,
+}
+
+/**
+ * Deferred so this RED still TYPECHECKS. `sourceLabel` does not exist yet, and
+ * a literal `await import('@/lib/admin/knowledge')` lets tsc see the missing
+ * export - which fails gate 8 at the RED commit, where the only thing that
+ * should be failing is the test. The house `load()` pattern: a variable
+ * specifier with `@vite-ignore` resolves at runtime, so the case fails on the
+ * behaviour rather than the build.
+ */
+async function loadKnowledge(): Promise<{ sourceLabel: (value: string) => string }> {
+  const specifier = '@/lib/admin/knowledge'
+  return (await import(/* @vite-ignore */ specifier)) as unknown as {
+    sourceLabel: (value: string) => string
+  }
+}
+
+describe('a Markdown document against the real response', () => {
+  it('carries the source type the API now sends', async () => {
+    stubUpstream([REAL_MARKDOWN_DOCUMENT_ROW])
+    const { readDocumentRows } = await import('@/lib/admin/knowledge.server')
+    const read = await readDocumentRows(
+      new Request('https://demo.example/admin/knowledge', {
+        headers: { cookie: await session() },
+      }),
+    )
+    expect(read.state).toBe('ok')
+    if (read.state !== 'ok') return
+    expect(read.data[0].source_type).toBe('md')
+  })
+
+  it('has an English label for it, so the list never prints the enum', async () => {
+    const { sourceLabel } = await loadKnowledge()
+    expect(sourceLabel('md')).toBe('Markdown')
+  })
+
+  it('renders a source the tier has not been told about rather than nothing', async () => {
+    /*
+     * The CallEndReason lesson, on a second enum. `SOURCE_LABELS` is a
+     * `Record` over the union, so an unknown value indexes to `undefined` -
+     * which React renders as an EMPTY CELL. A reviewer sees a document with no
+     * source and nothing to search for; falling back to the raw value keeps
+     * the failure legible and greppable, which is what turns "the UI looks
+     * broken" into "the API sends a type we do not label yet".
+     */
+    const { sourceLabel } = await loadKnowledge()
+    expect(sourceLabel('epub')).toBe('epub')
+  })
+})

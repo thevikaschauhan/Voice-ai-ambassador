@@ -887,9 +887,21 @@ describe('intake', () => {
   })
 
   it('names the formats the API will accept and no others', async () => {
+    /*
+     * Markdown joined the list when the API learned to reduce it to prose
+     * before chunking (task-api-upload-markdown, schema 0005). The browser
+     * must not offer a format the server refuses - accepting .md here before
+     * the API landed would have turned every Markdown upload into a 422
+     * rendered as prose - and it must not withhold one the server takes.
+     */
     await renderIntake()
     const input = screen.getByLabelText(/file/i) as HTMLInputElement
-    expect(input.accept).toBe('.pdf,.docx,.txt')
+    expect(input.accept).toBe('.pdf,.docx,.txt,.md,.markdown')
+  })
+
+  it('tells the reviewer Markdown is accepted, in the field description', async () => {
+    await renderIntake()
+    expect(screen.getByText(/PDF, DOCX, TXT or Markdown/i)).toBeInTheDocument()
   })
 
   /**
