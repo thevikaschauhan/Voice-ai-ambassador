@@ -158,9 +158,11 @@ describe('the status filter chips', () => {
     const { LeadFilterChips } = (await load(
       '@/components/admin/lead-filters',
     )) as unknown as {
-      LeadFilterChips: (p: { active: string | null; total: number }) => ReactElement
+      LeadFilterChips: (p: { active: string | null }) => ReactElement
     }
-    return render(<LeadFilterChips active={active} total={2} />)
+    // No count prop: `LeadList` owns the count (pair 1), and giving the chips
+    // one too would let a filtered list disagree with itself about its size.
+    return render(<LeadFilterChips active={active} />)
   }
 
   it('offers one chip per status, plus a way back to all of them', async () => {
@@ -226,16 +228,38 @@ describe('sorting the list a reviewer is looking at', () => {
      * promises an order that does not exist - what is "sorted" about a
      * contact that is present or absent - and every extra affordance is one
      * more thing to explain.
+     *
+     * THE AFFORDANCE IS THE BUTTON, NOT `aria-sort`, and my first draft of
+     * this case had it backwards. Per ARIA, `aria-sort` belongs only on the
+     * column that is CURRENTLY sorted - putting it on every sortable header
+     * would announce three simultaneous sort orders - so Astryx omits it
+     * until a column is actually sorted, which is correct and made the
+     * original assertion fail against a working implementation. What makes a
+     * column sortable is that its header is pressable; `aria-sort` is
+     * asserted below, after a press.
      */
     await renderList(ROWS)
     for (const name of ['When', 'Score']) {
-      expect(screen.getByRole('columnheader', { name: new RegExp(name, 'i') })).toHaveAttribute(
-        'aria-sort',
-      )
+      const header = screen.getByRole('columnheader', { name: new RegExp(name, 'i') })
+      expect(within(header).getByRole('button'), name).toBeInTheDocument()
     }
-    expect(
-      screen.getByRole('columnheader', { name: /language/i }),
-    ).not.toHaveAttribute('aria-sort')
+    const language = screen.getByRole('columnheader', { name: /language/i })
+    expect(within(language).queryByRole('button')).toBeNull()
+  })
+
+  it('announces which column is sorted, and only that one', async () => {
+    await renderList(ROWS)
+    await userEvent.click(
+      within(screen.getByRole('columnheader', { name: /score/i })).getByRole('button'),
+    )
+    expect(screen.getByRole('columnheader', { name: /score/i })).toHaveAttribute(
+      'aria-sort',
+      'ascending',
+    )
+    // The other sortable column must not claim an order it is not in.
+    expect(screen.getByRole('columnheader', { name: /when/i })).not.toHaveAttribute(
+      'aria-sort',
+    )
   })
 
   it('reorders by score when the score header is pressed', async () => {

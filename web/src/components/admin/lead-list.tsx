@@ -3,10 +3,11 @@
 import Link from 'next/link'
 import { Badge } from '@astryxdesign/core/Badge'
 import { EmptyState } from '@astryxdesign/core/EmptyState'
-import { Table, proportional } from '@astryxdesign/core/Table'
+import { Table, proportional, useTableSortable } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { endReasonLabel } from '@/lib/admin/leads'
 import type { LeadSummaryRow } from '@/lib/admin/leads'
+import { useMemo, useState } from 'react'
 import { LeadStatusBadge } from './status-badge'
 import { relativeAge } from './age'
 
@@ -66,7 +67,64 @@ function rowName(row: LeadSummaryRow): string {
   return `Caller ${row.id.slice(0, 8)}`
 }
 
+/** The sort state Astryx's headless plugin reports back. */
+type SortState = { sortKey: string; direction: 'ascending' | 'descending' }[]
+
+/**
+ * The rows in the order the reviewer asked for.
+ *
+ * CLIENT-SIDE, and that is the card's own split: the status filter narrows the
+ * QUERY because `list_leads` takes it, and sort reorders rows already on
+ * screen, where a round trip to reorder fifty visible rows would be a round
+ * trip for nothing.
+ *
+ * A LEAD WITH NO SCORE SORTS LAST IN BOTH DIRECTIONS, never as zero. Treating
+ * null as 0 puts every un-analysed call at the top of an ascending sort, which
+ * is the same mistake the Score cell already refuses to make: zero reads as
+ * "this buyer was uninterested" when what happened is that nobody knows yet.
+ * "Last" is the honest position for an unknown in an ordering, in either
+ * direction - reversing the sort should not promote the rows that have no
+ * value to sort by.
+ */
+function sorted(rows: readonly LeadSummaryRow[], sort: SortState): LeadSummaryRow[] {
+  const primary = sort[0]
+  if (primary === undefined) return [...rows]
+  const factor = primary.direction === 'ascending' ? 1 : -1
+
+  return [...rows].sort((left, right) => {
+    if (primary.sortKey === 'score') {
+      // Null is not a value, so it does not take part in the comparison; it
+      // takes the end. `factor` is applied only to the two-number case.
+      if (left.score_total === null && right.score_total === null) return 0
+      if (left.score_total === null) return 1
+      if (right.score_total === null) return -1
+      return (left.score_total - right.score_total) * factor
+    }
+    // `when`: the string comparison is safe because these are ISO-8601 UTC
+    // instants from Postgres, which sort lexicographically in time order.
+    // Parsing them to compare would add a failure mode for no gain.
+    return left.created_at.localeCompare(right.created_at) * factor
+  })
+}
+
 export function LeadList({ rows }: { rows: readonly LeadSummaryRow[] }) {
+  /*
+    Astryx's sort plugin is HEADLESS: it owns the header affordance, the
+    aria-sort attribute and the click-to-cycle, and reports the next state
+    back - the data is ours to reorder. `allowUnsortedState` stays false on
+    purpose: a third unsorted state on a two-column sort is one a reviewer
+    reaches by accident and cannot tell apart from the API's own order.
+  */
+  const [sort, setSort] = useState<SortState>([])
+  // Parameterised on the row type: the hook is generic over
+  // `T extends Record<string, unknown>` and defaults to that, which is not
+  // assignable to `TablePlugin<TableRow>` - the plugin's transforms are
+  // contravariant in T, so the default widens and tsc rejects it.
+  const sortPlugin = useTableSortable<TableRow>({ sort, onSortChange: setSort })
+  // Memoised on the two things it depends on, so re-rendering the shell around
+  // this list does not re-sort every row.
+  const ordered = useMemo(() => sorted(rows, sort), [rows, sort])
+
   if (rows.length === 0) {
     return (
       <EmptyState
@@ -84,11 +142,14 @@ export function LeadList({ rows }: { rows: readonly LeadSummaryRow[] }) {
   return (
     <div className="flex flex-col gap-3">
       {/*
-        The count, above the table and outside it. A reviewer filtering a list
-        needs to know how many rows answered, and G4 lists its absence; putting
-        it in the table's own caption would tie it to Astryx's markup for no
-        gain. Singular is a real branch, not a nicety: "1 calls" is how a
-        screen starts looking unfinished.
+        The count. A reviewer filtering a list needs to know how many rows
+        answered, and G4 lists its absence. It lives HERE rather than in the
+        filter chips - the page renders those directly above, so the two read
+        as one row on screen, and duplicating the number would give a filtered
+        list two places to disagree about its own size.
+
+        Singular is a real branch, not a nicety: "1 calls" is how a screen
+        starts looking unfinished.
       */}
       <Text as="p" display="block" type="supporting" color="secondary">
         {rows.length === 1 ? '1 call' : `${rows.length} calls`}
@@ -98,7 +159,7 @@ export function LeadList({ rows }: { rows: readonly LeadSummaryRow[] }) {
         // Copied rather than cast: `data` is a mutable T[] and the prop here is
         // readonly, and a cast would have claimed a mutability the caller never
         // granted.
-        data={[...rows] as TableRow[]}
+        data={ordered as TableRow[]}
         // `idKey`, not a getRowKey callback: the row identity prop takes a key
         // name or a function, and it is what keeps React's reconciliation stable
         // when the list reorders.
@@ -138,6 +199,7 @@ export function LeadList({ rows }: { rows: readonly LeadSummaryRow[] }) {
           of a second code path that resembles it.
         */
         plugins={{
+          sort: sortPlugin,
           rowLink: {
             transformBodyRow: (props, row) => {
               const href = `/admin/leads/${(row as TableRow).id}`
