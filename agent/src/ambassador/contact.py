@@ -49,8 +49,40 @@ _DIGITS = re.compile(r"\d")
 
 # Words that open a sentence without being a name. "It is Sara" and "My name is
 # Sara" both hand over one name, and the leading word is not it.
+#
+# ENGLISH ONLY, and deliberately. Arabic and Hindi greetings and honorifics need
+# a native reviewer before they can be called not-names (AGENTS.md:52), and a
+# guessed list there would refuse a real buyer their own name in their own
+# language - a worse failure than the one this set exists to prevent. The
+# greeting group below was added after a reply of the shape "Hi, I am Ahmed,
+# 050..." recorded the name "Hi": the words a polite answer opens with are the
+# words most likely to arrive in front of the name.
 _NOT_A_NAME: Final[frozenset[str]] = frozenset(
     {
+        # greetings and acknowledgements
+        "hi",
+        "hiya",
+        "hello",
+        "hey",
+        "yeah",
+        "yep",
+        "yup",
+        "yo",
+        # fillers and hedges
+        "well",
+        "so",
+        "oh",
+        "um",
+        "uh",
+        "hmm",
+        "actually",
+        "right",
+        "please",
+        "speaking",
+        "here",
+        "there",
+        # "sure" is already below; "sure thing" needs both words
+        "thing",
         "it",
         "its",
         "it's",
@@ -300,8 +332,12 @@ class ContactPolicy:
 
         Deliberately simple and deliberately not a model: a wrong name is
         embarrassing and recoverable, while a wrong number is a call to a
-        stranger. The name is also never read back, so it costs the buyer
-        nothing to correct on the next call.
+        stranger. It is not echoed in the read-back, which is about the digits -
+        but it does not stop here either: `names_given` hands it to
+        `VocativeContext.with_names`, so a word captured here is a word the
+        invented-name validator will let the agent SAY to the buyer. That is why
+        the filler words are in `_NOT_A_NAME` rather than tolerated as a
+        cosmetic blemish on a record.
         """
         without_contacts = _EMAIL.sub(" ", _PHONE.sub(" ", text))
         for word in _WORD.findall(without_contacts):
