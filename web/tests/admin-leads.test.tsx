@@ -161,9 +161,45 @@ describe('the lead list', () => {
     expect(within(row).queryByText('0')).not.toBeInTheDocument()
   })
 
+  it('names the review status in the words the closure uses, not the raw enum', async () => {
+    /*
+     * A REAL DEFECT, not a restyle: the status cell renders `row.status`
+     * straight from the API and leans on a CSS `uppercase` to make it look
+     * like a label. So the text the DOM carries is "unreviewed" while the text
+     * on screen is "UNREVIEWED" - a reviewer who copies the cell gets a
+     * different string than the one they read, and the same vocabulary is
+     * already displayed as "Unreviewed" by the overview cards on /admin. One
+     * screen, two spellings of one status, neither of them the enum's.
+     *
+     * Asserted with exact strings for that reason: `getByText('Unreviewed')`
+     * does not match "unreviewed", which is the whole point.
+     */
+    await renderList(ROWS)
+    const unreviewed = screen.getByText('sess-1').closest('tr') as HTMLElement
+    expect(within(unreviewed).getByText('Unreviewed')).toBeInTheDocument()
+    const rejected = screen.getByText('sess-2').closest('tr') as HTMLElement
+    expect(within(rejected).getByText('Rejected')).toBeInTheDocument()
+  })
+
   it('says so when there are no leads yet', async () => {
     await renderList([])
     expect(screen.getByText(/no calls have been recorded/i)).toBeInTheDocument()
+  })
+
+  it('announces the empty list as a titled region, not as loose prose', async () => {
+    /*
+     * The sentence above it is the only thing on the page when there are no
+     * leads, and today it is a bare <p>: nothing for a screen reader user
+     * navigating by heading to land on, so "why is this page blank" has no
+     * answer without reading the whole document. The words do not change - the
+     * existing case above still passes on the same sentence - they just get a
+     * heading and a description instead of one paragraph.
+     */
+    await renderList([])
+    expect(
+      screen.getByRole('heading', { name: /no calls have been recorded yet/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/including one that was cut short/i)).toBeInTheDocument()
   })
 })
 
