@@ -79,8 +79,16 @@ describe('the admin door', () => {
     await renderShell()
     await userEvent.click(screen.getByRole('button', { name: /sign in/i }))
 
-    const status = await screen.findByRole('status')
-    expect(status).toHaveTextContent(/enter the access code/i)
+    // Queried by its TEXT and then checked to be in a live region, rather
+    // than by `getByRole('status')` alone. Astryx's Button renders its own
+    // role=status live region for the "Loading" announcement, so a bare role
+    // query became ambiguous the moment this form was restyled
+    // (task-web-admin-astryx-shell). The claim is unchanged and slightly
+    // stronger: THIS sentence is the one in a live region.
+    const status = (await screen.findByText(/enter the access code/i)).closest(
+      '[role="status"]',
+    )
+    expect(status).not.toBeNull()
     // An empty code is not a wrong code: sending it would spend one of the
     // rate limiter's attempts on a press that carried nothing.
     expect(sent).toHaveLength(0)

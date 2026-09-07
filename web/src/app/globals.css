@@ -1,9 +1,28 @@
+/*
+ * The layer cascade for the whole app, declared here and only here.
+ *
+ * Astryx's stylesheets are imported by app/admin/layout.tsx, not from this
+ * file, so the admin route group gets them and the demo does not. But a
+ * `@layer` statement orders only the layers it names and the FIRST
+ * declaration wins, so the astryx layers have to be named in the same
+ * statement as Tailwind's or their order against Tailwind would depend on
+ * bundler file order.
+ */
+@layer theme, base, reset, astryx-base, astryx-theme, components, utilities;
+
 @import 'tailwindcss';
 
 /*
  * Binghatti sells restraint (AGENTS.md). Monochrome base, one metallic accent
  * used sparingly, generous whitespace, no gradients, no pill buttons. If this
  * starts looking like a generic SaaS dashboard, it is wrong.
+ *
+ * SCOPE, 2026-09-07: that rule governs the CLIENT-FACING demo - /, /talk,
+ * /text, /states and their components - which is what the tech lead is shown.
+ * The ADMIN surface is an internal tool and the human asked for a SaaS
+ * dashboard there in as many words, so /admin runs on Meta's Astryx design
+ * system instead (app/admin/astryx.css, task-web-admin-astryx-shell). These
+ * tokens stay the demo's; do not reach for them under /admin.
  *
  * The accent is brass. It marks exactly three things: the live indicator, the
  * current stage, and a focused control. It is never a background fill.

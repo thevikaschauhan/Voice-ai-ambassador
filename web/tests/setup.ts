@@ -10,6 +10,19 @@ if (typeof window !== 'undefined') {
 
   // jsdom implements neither, and both are called by components under test.
   Element.prototype.scrollIntoView = vi.fn()
+
+  // jsdom ships <dialog> without its modal methods, and Astryx's AppShell
+  // opens the small-screen nav drawer as a real modal dialog. Without these
+  // the drawer throws "dialog.showModal is not a function" and the failure
+  // reads like a component defect rather than a jsdom gap.
+  if (typeof HTMLDialogElement !== 'undefined') {
+    HTMLDialogElement.prototype.showModal ??= function showModal(this: HTMLDialogElement) {
+      this.open = true
+    }
+    HTMLDialogElement.prototype.close ??= function close(this: HTMLDialogElement) {
+      this.open = false
+    }
+  }
   if (!window.matchMedia) {
     Object.defineProperty(window, 'matchMedia', {
       writable: true,

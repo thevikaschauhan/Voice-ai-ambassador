@@ -2,6 +2,8 @@
 
 import Link from 'next/link'
 import { useCallback, useState } from 'react'
+import { Button } from '@astryxdesign/core/Button'
+import { TextInput } from '@astryxdesign/core/TextInput'
 
 /**
  * The admin shell: sign-in, then a nav with nothing behind it yet.
@@ -102,27 +104,43 @@ export function AdminShell({
               void signIn()
             }}
           >
-            <label
-              className="text-[11px] tracking-[0.12em] text-ink-400 uppercase"
-              htmlFor="admin-code"
-            >
-              Access code
-            </label>
-            <input
-              id="admin-code"
+            {/*
+              Astryx's own field and button. The LABEL TEXT, the busy wording
+              and the button name are unchanged - the existing cases in
+              admin-shell.test.tsx assert every one of them, which is what
+              makes a restyle safe to do. `isDisabled={busy}` is the
+              silent-disabled rule from #150: never disabled for a missing
+              input, only while the request is in flight.
+
+              THE `id` IS GONE, and it was measured rather than assumed:
+              TextInput generates its own id (`_R_6avivb_` in the build I
+              checked) and silently drops one passed in, so `#admin-code` no
+              longer exists in the DOM. Nothing depends on it - the tests and
+              the label association both go through the accessible name, which
+              Astryx wires itself - but do not write a selector against that
+              id again.
+            */}
+            <TextInput
               type="password"
-              autoComplete="current-password"
+              label="Access code"
               value={code}
-              onChange={(event) => setCode(event.target.value)}
-              className="border border-ink-700 bg-ink-900 px-4 py-2.5 text-[13px] text-ink-100"
+              onChange={(next) => setCode(next)}
+              // MEASURED GAP in Astryx 0.5.3, not a preference: TextInput
+              // spreads `...rest` onto the input at runtime, so this reaches
+              // the DOM, but `TextInputProps` does not declare it. Dropping it
+              // instead would silently cost a password manager the ability to
+              // fill this field, which is a real regression on a sign-in
+              // screen; asserting it here keeps the affordance and confines
+              // the deviation to one line. DELETE THE CAST once upstream
+              // declares the prop - do not widen it to other props.
+              {...({ autoComplete: 'current-password' } as { autoComplete: string })}
             />
-            <button
+            <Button
               type="submit"
-              disabled={busy}
-              className="border border-brass-500/60 px-5 py-2.5 text-[13px] tracking-wide text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
-            >
-              {busy ? 'Checking' : 'Sign in'}
-            </button>
+              label={busy ? 'Checking' : 'Sign in'}
+              variant="primary"
+              isDisabled={busy}
+            />
           </form>
         ) : (
           <p className="border border-ink-700 px-5 py-3.5 text-[13px] leading-relaxed text-ink-400">

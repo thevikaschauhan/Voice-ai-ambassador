@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { AdminAppShell } from '@/components/admin/app-shell'
 import { ChunkScope } from '@/components/admin/chunk-scope'
 import { FigureReview } from '@/components/admin/figure-review'
 import { headers } from 'next/headers'
@@ -33,7 +34,7 @@ export default async function KnowledgeDocumentPage({
   const projectIds = projects.map((project) => project.id)
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-[1000px] flex-col gap-6 px-4 py-6 sm:px-6">
+    <AdminAppShell title="Document">
       <Link className="text-[12px] text-ink-400 hover:text-brass-400" href="/admin/knowledge">
         All documents
       </Link>
@@ -110,6 +111,6 @@ export default async function KnowledgeDocumentPage({
           )}
         </>
       )}
-    </main>
+    </AdminAppShell>
   )
 }

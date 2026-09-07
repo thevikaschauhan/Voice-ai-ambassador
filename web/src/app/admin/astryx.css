@@ -1,0 +1,22 @@
+/*
+ * Astryx, scoped to the admin route group (task-web-admin-astryx-shell).
+ *
+ * Imported by admin/layout.tsx rather than by app/globals.css, which is the
+ * whole point: the human asked for a SaaS dashboard on the ADMIN surface and
+ * the client-facing demo keeps the Binghatti restraint (AGENTS.md). A layout
+ * in the App Router only loads the CSS of the routes beneath it, so /talk and
+ * / never pay for these bytes and never inherit these tokens.
+ *
+ * ORDER IS THE LAYER CASCADE and is not stylistic:
+ *   reset.css      @layer reset
+ *   astryx.css     @layer astryx-base    component styles
+ *   theme.css      @layer astryx-theme   token overrides
+ * The layer order itself is declared once in app/globals.css, because a
+ * @layer statement only orders layers it names and the first declaration
+ * wins - declaring it here as well would leave the order dependent on which
+ * file the bundler happened to put first.
+ */
+
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import '@astryxdesign/theme-neutral/theme.css';

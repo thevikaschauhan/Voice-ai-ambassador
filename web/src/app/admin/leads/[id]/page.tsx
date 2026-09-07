@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { AdminAppShell } from '@/components/admin/app-shell'
 import { headers } from 'next/headers'
 import { LeadDetail } from '@/components/admin/lead-detail'
 import { readLead } from '@/lib/admin/leads.server'
@@ -15,7 +16,7 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
   )
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-[1000px] flex-col gap-6 px-4 py-6 sm:px-6">
+    <AdminAppShell title="Lead">
       <Link className="text-[12px] text-ink-400 hover:text-brass-400" href="/admin/leads">
         All leads
       </Link>
@@ -33,6 +34,6 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
       ) : (
         <LeadDetail lead={read.data} />
       )}
-    </main>
+    </AdminAppShell>
   )
 }

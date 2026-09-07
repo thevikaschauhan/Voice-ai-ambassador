@@ -288,6 +288,30 @@ and remains the one stated in `docs/03-`.
 
 ## Admin HTTP and web surface
 
+### The web shell
+
+`/admin` is a dashboard: a persistent left navigation (Overview, Leads,
+Knowledge, and Sign out at the foot), a title bar, and one content region. It
+is built on Meta's Astryx design system (`@astryxdesign/core` with theme
+`neutral`, exact-pinned because Astryx is beta), mounted by
+`web/src/app/admin/layout.tsx`.
+
+That layout is what keeps the two surfaces apart. AGENTS.md requires Binghatti
+restraint and the human asked for a SaaS dashboard here; both hold because they
+are about different surfaces, and in the App Router the CSS a layout imports is
+only loaded for routes beneath it - so `/talk` never inherits an Astryx token
+and never pays for the bytes. The demo keeps `ink`/`brass`.
+
+Two things are deliberate rather than incidental. The shell lives inside the
+**signed-in** branch, so an unauthenticated visitor never sees a nav that
+implies data behind it. And the Overview counts are derived from the two list
+reads the Leads and Knowledge pages already perform - there is no count
+endpoint, so the numbers cannot disagree with the list a reviewer opens next.
+Their labels are the closure's own words (`unreviewed`, not `pending`, which
+`AnalysisStatus` owns).
+
+### The API
+
 All admin API routes except `/health` require the shared bearer token. The API
 surface is deliberately small:
 
