@@ -25,10 +25,16 @@ import type { LeadSummaryRow } from '@/lib/admin/leads'
 function CountCard({ label, count }: { label: string; count: number }) {
   return (
     <Card data-count-card>
-      <Text as="p" type="supporting" color="secondary">
+      {/*
+        `display="block"` on both, because Astryx's Text is display:inline by
+        DEFAULT and the CSS wins over the tag - `as="p"` alone rendered
+        "Leads0" on one line. Caught in the browser, not by a test: a unit
+        test reading textContent sees the label and the number either way.
+      */}
+      <Text as="p" display="block" type="supporting" color="secondary">
         {label}
       </Text>
-      <Text as="p" type="display-3" data-count>
+      <Text as="p" display="block" type="display-3" data-count>
         {count}
       </Text>
     </Card>
