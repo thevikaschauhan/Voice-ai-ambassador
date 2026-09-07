@@ -130,7 +130,12 @@ export function LeadList({ rows }: { rows: readonly LeadSummaryRow[] }) {
           key: 'language',
           header: 'Language',
           width: proportional(1),
-          renderCell: (row: TableRow) => <Text as="span">{row.language}</Text>,
+          renderCell: (row: TableRow) => (
+            // Uppercased in the STRING, not by a CSS text-transform: the cell
+            // used to carry "en" in the DOM and show "EN" on screen, the same
+            // mismatch the status badge fixes.
+            <Text as="span">{row.language.toUpperCase()}</Text>
+          ),
         },
         {
           key: 'projects',

@@ -1,8 +1,12 @@
 'use client'
 
 import Link from 'next/link'
+import { Badge } from '@astryxdesign/core/Badge'
+import { EmptyState } from '@astryxdesign/core/EmptyState'
+import { Table, proportional } from '@astryxdesign/core/Table'
+import { Text } from '@astryxdesign/core/Text'
 import { PARSE_ERROR_ADVICE, PARSE_ERROR_LABELS } from '@/lib/admin/knowledge'
-import type { DocumentRow } from '@/lib/admin/knowledge'
+import type { DocumentRow, DocumentStatus } from '@/lib/admin/knowledge'
 
 /**
  * The documents the ambassador may draw on, with their status.
@@ -13,74 +17,103 @@ import type { DocumentRow } from '@/lib/admin/knowledge'
  * that OCR is deferred. A bare "failed" sends somebody to re-upload the same
  * file.
  */
+
+/** See lead-list.tsx: Astryx's Table needs an index signature its rows lack. */
+type TableRow = DocumentRow & Record<string, unknown>
+
+/**
+ * All five statuses, each with its own word and weight.
+ *
+ * TYPED AS Record<DocumentStatus, ...> ON PURPOSE: a sixth status added to the
+ * enum now fails the build here instead of quietly rendering in the neutral
+ * style, which is how `parsing` and `archived` came to look exactly like a
+ * draft ready to publish.
+ */
+const STATUS: Record<
+  DocumentStatus,
+  { label: string; variant: 'neutral' | 'info' | 'success' | 'error' }
+> = {
+  parsing: { label: 'Parsing', variant: 'info' },
+  draft: { label: 'Draft', variant: 'neutral' },
+  published: { label: 'Published', variant: 'success' },
+  failed: { label: 'Failed', variant: 'error' },
+  archived: { label: 'Archived', variant: 'neutral' },
+}
+
 export function DocumentList({ rows }: { rows: readonly DocumentRow[] }) {
   if (rows.length === 0) {
     return (
-      <p className="border border-ink-800 px-5 py-4 text-[13px] text-ink-400">
-        No documents yet. Paste a paragraph or upload a PDF, DOCX or TXT to start.
-      </p>
+      <EmptyState
+        title="No documents yet."
+        description="Paste a paragraph or upload a PDF, DOCX or TXT to start."
+      />
     )
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[44rem] border-collapse text-left">
-        <thead>
-          <tr className="border-b border-ink-800">
-            {['Document', 'Source', 'Added', 'Status'].map((heading) => (
-              <th
-                key={heading}
-                className="px-3 py-2 text-[11px] tracking-[0.12em] text-ink-500 uppercase"
-                scope="col"
-              >
-                {heading}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={`${row.id}-${row.revision}`} className="border-b border-ink-900 align-top">
-              <td className="px-3 py-3">
-                <Link
-                  className="text-[13px] text-ink-100 underline decoration-ink-700 hover:text-brass-400"
-                  href={`/admin/knowledge/${row.id}`}
-                >
-                  {row.title}
-                </Link>
-                <p className="mt-1 text-[11px] text-ink-600">revision {row.revision}</p>
-              </td>
-              <td className="px-3 py-3 text-[12px] text-ink-400 uppercase">{row.source_type}</td>
-              <td className="px-3 py-3 text-[12px] text-ink-400">
-                <time dateTime={row.created_at}>
-                  {row.created_at.slice(0, 16).replace('T', ' ')}
-                </time>
-              </td>
-              <td className="px-3 py-3">
-                <span
-                  className={`text-[12px] ${
-                    row.status === 'failed'
-                      ? 'text-warn-500'
-                      : row.status === 'published'
-                        ? 'text-brass-400'
-                        : 'text-ink-300'
-                  }`}
-                >
-                  {row.status}
-                </span>
-                {row.parse_error_code === null ? null : (
-                  <p className="mt-1 max-w-[46ch] text-[11px] leading-relaxed text-ink-500">
-                    {PARSE_ERROR_LABELS[row.parse_error_code]}
-                    {PARSE_ERROR_ADVICE[row.parse_error_code] === undefined
-                      ? null
-                      : ` - ${PARSE_ERROR_ADVICE[row.parse_error_code]}`}
-                  </p>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table<TableRow>
+      data={[...rows] as TableRow[]}
+      idKey="id"
+      density="balanced"
+      hasHover
+      columns={[
+        {
+          key: 'title',
+          header: 'Document',
+          width: proportional(2),
+          renderCell: (row: TableRow) => (
+            <div className="flex flex-col gap-1">
+              <Link className="underline decoration-current/40" href={`/admin/knowledge/${row.id}`}>
+                {row.title}
+              </Link>
+              <Text as="span" type="supporting" color="secondary">
+                revision {row.revision}
+              </Text>
+            </div>
+          ),
+        },
+        {
+          key: 'source_type',
+          header: 'Source',
+          width: proportional(1),
+          renderCell: (row: TableRow) => (
+            // Uppercased in the STRING, not by a CSS text-transform: the cell
+            // used to carry "pdf" in the DOM and show "PDF" on screen, the
+            // same mismatch the status badge fixes.
+            <Text as="span">{row.source_type.toUpperCase()}</Text>
+          ),
+        },
+        {
+          key: 'created_at',
+          header: 'Added',
+          width: proportional(1),
+          renderCell: (row: TableRow) => (
+            // A native <time>: Text's `as` has no time tag, and the
+            // machine-readable timestamp is worth keeping.
+            <time className="text-[12px]" dateTime={row.created_at}>
+              {row.created_at.slice(0, 16).replace('T', ' ')}
+            </time>
+          ),
+        },
+        {
+          key: 'status',
+          header: 'Status',
+          width: proportional(2),
+          renderCell: (row: TableRow) => (
+            <div className="flex flex-col gap-1">
+              <Badge variant={STATUS[row.status].variant} label={STATUS[row.status].label} />
+              {row.parse_error_code === null ? null : (
+                <Text as="p" display="block" type="supporting" color="secondary">
+                  {PARSE_ERROR_LABELS[row.parse_error_code]}
+                  {PARSE_ERROR_ADVICE[row.parse_error_code] === undefined
+                    ? null
+                    : ` - ${PARSE_ERROR_ADVICE[row.parse_error_code]}`}
+                </Text>
+              )}
+            </div>
+          ),
+        },
+      ]}
+    />
   )
 }
