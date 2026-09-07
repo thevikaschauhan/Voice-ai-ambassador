@@ -21,6 +21,7 @@ review routes.
 from __future__ import annotations
 
 import hashlib
+import html
 import io
 import re
 from dataclasses import dataclass
@@ -34,7 +35,7 @@ from ambassador.knowledge import chunk_text, load_limits
 
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 
-SourceType = Literal["pdf", "docx", "txt", "paste"]
+SourceType = Literal["pdf", "docx", "txt", "md", "paste"]
 
 ParseErrorCode = Literal[
     "unsupported_type",
@@ -48,6 +49,8 @@ _EXTENSIONS: Final[dict[str, SourceType]] = {
     ".pdf": "pdf",
     ".docx": "docx",
     ".txt": "txt",
+    ".md": "md",
+    ".markdown": "md",
 }
 
 # A sentence, for the figure's context. Deliberately simple: the figure's own
@@ -177,6 +180,7 @@ _MIME: Final[dict[SourceType, str]] = {
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "txt": "text/plain",
+    "md": "text/markdown",
     "paste": "text/plain",
 }
 
@@ -187,6 +191,8 @@ def _extract(source_type: SourceType, raw: bytes) -> str:
             return raw.decode("utf-8")
         except UnicodeDecodeError:
             raise ParseFailed("invalid_encoding") from None
+    if source_type == "md":
+        return _extract_markdown(raw)
     if source_type == "pdf":
         return _extract_pdf(raw)
     return _extract_docx(raw)
@@ -227,6 +233,191 @@ def _extract_docx(raw: bytes) -> str:
             if cells:
                 parts.append(" | ".join(cells))
     return _PARAGRAPH_BREAK.join(part for part in parts if part)
+
+
+# --- Markdown ------------------------------------------------------------
+#
+# Regex rather than a Markdown library, and the reason is the direction of
+# travel: every library here renders Markdown to HTML, which would leave this
+# module stripping HTML back to prose - two conversions to arrive one step
+# behind where it started. What is wanted is not a renderer but the inverse of
+# one, and the syntax that survives an admin's copy-paste is small enough to
+# name in full.
+#
+# The rules exist because chunk text is spoken. A `**` inside a figure's
+# `source_sentence` breaks the numeric surface the guardrail matches on, and a
+# table pipe read aloud is noise in a call.
+
+_MD_FENCE: Final = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+_MD_TABLE_SEPARATOR_CELL: Final = re.compile(r"^:?-+:?$")
+_MD_THEMATIC_BREAK: Final = re.compile(r"^\s{0,3}([-*_])\s*(?:\1\s*){2,}$")
+_MD_SETEXT_UNDERLINE: Final = re.compile(r"^\s{0,3}(=+|-+)\s*$")
+_MD_HEADING: Final = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
+_MD_LIST_MARKER: Final = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+_MD_QUOTE_MARKER: Final = re.compile(r"^\s*>+\s?")
+_MD_LINK_DEFINITION: Final = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*\S+")
+_MD_TABLE_CELL_SPLIT: Final = re.compile(r"(?<!\\)\|")
+_MD_IMAGE: Final = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK: Final = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_MD_REFERENCE_LINK: Final = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
+_MD_INLINE_CODE: Final = re.compile(r"(`+)(.*?)\1")
+_MD_STRONG: Final = re.compile(r"(\*\*|__)(.+?)\1")
+_MD_EMPHASIS_STAR: Final = re.compile(r"\*([^*\n]+)\*")
+# `_` only at a word boundary, or `deposit_waived` loses its middle.
+_MD_EMPHASIS_UNDERSCORE: Final = re.compile(
+    r"(?<![A-Za-z0-9_])_([^_\n]+)_(?![A-Za-z0-9_])"
+)
+_MD_STRIKETHROUGH: Final = re.compile(r"~~(.+?)~~")
+_MD_HTML_TAG: Final = re.compile(r"<[^>]+>")
+_MD_ESCAPE: Final = re.compile(r"\\([\\`*_{}\[\]()#+\-.!|>~])")
+_MD_CODE_SLOT: Final = "\x00{}\x00"
+
+
+def _extract_markdown(raw: bytes) -> str:
+    """Markdown in, prose out.
+
+    `invalid_encoding` for bytes that are not UTF-8, exactly as TXT does: the
+    two arrive the same way and an admin should not have to learn which of the
+    two text formats reports a decode failure differently.
+    """
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ParseFailed("invalid_encoding") from None
+    return _markdown_to_prose(text)
+
+
+def _markdown_to_prose(text: str) -> str:
+    """Blocks first, then inline, because a block rule can delete a whole line.
+
+    Headings KEEP their `#`. It is the one marker that is already handled
+    downstream: `ambassador.knowledge._is_heading` starts a new chunk at a
+    paragraph beginning with `#` and `_heading_text` strips it, so the marker
+    never reaches a chunk body while the heading still divides the document.
+    Removing it here would leave the chunker no heading signal at all - a
+    sectioned document collapses into one chunk with no heading and the heading
+    text glued into the prose, which would make a `.md` ingest worse than the
+    same bytes renamed `.txt`.
+    """
+    blocks: list[str] = []
+    paragraph: list[str] = []
+    fence: str | None = None
+
+    def flush() -> None:
+        if paragraph:
+            blocks.append("\n".join(paragraph))
+            paragraph.clear()
+
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        opening = _MD_FENCE.match(line)
+        if fence is not None:
+            # Only a fence of the same character and at least the same length
+            # closes one, so ``` inside a ~~~ block stays code.
+            if (
+                opening
+                and opening.group(1)[0] == fence[0]
+                and len(opening.group(1)) >= len(fence)
+            ):
+                fence = None
+            continue
+        if opening:
+            flush()
+            fence = opening.group(1)
+            continue
+
+        if not line.strip():
+            flush()
+            continue
+        if _MD_LINK_DEFINITION.match(line):
+            continue
+        if line.lstrip().startswith("|"):
+            row = _markdown_table_row(line)
+            if row:
+                paragraph.append(row)
+            continue
+        underline = _MD_SETEXT_UNDERLINE.match(line)
+        if underline and paragraph:
+            # CommonMark: an underline under a paragraph is a setext heading,
+            # and it wins over the thematic break the same characters would be
+            # on their own. Dropping it instead would read "=====" aloud.
+            promoted = paragraph.pop()
+            flush()
+            blocks.append(
+                ("#" if underline.group(1)[0] == "=" else "##") + " " + promoted
+            )
+            continue
+        if _MD_THEMATIC_BREAK.match(line):
+            flush()
+            continue
+        heading = _MD_HEADING.match(line)
+        if heading:
+            flush()
+            rendered = _markdown_inline(heading.group(2))
+            if rendered:
+                # Its own block, so the chunker sees the heading alone rather
+                # than a heading with the first sentence stuck to it.
+                blocks.append(f"{heading.group(1)} {rendered}")
+            continue
+
+        stripped = _MD_QUOTE_MARKER.sub("", line)
+        stripped = _MD_LIST_MARKER.sub("", stripped)
+        rendered = _markdown_inline(stripped)
+        if rendered:
+            # An image on a line of its own renders to nothing, and an empty
+            # line inside a paragraph would become a stray break.
+            paragraph.append(rendered)
+    flush()
+
+    return _PARAGRAPH_BREAK.join(blocks)
+
+
+def _markdown_table_row(line: str) -> str:
+    """One row, one line, cells joined by ', ' - or '' for the separator.
+
+    Joined rather than kept as a grid because the row is what gets read: a
+    figure's sentence is the row it sits in, and "Two bedroom, AED 2,000,000"
+    is a sentence while "| Two bedroom | AED 2,000,000 |" is a drawing.
+    """
+    cells = [cell.strip() for cell in _MD_TABLE_CELL_SPLIT.split(line.strip())]
+    if cells and not cells[0]:
+        cells.pop(0)
+    if cells and not cells[-1]:
+        cells.pop()
+    if cells and all(_MD_TABLE_SEPARATOR_CELL.match(cell) for cell in cells):
+        return ""
+    rendered = [_markdown_inline(cell) for cell in cells]
+    return ", ".join(cell for cell in rendered if cell)
+
+
+def _markdown_inline(text: str) -> str:
+    """Inline markers off, words kept.
+
+    Code spans are lifted out first and put back last: their contents are not
+    Markdown, so `*` or `_` inside one must survive the emphasis rules.
+    """
+    codes: list[str] = []
+
+    def stash(match: re.Match[str]) -> str:
+        codes.append(match.group(2))
+        return _MD_CODE_SLOT.format(len(codes) - 1)
+
+    out = _MD_INLINE_CODE.sub(stash, text)
+    # Images before links: an image IS a link with a bang, so the link rule
+    # would otherwise keep its alt text and drop only the bang.
+    out = _MD_IMAGE.sub("", out)
+    out = _MD_LINK.sub(r"\1", out)
+    out = _MD_REFERENCE_LINK.sub(r"\1", out)
+    out = _MD_STRONG.sub(r"\2", out)
+    out = _MD_EMPHASIS_STAR.sub(r"\1", out)
+    out = _MD_EMPHASIS_UNDERSCORE.sub(r"\1", out)
+    out = _MD_STRIKETHROUGH.sub(r"\1", out)
+    out = _MD_HTML_TAG.sub("", out)
+    out = html.unescape(out)
+    out = _MD_ESCAPE.sub(r"\1", out)
+    for index, code in enumerate(codes):
+        out = out.replace(_MD_CODE_SLOT.format(index), code)
+    # A removal leaves two spaces where one word used to be.
+    return " ".join(out.split())
 
 
 def figures_in(text: str) -> list[ExtractedFigure]:

@@ -270,7 +270,7 @@ KnowledgeDocument
   id                    UUID
   revision              int
   title                 str
-  source_type           "pdf" | "docx" | "txt" | "paste"
+  source_type           "pdf" | "docx" | "txt" | "md" | "paste"
   original_filename     str | null
   mime_type             str
   source_bytes           int

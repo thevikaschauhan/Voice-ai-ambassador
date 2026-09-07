@@ -15,7 +15,7 @@ implementation card cannot silently reopen or expand it.
 | Durable store | **Approved** | Supabase managed Postgres on the free tier, used as portable Postgres through its connection pooler | No alternative remains open. Railway still hosts the three application services |
 | Contact capture | **Approved** | Ask once after a high-intent turn or at the first farewell for name plus phone or email; declining is valid | No alternative remains open. Arabic and Hindi remain gated on native-reviewed copy |
 | Admin access | **Approved** | One shared access code for the POC | Per-user login adds users, roles, sessions and a real actor id to `AdminDecision`; this is deferred |
-| Document figures and formats | **Approved** | PDF, DOCX, TXT and pasted text; roughly 10-15 documents; approve extracted figures individually | No alternative remains open. Scans/OCR, legacy DOC, XLSX, images and URLs are deferred |
+| Document figures and formats | **Approved** | PDF, DOCX, TXT, Markdown and pasted text; roughly 10-15 documents; approve extracted figures individually | No alternative remains open. Scans/OCR, legacy DOC, XLSX, images and URLs are deferred |
 | Interest score | **Approved** | A 0-100 explainable score; the model extracts structured signals and code does the arithmetic; manual qualify/reject | Weights remain data so later Binghatti criteria do not require a code change |
 
 The knowledge base is global and single-tenant for this Binghatti POC. Every
@@ -190,14 +190,20 @@ not which person knew the code.
 
 At the approved scale of 10-15 documents, ingestion is synchronous and bounded:
 
-1. The admin API accepts pasted UTF-8 text or an uploaded PDF, DOCX or TXT file.
-   It verifies extension, MIME type, byte limit and expanded archive limit
-   before parsing.
+1. The admin API accepts pasted UTF-8 text or an uploaded PDF, DOCX, TXT or
+   Markdown (`.md`, `.markdown`) file. It verifies extension, MIME type, byte
+   limit and expanded archive limit before parsing.
 2. An adapter extracts text without an LLM. PDF page numbers are retained;
-   DOCX paragraphs and table cells preserve order; TXT and pasted text require
-   valid UTF-8. A PDF with no extractable text ends as
-   `failed/no_extractable_text` and tells the admin that scans need OCR, which
-   is deferred.
+   DOCX paragraphs and table cells preserve order; TXT, Markdown and pasted
+   text require valid UTF-8. Markdown is reduced to prose before chunking -
+   emphasis, code, link and list markers removed, images and fenced code
+   dropped, each table row one line of cells joined by ', ' - because chunk
+   text is spoken, and a table pipe or a `**` inside a figure's sentence is
+   read aloud. Heading markers alone are kept: the chunker starts a new chunk
+   at a leading `#` and strips it, so removing it here would flatten a
+   sectioned document into one unheaded chunk. A PDF with no extractable text
+   ends as `failed/no_extractable_text` and tells the admin that scans need
+   OCR, which is deferred.
 3. Extracted text, the source content hash, filename/MIME metadata and parse
    status are saved. Original request bytes are discarded at the end of the
    request on success or failure; re-parsing requires re-upload. Pasted text is

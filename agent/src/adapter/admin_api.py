@@ -606,7 +606,7 @@ async def upload_document(
     file: Annotated[UploadFile, File()],
     title: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
-    """Ingest an uploaded PDF, DOCX or TXT.
+    """Ingest an uploaded PDF, DOCX, TXT or Markdown file.
 
     Nothing here approves a figure or sets a scope: `add_chunk` takes no scope
     argument at all, so the default `admin_only` is not a value this route could
