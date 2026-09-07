@@ -329,6 +329,19 @@ supplies the label wiring, and for the file input its `description` is what
 finally attaches the accepted formats and the scanned-PDF warning to the field
 itself.
 
+That native file input is now **visually hidden behind a "Choose file"
+button**, because a native file input's own button is shadow DOM and cannot be
+themed cross-browser - it rendered as the browser's "Choose File / No file
+chosen" chrome beside a themed primary, which is what the human asked to fix.
+The Button is `secondary` so "Add document" stays the only primary, and it
+opens the picker by forwarding a click to the input. The input is hidden with
+`sr-only` rather than `display:none`: a display-none input cannot be clicked
+programmatically in every browser, which would break the control that drives
+it. It keeps its id, its `accept` string and its ref, so the label
+association, the size check and the post-add reset are unchanged. Hiding the
+chrome also hid the file's name, so the chosen name and size are rendered in
+prose beside the button.
+
 A detail route passes `heading` as well as `title`: `title` is the section
 label the navigation marks, the `h1` says which record ("sess-1"). Without that
 split a detail page had to choose between a useless `h1` and a second one of
