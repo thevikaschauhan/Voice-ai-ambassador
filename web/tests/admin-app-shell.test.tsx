@@ -74,11 +74,36 @@ vi.mock('next/navigation', () => ({
  * pass with the shell rendering no heading at all, which is the one thing it
  * exists to catch.
  */
-async function renderShell(children: ReactElement = <p>Page body</p>) {
+async function renderShell(
+  children: ReactElement = <p>Page body</p>,
+  // The section label the route being rendered would pass. Defaults to
+  // Overview, which is what every case wanted before the top bar carried a
+  // trail; a case asserting per-route behaviour has to set it, or it renders
+  // /admin/leads with the overview's own heading and the fixture disagrees
+  // with the pathname it just set.
+  title = 'Overview',
+) {
   const { AdminAppShell } = (await load('@/components/admin/app-shell')) as unknown as {
     AdminAppShell: (p: { title: string; children: ReactElement }) => ReactElement
   }
-  return render(<AdminAppShell title="Overview">{children}</AdminAppShell>)
+  return render(<AdminAppShell title={title}>{children}</AdminAppShell>)
+}
+
+/**
+ * The nav item by name, scoped to the sections landmark.
+ *
+ * SCOPED DELIBERATELY, and the reason is a listed UX change: the top bar now
+ * carries a breadcrumb trail, so "Overview" and "Leads" are each the name of
+ * TWO links on a detail page - the crumb and the nav item. A bare
+ * `getByRole('link', {name})` became ambiguous and threw. Scoping is not a
+ * workaround for that: it is the assertion these cases always meant. "The nav
+ * item for this section is marked current" is a stronger claim than "some link
+ * with this name somewhere on the page is", and the looser version would have
+ * passed if the marker had landed on the crumb instead of the nav.
+ */
+function navLink(name: string): HTMLElement {
+  const nav = screen.getByRole('navigation', { name: /admin sections/i })
+  return within(nav).getByRole('link', { name })
 }
 
 /**
@@ -163,31 +188,23 @@ describe('the admin app shell', () => {
       ['Leads', '/admin/leads'],
       ['Knowledge', '/admin/knowledge'],
     ] as const) {
-      expect(screen.getByRole('link', { name })).toHaveAttribute('href', href)
+      expect(within(nav).getByRole('link', { name })).toHaveAttribute('href', href)
     }
   })
 
   it('announces the current section as the current page', async () => {
     pathname = '/admin/leads'
-    await renderShell()
-    expect(screen.getByRole('link', { name: 'Leads' })).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
-    expect(screen.getByRole('link', { name: 'Overview' })).not.toHaveAttribute(
-      'aria-current',
-    )
+    await renderShell(<p>Page body</p>, 'Leads')
+    expect(navLink('Leads')).toHaveAttribute('aria-current', 'page')
+    expect(navLink('Overview')).not.toHaveAttribute('aria-current')
   })
 
   it('marks the section current on a detail page too, not just its index', async () => {
     // /admin/leads/<id> is still Leads. Matching the pathname exactly would
     // leave a reviewer on a detail page with no section highlighted at all.
     pathname = '/admin/leads/lead-1'
-    await renderShell()
-    expect(screen.getByRole('link', { name: 'Leads' })).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
+    await renderShell(<p>Page body</p>, 'sess-1')
+    expect(navLink('Leads')).toHaveAttribute('aria-current', 'page')
   })
 
   it('renders the page content inside the main landmark', async () => {
@@ -372,7 +389,7 @@ describe('the shell top bar', () => {
       ['/admin/knowledge', 'Knowledge'],
     ] as const) {
       pathname = route
-      await renderShell()
+      await renderShell(<p>Page body</p>, heading)
       const banner = screen.getByRole('banner')
       // Positive precondition: the h1 really does say this, so the negative is
       // about a DUPLICATE and not about a page that renders no title at all.

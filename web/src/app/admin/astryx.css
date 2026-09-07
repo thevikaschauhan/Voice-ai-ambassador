@@ -25,3 +25,53 @@
 @import '@astryxdesign/core/reset.css';
 @import '@astryxdesign/core/astryx.css';
 @import '../../theme/binghatti.css';
+
+/*
+ * The focus ring, taken back from the demo's stylesheet.
+ *
+ * MEASURED IN THE BROWSER, not deduced: every focusable control under /admin
+ * was painting its ring in rgb(211,178,113) - the DEMO's --color-brass-400 -
+ * and not in this theme's accent. `globals.css` declares
+ *
+ *   :focus-visible { outline: 2px solid var(--color-brass-400); }
+ *
+ * OUTSIDE any @layer, and unlayered CSS beats every layered rule no matter
+ * how the layers are ordered. So the theme's own `--focus-outline-color` was
+ * a token nothing read, and the one thing the direction is most explicit
+ * about brass marking - a focused control - was being coloured by the surface
+ * this route group exists to be separate from.
+ *
+ * Both rings are brass and nobody would have seen it. It still matters: with
+ * the demo's rule winning, changing the accent in binghatti.theme.ts would
+ * move every brass mark on /admin EXCEPT the focus ring, which breaks the one
+ * property that makes a one-file theme worth having.
+ *
+ * Unlayered here too, so it competes on specificity rather than on layer
+ * order - and `[data-astryx-theme]` gives it more. The COLOUR still comes
+ * from the theme: this rule decides which declaration wins, not what it says.
+ */
+[data-astryx-theme] :focus-visible {
+  outline-color: var(--color-accent);
+}
+
+/*
+ * Lining, tabular figures across the admin.
+ *
+ * FOUND IN THE BROWSER: a score of 61 rendered as "6ı". Cormorant Garamond
+ * ships OLD-STYLE figures by default - varying heights, some descending below
+ * the baseline - which is correct for running prose in a book and unreadable
+ * for a number in a column. The 1 sat at x-height beside a full-height 6 and
+ * looked like a dotless i.
+ *
+ * `font-variant-numeric` is INHERITED, so one declaration on the theme root
+ * reaches both faces, and both want it: lining figures so digits share a
+ * height, tabular so a column of scores lines up on its digits rather than
+ * shifting with each value. The direction asks for tabular numerals in as many
+ * words; this is where they come from.
+ *
+ * On the theme root and not on `body`, so it applies to /admin only - the
+ * demo's own `font-feature-settings: 'tnum'` in globals.css stays the demo's.
+ */
+[data-astryx-theme] {
+  font-variant-numeric: lining-nums tabular-nums;
+}

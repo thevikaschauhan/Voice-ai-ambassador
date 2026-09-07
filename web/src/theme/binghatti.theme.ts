@@ -151,6 +151,37 @@ export const binghattiTheme = defineTheme({
      * matters more here than usual, because the fill is what used to define
      * the hit area.
      */
+    /**
+     * THE ACTIVE NAV ITEM IS A BRASS RULE, NOT A PILL.
+     *
+     * FOUND IN THE BROWSER, and it is the half of finding G2 my first pass did
+     * not actually close. G2 says the sidebar has "no active marker beyond a
+     * grey pill"; I themed everything around it and left the pill in place -
+     * measured as `rgba(233,225,213,0.2)`, which is text-primary at 20%, so
+     * the current section was marked by a translucent white lozenge on a warm
+     * ink sidebar. Warmer than before and still a pill, still not brass, and
+     * still the thing the finding names.
+     *
+     * A 3px inset rule on the leading edge plus a brass label is a MARKER: it
+     * says which item is current without becoming a filled shape, which is the
+     * direction's one rule about this colour. The fill is removed rather than
+     * tinted, because a brass fill here would be the largest brass area on
+     * every page - exactly what the primary button override below exists to
+     * prevent.
+     *
+     * `inset 3px 0 0 0` rather than a border: a border changes the item's box
+     * and shifts every label 3px right when it becomes current, which reads as
+     * the list twitching as you navigate. Contrast measured: brass #EAC16C on
+     * the sidebar's #171001 is 11.11:1.
+     */
+    'side-nav-item': {
+      'selected:selected': {
+        backgroundColor: 'transparent',
+        color: 'var(--color-accent)',
+        boxShadow: 'inset 3px 0 0 0 var(--color-accent)',
+      },
+    },
+
     button: {
       'variant:primary': {
         backgroundColor: 'transparent',

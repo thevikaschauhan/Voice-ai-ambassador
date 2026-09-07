@@ -65,9 +65,22 @@ vi.mock('next/navigation', () => ({
   usePathname: () => pathname,
 }))
 
-async function providers(): Promise<(p: { children: ReactNode }) => ReactElement> {
+/**
+ * The route group's real provider composition.
+ *
+ * `commitSha` is passed explicitly - the admin LAYOUT reads it from the
+ * environment on the server and hands it down, and these cases are about the
+ * theme rather than the footer, so null is the honest fixture: it is what
+ * every environment except Railway supplies.
+ */
+async function providers(): Promise<
+  (p: { commitSha: string | null; children: ReactNode }) => ReactElement
+> {
   const { AdminProviders } = (await load('@/app/admin/providers')) as unknown as {
-    AdminProviders: (p: { children: ReactNode }) => ReactElement
+    AdminProviders: (p: {
+      commitSha: string | null
+      children: ReactNode
+    }) => ReactElement
   }
   return AdminProviders
 }
@@ -96,7 +109,7 @@ describe('the admin theme', () => {
       AdminShell: (p: { configured: boolean }) => ReactElement
     }
     render(
-      <AdminProviders>
+      <AdminProviders commitSha={null}>
         <AdminShell configured />
       </AdminProviders>,
     )
@@ -112,7 +125,7 @@ describe('the admin theme', () => {
       AdminAppShell: (p: { title: string; children: ReactElement }) => ReactElement
     }
     render(
-      <AdminProviders>
+      <AdminProviders commitSha={null}>
         <AdminAppShell title="Overview">
           <p>Page body</p>
         </AdminAppShell>
@@ -137,7 +150,7 @@ describe('the admin theme', () => {
       AdminShell: (p: { configured: boolean }) => ReactElement
     }
     render(
-      <AdminProviders>
+      <AdminProviders commitSha={null}>
         <AdminShell configured />
       </AdminProviders>,
     )

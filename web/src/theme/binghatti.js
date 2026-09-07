@@ -507,6 +507,13 @@ export const binghattiTheme = {
       "base": {
         "padding": "var(--spacing-3)"
       }
+    },
+    "side-nav-item": {
+      "selected:selected": {
+        "backgroundColor": "transparent",
+        "color": "var(--color-accent)",
+        "boxShadow": "inset 3px 0 0 0 var(--color-accent)"
+      }
     }
   },
   __onDark: {

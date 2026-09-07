@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { LinkProvider } from '@astryxdesign/core/Link'
 import { Theme } from '@astryxdesign/core/theme'
+import { BuildInfoProvider } from '@/components/admin/build-info'
 import { binghattiTheme } from '@/theme/binghatti'
 import type { ReactNode } from 'react'
 
@@ -25,11 +26,25 @@ import type { ReactNode } from 'react'
  *
  * `LinkProvider` hands Astryx next/link, so a SideNavItem or a breadcrumb with
  * an `href` client-navigates instead of reloading the document.
+ *
+ * `BuildInfoProvider` carries the commit sha the layout read on the server
+ * down to the shell's footer. It is here rather than in each page for the
+ * reason the h1 taught: a rule every page has to remember is a rule some page
+ * will forget, and all five admin routes lost their heading that way at once.
  */
-export function AdminProviders({ children }: { children: ReactNode }) {
+export function AdminProviders({
+  commitSha,
+  children,
+}: {
+  /** The sha this service was built from, or null when unset. */
+  commitSha: string | null
+  children: ReactNode
+}) {
   return (
     <Theme theme={binghattiTheme} mode="dark">
-      <LinkProvider component={Link}>{children}</LinkProvider>
+      <LinkProvider component={Link}>
+        <BuildInfoProvider commitSha={commitSha}>{children}</BuildInfoProvider>
+      </LinkProvider>
     </Theme>
   )
 }
