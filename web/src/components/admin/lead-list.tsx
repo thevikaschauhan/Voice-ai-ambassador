@@ -6,7 +6,8 @@ import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Table, proportional } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { endReasonLabel } from '@/lib/admin/leads'
-import type { LeadStatus, LeadSummaryRow } from '@/lib/admin/leads'
+import type { LeadSummaryRow } from '@/lib/admin/leads'
+import { LeadStatusBadge } from './status-badge'
 
 /**
  * MEASURED CONSTRAINT, not a preference: Astryx's Table is generic over
@@ -36,22 +37,6 @@ type TableRow = LeadSummaryRow & Record<string, unknown>
  * zero - zero would read as "this buyer was uninterested" when what happened is
  * that nobody knows yet.
  */
-
-/**
- * The status words, and the variant that carries each one's weight.
- *
- * SPELLED OUT HERE rather than derived from the enum by capitalising it,
- * because the display word is a decision and the enum is an API value. They
- * agree with /admin's overview cards on purpose: one surface, one spelling of
- * one status. Reading `row.status` into the cell and leaving a CSS
- * `text-transform` to make it look like a label is what this replaces - it put
- * "unreviewed" in the DOM and "UNREVIEWED" on the screen.
- */
-const STATUS: Record<LeadStatus, { label: string; variant: 'neutral' | 'success' | 'error' }> = {
-  unreviewed: { label: 'Unreviewed', variant: 'neutral' },
-  qualified: { label: 'Qualified', variant: 'success' },
-  rejected: { label: 'Rejected', variant: 'error' },
-}
 
 export function LeadList({ rows }: { rows: readonly LeadSummaryRow[] }) {
   if (rows.length === 0) {
@@ -186,7 +171,7 @@ export function LeadList({ rows }: { rows: readonly LeadSummaryRow[] }) {
           header: 'Status',
           width: proportional(1),
           renderCell: (row: TableRow) => (
-            <Badge variant={STATUS[row.status].variant} label={STATUS[row.status].label} />
+            <LeadStatusBadge status={row.status} />
           ),
         },
       ]}

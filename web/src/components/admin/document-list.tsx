@@ -1,12 +1,12 @@
 'use client'
 
 import Link from 'next/link'
-import { Badge } from '@astryxdesign/core/Badge'
 import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Table, proportional } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { PARSE_ERROR_ADVICE, PARSE_ERROR_LABELS } from '@/lib/admin/knowledge'
-import type { DocumentRow, DocumentStatus } from '@/lib/admin/knowledge'
+import type { DocumentRow } from '@/lib/admin/knowledge'
+import { DocumentStatusBadge } from './status-badge'
 
 /**
  * The documents the ambassador may draw on, with their status.
@@ -20,25 +20,6 @@ import type { DocumentRow, DocumentStatus } from '@/lib/admin/knowledge'
 
 /** See lead-list.tsx: Astryx's Table needs an index signature its rows lack. */
 type TableRow = DocumentRow & Record<string, unknown>
-
-/**
- * All five statuses, each with its own word and weight.
- *
- * TYPED AS Record<DocumentStatus, ...> ON PURPOSE: a sixth status added to the
- * enum now fails the build here instead of quietly rendering in the neutral
- * style, which is how `parsing` and `archived` came to look exactly like a
- * draft ready to publish.
- */
-const STATUS: Record<
-  DocumentStatus,
-  { label: string; variant: 'neutral' | 'info' | 'success' | 'error' }
-> = {
-  parsing: { label: 'Parsing', variant: 'info' },
-  draft: { label: 'Draft', variant: 'neutral' },
-  published: { label: 'Published', variant: 'success' },
-  failed: { label: 'Failed', variant: 'error' },
-  archived: { label: 'Archived', variant: 'neutral' },
-}
 
 export function DocumentList({ rows }: { rows: readonly DocumentRow[] }) {
   if (rows.length === 0) {
@@ -101,7 +82,7 @@ export function DocumentList({ rows }: { rows: readonly DocumentRow[] }) {
           width: proportional(2),
           renderCell: (row: TableRow) => (
             <div className="flex flex-col gap-1">
-              <Badge variant={STATUS[row.status].variant} label={STATUS[row.status].label} />
+              <DocumentStatusBadge status={row.status} />
               {row.parse_error_code === null ? null : (
                 <Text as="p" display="block" type="supporting" color="secondary">
                   {PARSE_ERROR_LABELS[row.parse_error_code]}

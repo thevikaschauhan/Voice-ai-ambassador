@@ -50,9 +50,22 @@ function isCurrent(pathname: string, href: string, exact: boolean): boolean {
 
 export function AdminAppShell({
   title,
+  heading,
   children,
 }: {
+  /** The short section label, shown in the top bar. */
   title: string
+  /**
+   * The page h1, when the page's subject is not its section label.
+   *
+   * A detail route needs both: the top bar says what KIND of page this is
+   * ("Lead"), the h1 says WHICH ONE ("sess-1"). Before this existed, a detail
+   * page carried its own h1 for the record and the shell added a second one
+   * for the section - two level-one headings, and a screen reader user
+   * navigating by h1 got two page titles, neither of which was the page.
+   * Defaults to `title`, so a list page passes one string and gets one h1.
+   */
+  heading?: string
   children: ReactNode
 }) {
   const pathname = usePathname()
@@ -105,7 +118,7 @@ export function AdminAppShell({
       */}
       <div className="flex flex-col gap-6">
         <Text as="h1" type="display-3">
-          {title}
+          {heading ?? title}
         </Text>
         {children}
       </div>
