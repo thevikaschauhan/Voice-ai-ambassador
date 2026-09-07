@@ -3,7 +3,7 @@ import { Link } from '@astryxdesign/core/Link'
 import { Card } from '@astryxdesign/core/Card'
 import { Text } from '@astryxdesign/core/Text'
 import { DocumentStatusBadge } from '@/components/admin/status-badge'
-import { SOURCE_LABELS } from '@/lib/admin/knowledge'
+import { sourceLabel } from '@/lib/admin/knowledge'
 import { AdminAppShell } from '@/components/admin/app-shell'
 import { ChunkScope } from '@/components/admin/chunk-scope'
 import { FigureReview } from '@/components/admin/figure-review'
@@ -83,7 +83,7 @@ export default async function KnowledgeDocumentPage({
             className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-[var(--color-border)] pb-4"
           >
             <Text as="span" type="supporting" color="secondary">
-              {SOURCE_LABELS[read.data.source_type]} · revision {read.data.revision}
+              {sourceLabel(read.data.source_type)} · revision {read.data.revision}
             </Text>
             <DocumentStatusBadge status={read.data.status} />
           </div>

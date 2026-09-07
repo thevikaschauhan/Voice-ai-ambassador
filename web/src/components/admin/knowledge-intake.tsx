@@ -248,7 +248,7 @@ export function KnowledgeIntake() {
       <Field
         label="Or a file"
         inputID="doc-file"
-        description={`PDF, DOCX or TXT, up to ${Math.round(
+        description={`PDF, DOCX, TXT or Markdown, up to ${Math.round(
           MAX_UPLOAD_BYTES / (1024 * 1024),
         )}MB. A scanned PDF has no extractable text and will fail: OCR is deferred.`}
       >

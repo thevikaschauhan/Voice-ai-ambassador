@@ -5,7 +5,7 @@ import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Table, proportional } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { PARSE_ERROR_ADVICE, PARSE_ERROR_LABELS } from '@/lib/admin/knowledge'
-import { SOURCE_LABELS } from '@/lib/admin/knowledge'
+import { sourceLabel } from '@/lib/admin/knowledge'
 import type { DocumentRow } from '@/lib/admin/knowledge'
 import { DocumentStatusBadge } from './status-badge'
 import { relativeAge } from './age'
@@ -80,7 +80,7 @@ export function DocumentList({ rows }: { rows: readonly DocumentRow[] }) {
             renderCell: (row: TableRow) => (
               // The spelled label, in the DOM as it appears on screen - no CSS
               // text-transform, which is the mismatch the status badge fixes.
-              <Text as="span">{SOURCE_LABELS[row.source_type]}</Text>
+              <Text as="span">{sourceLabel(row.source_type)}</Text>
             ),
           },
           {

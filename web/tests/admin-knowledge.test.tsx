@@ -349,11 +349,15 @@ describe('the document detail a reviewer scopes from', () => {
     const { SOURCE_LABELS } = (await load('@/lib/admin/knowledge')) as unknown as {
       SOURCE_LABELS: Record<string, string>
     }
+    // Exhaustive on purpose: the map is a Record over the union, so this
+    // fails the day a source type is added and nobody teaches it a word -
+    // which is exactly what happened when 'md' landed.
     expect(SOURCE_LABELS).toEqual({
       paste: 'Pasted',
       pdf: 'PDF',
       docx: 'Word',
       txt: 'Text',
+      md: 'Markdown',
     })
   })
 
@@ -638,8 +642,10 @@ describe('choosing a file', () => {
     const input = nativeInput()
     expect(input).toBeInTheDocument()
     expect(input.className).toContain('sr-only')
-    // The contract the closure's other cases depend on, unchanged.
-    expect(input.accept).toBe('.pdf,.docx,.txt')
+    // The contract the closure's other cases depend on. The string itself
+    // moved when the API learned Markdown; what this case protects is that
+    // hiding the input did not DROP it.
+    expect(input.accept).toBe('.pdf,.docx,.txt,.md,.markdown')
     expect(input.id).toBe('doc-file')
   })
 
@@ -960,7 +966,7 @@ describe('intake', () => {
      */
     await renderIntake()
     const input = screen.getByLabelText(/file/i)
-    expect(input).toHaveAccessibleDescription(/pdf, docx or txt/i)
+    expect(input).toHaveAccessibleDescription(/pdf, docx, txt or markdown/i)
     expect(input).toHaveAccessibleDescription(/ocr is deferred/i)
   })
 
