@@ -189,3 +189,77 @@ def test_no_contact_value_ever_reaches_an_emitted_event() -> None:
         assert secret not in stream, f"{secret!r} reached the event stream"
     # It still says something happened, or the audit is blind.
     assert "contact" in stream
+
+
+# --- a greeting is not a name (task-contact-greeting-not-a-name) -----------
+#
+# Found in Kelly's memo: `_NOT_A_NAME` held no greeting or filler words, so the
+# first word of an ordinary polite reply became the buyer's name.
+
+
+def test_a_reply_that_opens_with_a_greeting_still_finds_the_name() -> None:
+    """The four replies from the card, one assertion each.
+
+    Separate cases in one test with the reply in the message, because the rule
+    is per-word: a regression should say WHICH opening still swallows the name.
+    """
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+
+    for reply, expected in (
+        ("Hi, I am Ahmed, 0501234567", "Ahmed"),
+        ("Hello, this is Ahmed", "Ahmed"),
+        ("Ahmed speaking", "Ahmed"),
+        ("Sure thing, Ahmed", "Ahmed"),
+    ):
+        assert policy._name_in(reply) == expected, reply
+
+
+def test_a_reply_that_is_only_greeting_and_filler_yields_no_name() -> None:
+    """No name is a valid answer; a filler word standing in for one is not.
+
+    `None` here means the buyer said nothing that could be a name, which the
+    policy already handles. "um" as a name is a value somebody would later read.
+    """
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+
+    for reply in ("Hello, um, yeah", "Hi there", "yeah well hmm"):
+        assert policy._name_in(reply) is None, reply
+
+
+def test_the_name_that_reaches_the_vocative_context_is_the_buyer_s() -> None:
+    """The end of the chain, and the reason this is not cosmetic.
+
+    `_name_in` feeds `_pending_name`, which `names_given` exposes, which
+    `adapter.agent` hands to `VocativeContext.with_names` - the set of names
+    the invented-name validator will let the agent SAY. A greeting captured as
+    a name does not just sit in a record; it widens that allowlist.
+    """
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    policy.on_farewell(turn_index=4)
+    policy.observe_reply("Hi, I am Ahmed, 0501234567", turn_index=5)
+
+    assert policy.names_given == frozenset({"Ahmed"})
+
+    outcome = policy.observe_confirmation("yes that is right", turn_index=6)
+    assert outcome.settled
+    assert policy.state.name == "Ahmed"
+    assert policy.state.phone == "0501234567"
+
+
+def test_a_plain_name_and_number_is_unchanged() -> None:
+    """The regression guard: the reply this policy was written for."""
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    policy.on_farewell(turn_index=4)
+    policy.observe_reply("Ahmed, 0501234567", turn_index=5)
+    policy.observe_confirmation("yes", turn_index=6)
+
+    assert policy.state.name == "Ahmed"
+    assert policy.state.phone == "0501234567"
