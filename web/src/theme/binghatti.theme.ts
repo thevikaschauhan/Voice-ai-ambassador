@@ -182,6 +182,39 @@ export const binghattiTheme = defineTheme({
       },
     },
 
+    /**
+     * A BRASS BADGE VARIANT, which Astryx does not ship.
+     *
+     * Finding G4 counts three badge colour systems running at once on the lead
+     * list, and the replacement rule needs a third weight Astryx has no name
+     * for: neutral for a state nobody must act on, FLAG RED for a failure or a
+     * rejection, and something in between for "a reviewer needs to look at
+     * this". Astryx's built-ins are neutral/info/success/warning/error plus the
+     * categorical hues, and every one of those either means something else
+     * already or adds a fourth colour system to a screen that has too many.
+     *
+     * A value that is not built in becomes a NEW variant: `astryx theme build`
+     * writes the module augmentation, so `<Badge variant="accent" />`
+     * typechecks wherever this theme is active. That is the documented
+     * mechanism, not a cast.
+     *
+     * A TINT AND A BORDER, NOT A FILL. `--color-accent-muted` is the accent at
+     * 25% in dark mode, so the label stays brass-on-ink rather than
+     * ink-on-brass: measured 10.06:1 against the card surface. A solid brass
+     * badge on every unreviewed row would put more brass on this page than
+     * anything else on it, which is what the primary-button override below
+     * exists to prevent.
+     */
+    badge: {
+      'variant:accent': {
+        backgroundColor: 'var(--color-accent-muted)',
+        borderWidth: 'var(--border-width)',
+        borderStyle: 'solid',
+        borderColor: 'var(--color-accent)',
+        color: 'var(--color-accent)',
+      },
+    },
+
     button: {
       'variant:primary': {
         backgroundColor: 'transparent',

@@ -391,6 +391,13 @@ export const binghattiTheme = {
       "variant:gray": {
         "backgroundColor": "var(--color-background-gray)",
         "color": "var(--color-text-gray)"
+      },
+      "variant:accent": {
+        "backgroundColor": "var(--color-accent-muted)",
+        "borderWidth": "var(--border-width)",
+        "borderStyle": "solid",
+        "borderColor": "var(--color-accent)",
+        "color": "var(--color-accent)"
       }
     },
     "statusdot": {

@@ -533,6 +533,14 @@
     color: var(--color-text-gray);
   }
 
+  .astryx-badge.accent {
+    background-color: var(--color-accent-muted);
+    border-width: var(--border-width);
+    border-style: solid;
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+
   .astryx-statusdot.success {
     background-color: var(--astryx-theme-neutral-color-status-fill-success);
   }

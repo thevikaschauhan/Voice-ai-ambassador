@@ -20,6 +20,26 @@ async function load(specifier: string): Promise<Record<string, never>> {
   return (await import(/* @vite-ignore */ specifier)) as Record<string, never>
 }
 
+/**
+ * Where a row click ended up.
+ *
+ * The list navigates by clicking the row's OWN link rather than by calling
+ * `router.push`, so there is no `next/navigation` to mock here - which is
+ * most of the point: the first draft used `useRouter` and instantly broke
+ * `admin-call-end-reason.test.tsx`, which renders this list and knows nothing
+ * about routers. Spying on the anchor prototype tests the real path with no
+ * module mock and no harness for any other file to inherit.
+ */
+function watchLinkClicks(): string[] {
+  const clicked: string[] = []
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    clicked.push(this.getAttribute('href') ?? '')
+  })
+  return clicked
+}
+
 async function renderList(rows: LeadSummaryRow[]) {
   const { LeadList } = (await load('@/components/admin/lead-list')) as unknown as {
     LeadList: (props: { rows: LeadSummaryRow[] }) => ReactElement
@@ -256,6 +276,32 @@ describe('the lead list a reviewer works from', () => {
     return row as HTMLElement
   }
 
+  it('navigates from a click anywhere in the row', async () => {
+    /*
+     * The behaviour the attribute above only describes. A click on a plain
+     * cell - the language, not the link - has to reach the same destination,
+     * because "the whole row is the target" is about the 1300px of row that
+     * is not the link.
+     */
+    await renderList(ROWS)
+    const clicked = watchLinkClicks()
+    const row = rowFor('binghatti-skyrise')
+    await userEvent.click(within(row).getByText('EN'))
+    expect(clicked).toEqual(['/admin/leads/lead-1'])
+  })
+
+  it('leaves a click on the link itself to the link', async () => {
+    // Otherwise the row handler fires alongside next/link's own navigation,
+    // and a future action button in a cell would navigate away when pressed.
+    await renderList(ROWS)
+    const clicked = watchLinkClicks()
+    const row = rowFor('binghatti-skyrise')
+    await userEvent.click(within(row).getByRole('link'))
+    // The link's own navigation handles it; the row must not click it AGAIN,
+    // which would be a second navigation for one press.
+    expect(clicked).toEqual([])
+  })
+
   it('makes the whole row the link target, not just the session id', async () => {
     /*
      * Astryx's Table exposes no row-level href or click prop - measured, its
@@ -360,7 +406,12 @@ describe('the lead list a reviewer works from', () => {
     await renderList(ROWS)
     const score = screen.getByText('61')
     expect(score).toHaveAttribute('data-score')
-    expect(score.getAttribute('data-type')).not.toMatch(/display/)
+    // `?? ''` because getAttribute returns NULL when the attribute is absent,
+    // and `.not.toMatch(null)` throws a TypeError instead of passing - so the
+    // stronger the implementation got (a plain span with no data-type at all),
+    // the more this assertion broke. Astryx's Text reflects its `type` here,
+    // so an empty string is the correct reading of "not a display heading".
+    expect(score.dataset.type ?? '').not.toMatch(/display/)
   })
 })
 

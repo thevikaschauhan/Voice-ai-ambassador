@@ -20,6 +20,7 @@ declare module '@astryxdesign/core/Heading' {
 declare module '@astryxdesign/core/Badge' {
   interface BadgeVariantMap {
     'gray': true;
+    'accent': true;
   }
 }
 
