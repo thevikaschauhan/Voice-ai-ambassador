@@ -337,6 +337,26 @@ describe('the document detail a reviewer scopes from', () => {
     expect([...badges].map((b) => b.getAttribute('data-variant'))).not.toContain('warning')
   })
 
+  it('spells the source in the detail header too, not only on the list', async () => {
+    /*
+     * FOUND IN THE BROWSER: PR E spelled the source on the LIST and left this
+     * header printing `source_type.toUpperCase()`, so "PASTE" was still on a
+     * reviewer's screen one click away. The same one-surface miss that left a
+     * warning-yellow badge on the lead detail after E collapsed the list's
+     * badges - which is why the map now lives in lib/admin/knowledge and both
+     * surfaces read it.
+     */
+    const { SOURCE_LABELS } = (await load('@/lib/admin/knowledge')) as unknown as {
+      SOURCE_LABELS: Record<string, string>
+    }
+    expect(SOURCE_LABELS).toEqual({
+      paste: 'Pasted',
+      pdf: 'PDF',
+      docx: 'Word',
+      txt: 'Text',
+    })
+  })
+
   it('styles the scope select from the theme rather than from the current colour', async () => {
     /*
      * G7: "native unstyled <select> beside an Astryx button". It was already

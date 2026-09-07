@@ -3,6 +3,7 @@ import { Link } from '@astryxdesign/core/Link'
 import { Card } from '@astryxdesign/core/Card'
 import { Text } from '@astryxdesign/core/Text'
 import { DocumentStatusBadge } from '@/components/admin/status-badge'
+import { SOURCE_LABELS } from '@/lib/admin/knowledge'
 import { AdminAppShell } from '@/components/admin/app-shell'
 import { ChunkScope } from '@/components/admin/chunk-scope'
 import { FigureReview } from '@/components/admin/figure-review'
@@ -64,10 +65,25 @@ export default async function KnowledgeDocumentPage({
         <Banner status="error" title={read.reason} />
       ) : (
         <>
-          {/* No h1: the shell renders the document title as the page h1. */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {/*
+            THE HEADER BLOCK (finding G7), matching the lead detail's: what
+            this document is, where it came from and where the review stands,
+            in one place with a rule under it.
+
+            The source is SPELLED here, not uppercased. PR E spelled it on the
+            list and left this header printing the raw enum, so "PASTE" was
+            still on screen one click away - the same one-surface miss that
+            left a warning-yellow badge on the lead detail. Both now read from
+            the one map in lib/admin/knowledge.
+
+            No h1: the shell renders the document title as the page h1.
+          */}
+          <div
+            data-testid="document-header"
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-[var(--color-border)] pb-4"
+          >
             <Text as="span" type="supporting" color="secondary">
-              {read.data.source_type.toUpperCase()} · revision {read.data.revision}
+              {SOURCE_LABELS[read.data.source_type]} · revision {read.data.revision}
             </Text>
             <DocumentStatusBadge status={read.data.status} />
           </div>

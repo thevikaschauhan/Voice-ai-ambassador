@@ -5,6 +5,7 @@ import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Table, proportional } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { PARSE_ERROR_ADVICE, PARSE_ERROR_LABELS } from '@/lib/admin/knowledge'
+import { SOURCE_LABELS } from '@/lib/admin/knowledge'
 import type { DocumentRow } from '@/lib/admin/knowledge'
 import { DocumentStatusBadge } from './status-badge'
 import { relativeAge } from './age'
@@ -22,25 +23,6 @@ import { relativeAge } from './age'
 /** See lead-list.tsx: Astryx's Table needs an index signature its rows lack. */
 type TableRow = DocumentRow & Record<string, unknown>
 
-/**
- * How a source reads on screen (finding G6: "source shows raw 'PASTE'").
- *
- * `source_type` is the only cell on this row whose value is an ENUM NAME
- * rather than a word, and the list uppercased it - so a pasted paragraph read
- * as "PASTE", which is a database value on a reviewer's screen. "Word" for
- * `docx` is the same argument one step further: nobody outside this
- * repository calls a Word document a docx.
- *
- * Typed on the full union, so a source type added upstream fails the build
- * here rather than rendering as `undefined` - the same guard the status maps
- * carry, and for the same reason.
- */
-const SOURCE_LABELS: Record<DocumentRow['source_type'], string> = {
-  paste: 'Pasted',
-  pdf: 'PDF',
-  docx: 'Word',
-  txt: 'Text',
-}
 
 export function DocumentList({ rows }: { rows: readonly DocumentRow[] }) {
   if (rows.length === 0) {

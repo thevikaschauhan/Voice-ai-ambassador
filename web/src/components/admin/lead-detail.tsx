@@ -96,9 +96,15 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
    * there anything to show", and the fields are what answer it - the same
    * reasoning `toScore` uses in leads.server.ts, where consulting
    * analysis_status instead of the fields was the wrong instinct.
+   *
+   * TURNS ARE DELIBERATELY NOT PART OF THIS, and including them was a defect
+   * the browser caught: a failed analysis on a real call still HAS a
+   * transcript, so `turns.length > 0` made this true and rendered all three
+   * cards again - "Analysis failed" in one, "No score" in the next - which is
+   * the pile of empty cards the collapse exists to remove. The transcript is
+   * not analysis output; it stands on its own below.
    */
-  const analysed =
-    lead.summary !== null || lead.score !== null || lead.turns.length > 0
+  const analysed = lead.summary !== null || lead.score !== null
 
   const save = useCallback(async () => {
     // Answered rather than pre-empted by a disabled button: qualify or reject
@@ -269,25 +275,6 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
             )}
           </Section>
 
-          <Section heading="Buyer turns cited by the score">
-            <ol className="flex flex-col gap-2">
-              {lead.turns.map((turn) => (
-                <li key={turn.turn_index} className="flex flex-wrap items-baseline gap-2">
-                  <Text as="span" type="supporting" color="secondary">
-                    turn {turn.turn_index}
-                  </Text>
-                  <Text as="span">{turn.text}</Text>
-                  {/*
-                    NEUTRAL, not warning. PR E collapsed the list's badges to
-                    three weights and left this one yellow, so the admin ran two
-                    badge vocabularies, one per surface. An incomplete recording
-                    is a fact about the call, not an action a reviewer must take.
-                  */}
-                  {turn.audit_incomplete ? <Badge variant="neutral" label="incomplete" /> : null}
-                </li>
-              ))}
-            </ol>
-          </Section>
             </>
           ) : (
             /*
@@ -306,6 +293,33 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
                   ? 'The analysis failed, so there is no summary, score or cited turn for this call. The transcript was still recorded.'
                   : 'The analysis has not completed, so there is no summary, score or cited turn yet. It runs after the call ends.'}
               </Text>
+            </Section>
+          )}
+
+          {/*
+            The transcript, on its own guard. It is what the CALL produced,
+            not what the ANALYSIS produced, so it survives a failed analysis
+            and disappears only when there are no turns at all.
+          */}
+          {lead.turns.length === 0 ? null : (
+            <Section heading="Buyer turns cited by the score">
+              <ol className="flex flex-col gap-2">
+                {lead.turns.map((turn) => (
+                  <li key={turn.turn_index} className="flex flex-wrap items-baseline gap-2">
+                    <Text as="span" type="supporting" color="secondary">
+                      turn {turn.turn_index}
+                    </Text>
+                    <Text as="span">{turn.text}</Text>
+                    {/*
+                      NEUTRAL, not warning. PR E collapsed the list's badges to
+                      three weights and left this one yellow, so the admin ran two
+                      badge vocabularies, one per surface. An incomplete recording
+                      is a fact about the call, not an action a reviewer must take.
+                    */}
+                    {turn.audit_incomplete ? <Badge variant="neutral" label="incomplete" /> : null}
+                  </li>
+                ))}
+              </ol>
             </Section>
           )}
         </div>

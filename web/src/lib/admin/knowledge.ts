@@ -146,3 +146,25 @@ export const ACCEPTED_UPLOAD_EXTENSIONS = '.pdf,.docx,.txt'
 export function scopeCanReachACall(scope: RetrievalScope): boolean {
   return scope === 'general_knowledge' || scope === 'project_knowledge'
 }
+
+/**
+ * How a source reads on screen.
+ *
+ * `source_type` is the only field on a document whose value is an ENUM NAME
+ * rather than a word, and both the list and the detail header used to
+ * uppercase it - so a pasted paragraph read as "PASTE", a database value on a
+ * reviewer's screen. "Word" for `docx` follows the same rule: nobody outside
+ * this repository calls a Word document a docx.
+ *
+ * IT LIVES HERE BECAUSE TWO SURFACES SHOW IT. PR E spelled it on the list and
+ * left the document detail printing the raw enum, which is the same one-surface
+ * miss that left a warning-yellow badge on the lead detail. One map, and the
+ * `Record` over the union means the day a source type is added upstream the
+ * build fails here rather than rendering `undefined`.
+ */
+export const SOURCE_LABELS: Record<DocumentRow['source_type'], string> = {
+  paste: 'Pasted',
+  pdf: 'PDF',
+  docx: 'Word',
+  txt: 'Text',
+}

@@ -599,6 +599,32 @@ describe('the lead detail a reviewer decides from', () => {
     expect(screen.queryByText(/no score: the analysis has not completed/i)).toBeNull()
   })
 
+  it('collapses a failed analysis even when the call has turns', async () => {
+    /*
+     * FOUND IN THE BROWSER, and it is the case my RED fixture could not
+     * reach: `AWAITING` has `turns: []`, so the predicate was never asked
+     * about a lead that HAS turns and no analysis. A failed analysis on a real
+     * call is exactly that - the transcript is saved, the summary and score
+     * are not - and it rendered all three cards again, with "Analysis failed"
+     * in one and "No score" in the next.
+     *
+     * TURNS ARE TRANSCRIPT, NOT ANALYSIS OUTPUT. Whether the analysis produced
+     * anything is a question about the summary and the score; the turns
+     * section stands on its own and stays whenever there are turns to show.
+     */
+    await renderDetail({
+      ...AWAITING,
+      analysis_status: 'failed',
+      turns: [{ turn_index: 1, speaker: 'buyer', text: 'Not now.', audit_incomplete: false }],
+    })
+    expect(screen.getByRole('heading', { name: /awaiting analysis/i })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /^summary$/i })).toBeNull()
+    expect(screen.queryByRole('heading', { name: /interest score/i })).toBeNull()
+    // The transcript is still worth showing: it is what the call produced.
+    expect(screen.getByRole('heading', { name: /buyer turns/i })).toBeInTheDocument()
+    expect(screen.getByText('Not now.')).toBeInTheDocument()
+  })
+
   it('still offers the decision on a lead with nothing analysed', async () => {
     /*
      * The collapse must not take the ACTION with it. A pending analysis is
