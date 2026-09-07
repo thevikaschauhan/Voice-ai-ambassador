@@ -306,4 +306,68 @@ describe('intake', () => {
     const input = screen.getByLabelText(/file/i) as HTMLInputElement
     expect(input.accept).toBe('.pdf,.docx,.txt')
   })
+
+  /**
+   * The human's report, 2026-09-07: "I'm not able to upload anything and
+   * manual copy paste is not working because there's no CTA to save it".
+   *
+   * Reproduced in a real browser before any of this was written: with a
+   * paragraph pasted and no Title, the submit control was disabled at
+   * opacity 0.4, the role=status region was EMPTY, and clicking it made no
+   * network request at all. Same for a chosen PDF. So the reviewer's report
+   * was exactly right - there was no control that would save anything, and
+   * nothing on screen said why.
+   *
+   * A DISABLED CONTROL IS NOT A MESSAGE. It removes the only thing a reviewer
+   * can press to find out what is wrong, which is the opposite of what a form
+   * that wants a field should do. These four cases are the contract instead:
+   * the CTA is always pressable, pressing it says what is missing, and a title
+   * is never what is missing because we can always derive one.
+   */
+  it('offers a pressable control once there is something to save, with no title', async () => {
+    await renderIntake()
+    await userEvent.type(screen.getByLabelText(/paste/i), 'A paragraph about the payment plan.')
+    expect(screen.getByRole('button', { name: /add document/i })).toBeEnabled()
+  })
+
+  it('says what is missing when it is pressed with nothing filled in', async () => {
+    const sent = stubFetch()
+    await renderIntake()
+    await userEvent.click(screen.getByRole('button', { name: /add document/i }))
+    // The reason goes in the region that already exists for problems, so a
+    // screen reader announces it rather than a reviewer hunting for a colour.
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent(/paste text or choose a file/i)
+    expect(sent).toHaveLength(0)
+  })
+
+  it('titles an upload after its file when the reviewer gave no title', async () => {
+    const sent = stubFetch(201, { id: 'doc-9' })
+    await renderIntake()
+    const input = screen.getByLabelText(/file/i) as HTMLInputElement
+    await userEvent.upload(input, new File(['%PDF-1.4 payment plan'], 'Payment plan Q4.pdf', {
+      type: 'application/pdf',
+    }))
+    await userEvent.click(screen.getByRole('button', { name: /add document/i }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0].url).toBe('/api/admin/knowledge/documents/upload')
+    // Extension stripped: the reviewer named the document when they named the
+    // file, and ".pdf" is not part of that name.
+    expect((sent[0].body as FormData).get('title')).toBe('Payment plan Q4')
+  })
+
+  it('titles a paste after its first line when the reviewer gave no title', async () => {
+    const sent = stubFetch(201, { id: 'doc-9' })
+    await renderIntake()
+    await userEvent.type(
+      screen.getByLabelText(/paste/i),
+      'Aquarise payment plan{Enter}The booking amount is 20 per cent.',
+    )
+    await userEvent.click(screen.getByRole('button', { name: /add document/i }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0].body).toMatchObject({
+      source_type: 'paste',
+      title: 'Aquarise payment plan',
+    })
+  })
 })
