@@ -346,7 +346,11 @@ of the append-only review history, so a revocation reads there as `False` and
 the core gate needs no access to the review rows to fail closed.
 
 Parsing creates figures but never approves them. `active_approval_id` is a
-projection of the append-only review history. A chunk defaults to `admin_only`.
+projection of the append-only review history. Each row of the document list
+carries a derived `figures_pending`: how many of that document's figures are
+awaiting approval on its current revision, counted as `active_approval_id IS
+NULL`, so an approved-then-revoked figure is pending again and a superseded
+revision's figures are not counted at all. A chunk defaults to `admin_only`.
 `project_knowledge` requires a bound `project_id` that resolves through the
 inventory loader; it covers reviewed descriptive location, design, developer,
 lifestyle and amenity detail. `inventory_governed` covers prices, sizes, payment

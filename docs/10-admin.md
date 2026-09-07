@@ -344,7 +344,7 @@ surface is deliberately small:
 |---|---|
 | `/v1/leads` | List/filter leads; fetch detail with turns, brief, summary and score breakdown; retry failed analysis |
 | `/v1/leads/{id}/decisions` | Append qualify or reject decisions with optimistic revision checking |
-| `/v1/knowledge/documents` | Create from paste/upload; list; fetch parse result, chunks and extracted figures; publish, revise or archive |
+| `/v1/knowledge/documents` | Create from paste/upload; list, each row carrying `figures_pending` (figures awaiting approval on the current revision) so the overview needs no per-document read; fetch parse result, chunks and extracted figures; publish, revise or archive |
 | `/v1/knowledge/chunks/{id}/reviews` | Append a general-knowledge, bound project-knowledge, inventory-governed or reset-to-admin-only scope review; project scope requires an inventory id |
 | `/v1/knowledge/figures/{id}/reviews` | Append approval or revocation |
 | `/health` | Unauthenticated process liveness only; remains 200 during a database pause so Railway does not restart-loop |
