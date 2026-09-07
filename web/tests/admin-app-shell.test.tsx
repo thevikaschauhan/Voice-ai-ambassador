@@ -610,11 +610,23 @@ describe('the overview counts', () => {
   }
 
   function countUnder(label: RegExp): string {
-    // The number is read from the card that carries the label, not from the
-    // document: two cards showing 0 would make a bare getByText('0') ambiguous
-    // and the test would pass on the wrong card.
-    const card = screen.getByText(label).closest('[data-count-card]')
-    expect(card).not.toBeNull()
+    /*
+     * The number is read from the card that carries the label, not from the
+     * document: two cards showing 0 would make a bare getByText('0')
+     * ambiguous and the test would pass on the wrong card.
+     *
+     * SEARCHED WITHIN THE COUNT CARDS rather than across the page, which the
+     * needs-attention panels forced and which the helper always meant. A
+     * document-wide `getByText(/unreviewed/i)` now matches the card's label
+     * AND the "Unreviewed leads" panel heading, so it threw on two matches.
+     * Scoping it to the cards is what the name says it does.
+     */
+    const cards = Array.from(document.querySelectorAll('[data-count-card]'))
+    expect(cards.length, 'no count cards rendered').toBeGreaterThan(0)
+    const card = cards.find((candidate) =>
+      label.test(candidate.querySelector('p')?.textContent ?? ''),
+    )
+    expect(card, `no count card labelled ${String(label)}`).not.toBeUndefined()
     return card?.querySelector('[data-count]')?.textContent ?? ''
   }
 
