@@ -2,7 +2,8 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactElement } from 'react'
-import type { DocumentRow, LeadSummaryRow } from '@/lib/admin/leads'
+import type { DocumentRow } from '@/lib/admin/knowledge'
+import type { LeadSummaryRow } from '@/lib/admin/leads'
 
 /**
  * The admin app shell on Astryx (task-web-admin-astryx-shell).
@@ -34,12 +35,21 @@ async function load(specifier: string): Promise<Record<string, never>> {
   return (await import(/* @vite-ignore */ specifier)) as Record<string, never>
 }
 
-/** What a small screen looks like to Astryx: the media query matches. */
-function onASmallScreen() {
+/**
+ * What a screen size looks like to Astryx: whether the media query matches.
+ *
+ * RESET IN `beforeEach`, and that is not tidiness. `Object.defineProperty`
+ * survives `vi.restoreAllMocks()`, so one case switching to a small screen
+ * left every later case rendering the drawer CLOSED - and a closed drawer
+ * hides the side nav, so "Sign out is reachable" failed as though the
+ * component had dropped it. A leaked global reads exactly like a defect in
+ * whatever runs next.
+ */
+function onAScreenWhere(matches: boolean) {
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: (query: string) => ({
-      matches: true,
+      matches,
       media: query,
       onchange: null,
       addEventListener: vi.fn(),
@@ -64,30 +74,42 @@ async function renderShell(children: ReactElement = <h1>Overview</h1>) {
   return render(<AdminAppShell title="Overview">{children}</AdminAppShell>)
 }
 
+/**
+ * Copied from the real interfaces, not invented from the field names I
+ * expected. My first draft of both fixtures was wrong in three ways and tsc
+ * caught it - the same mechanism that shipped a guessed response shape twice
+ * in #109 and #113. A fixture is a claim about a contract; take it from the
+ * type.
+ */
 const LEAD: LeadSummaryRow = {
   id: 'lead-1',
+  session_id: 'sess-1',
   created_at: '2026-09-07T05:00:00Z',
+  ended_at: '2026-09-07T05:07:30Z',
+  call_end_reason: 'buyer_farewell',
+  ended_cleanly: true,
   language: 'en',
   status: 'unreviewed',
-  interest_score: 40,
+  score_total: 40,
+  project_ids: ['binghatti-skyrise'],
+  contact_present: false,
   analysis_status: 'complete',
-  turn_count: 9,
-  contact_status: 'not_asked',
-  call_end_reason: 'buyer_hung_up',
 }
 
 const DOC: DocumentRow = {
   id: 'doc-1',
+  revision: 1,
   title: 'Payment plan note',
   source_type: 'paste',
   status: 'draft',
-  revision: 1,
+  parse_error_code: null,
   created_at: '2026-09-07T05:00:00Z',
   published_at: null,
 }
 
 beforeEach(() => {
   pathname = '/admin'
+  onAScreenWhere(false)
   vi.restoreAllMocks()
 })
 
@@ -141,7 +163,7 @@ describe('the admin app shell', () => {
   })
 
   it('says whether the small-screen drawer is open, and flips when pressed', async () => {
-    onASmallScreen()
+    onAScreenWhere(true)
     await renderShell()
     const toggle = screen.getByRole('button', { name: /open navigation/i })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')

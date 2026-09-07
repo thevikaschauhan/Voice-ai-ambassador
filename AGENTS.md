@@ -78,6 +78,8 @@ Guardrails inspect digits; verbalisation destroys digits; audio cannot be retrac
 
 Restrained. Binghatti's brand is architectural precision, not exuberance. Monochrome base, one metallic accent used sparingly, generous whitespace, no gradients, no rounded pill buttons. If a screen looks like a generic SaaS dashboard, it is wrong.
 
+**Scope, 2026-09-07 (the human's decision).** That rule governs the **client-facing demo** - `/`, `/talk`, `/text`, `/states` and their components - which is what the tech lead is shown. The **admin surface** (`/admin/**`) is an internal tool, and the human asked for a SaaS dashboard with a left nav there in as many words, so it runs on Meta's Astryx design system instead (`@astryxdesign/core`, theme `neutral`). The separation is enforced by the bundler, not by convention: Astryx's CSS is imported by `web/src/app/admin/layout.tsx`, so only routes beneath it load it. Do not reach for `ink`/`brass` under `/admin`, and do not put Astryx components on a demo page.
+
 ## Project learnings
 
 Append corrections and non-obvious project facts here as they are learned. Newest first.
