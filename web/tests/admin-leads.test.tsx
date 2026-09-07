@@ -75,6 +75,19 @@ const ROWS: LeadSummaryRow[] = [
   },
 ]
 
+/**
+ * THE VIEW TYPE, NOT THE WIRE SHAPE, and the distinction is the whole reason
+ * task-web-lead-detail-score existed. `LeadDetailRecord` is what the mapper
+ * produces, so a fixture built from it is correct here and says NOTHING about
+ * what the admin API sends - and for a year it sent no `score` object at all,
+ * a `payload` string instead of turn text, and `created_at` instead of
+ * `decided_at`, while this file stayed green.
+ *
+ * The wire shape is pinned in `admin-real-shapes.test.ts` against a CAPTURED
+ * response. If you are about to add a field to this fixture, add it there
+ * first: a case that only ever sees the view type cannot tell you the mapper
+ * is wrong.
+ */
 const DETAIL: LeadDetailRecord = {
   ...ROWS[0],
   revision: 3,
