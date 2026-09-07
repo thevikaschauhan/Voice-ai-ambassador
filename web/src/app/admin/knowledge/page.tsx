@@ -28,14 +28,24 @@ export default async function KnowledgePage() {
           }
         />
       ) : (
-        <>
+        <div className="flex flex-col gap-4">
+          {/*
+            THE LIST FIRST (finding G6: "the intake form dominates the top ...
+            pushing the list down"). A reviewer opens this page to READ the
+            library far more often than to add to it, and it used to open with
+            a five-row textarea and a full-width submit above the first
+            document. Adding is now a panel behind one button, and the button
+            sits above the list because that is where a reviewer looks for it -
+            the FORM being below the fold is fine, the LIST being below it was
+            not.
+          */}
           <KnowledgeIntake />
           {read.state === 'unavailable' ? (
             <Banner status="error" title={read.reason} />
           ) : (
             <DocumentList rows={read.data} />
           )}
-        </>
+        </div>
       )}
     </AdminAppShell>
   )

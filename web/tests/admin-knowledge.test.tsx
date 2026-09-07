@@ -58,11 +58,24 @@ async function renderDocuments(rows: DocumentRow[]) {
   return render(<DocumentList rows={rows} />)
 }
 
+/**
+ * The intake with its panel OPEN, which is what every case about the form
+ * wants.
+ *
+ * The panel is collapsed by default (finding G6's intake half: the page opened
+ * with a five-row textarea above the first document), so a bare render puts no
+ * form in the DOM at all - deliberately, since a form that is merely hidden
+ * keeps its fields in the tab order. Opening it here means every existing case
+ * asserts exactly what it asserted before, against exactly the same form; the
+ * collapsed state has its own cases in 'the intake panel'.
+ */
 async function renderIntake() {
   const { KnowledgeIntake } = (await load('@/components/admin/knowledge-intake')) as unknown as {
     KnowledgeIntake: () => ReactElement
   }
-  return render(<KnowledgeIntake />)
+  const rendered = render(<KnowledgeIntake />)
+  await userEvent.click(screen.getByRole('button', { name: /new document/i }))
+  return rendered
 }
 
 const UNAPPROVED: KnowledgeFigureView = {
@@ -672,7 +685,7 @@ describe('the intake panel', () => {
 
   it('starts closed, with a trigger that says so', async () => {
     await renderPanel()
-    const trigger = screen.getByRole('button', { name: /add document/i })
+    const trigger = screen.getByRole('button', { name: /new document/i })
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
   })
 
@@ -689,20 +702,24 @@ describe('the intake panel', () => {
 
   it('opens the form and says it is open', async () => {
     await renderPanel()
-    const trigger = screen.getByRole('button', { name: /add document/i })
+    const trigger = screen.getByRole('button', { name: /new document/i })
     await userEvent.click(trigger)
     expect(
-      screen.getByRole('button', { name: /add document/i }),
+      screen.getByRole('button', { name: /new document/i }),
     ).toHaveAttribute('aria-expanded', 'true')
+    // The submit inside keeps its own word, and the two are now
+    // distinguishable by name - which is why the trigger is not also called
+    // "Add document".
+    expect(screen.getByRole('button', { name: /^add document$/i })).toBeInTheDocument()
     // The precondition for every intake case that follows: the form is there.
     expect(screen.getByLabelText(/paste/i)).toBeInTheDocument()
   })
 
   it('closes again, so the list is one press away', async () => {
     await renderPanel()
-    const open = screen.getByRole('button', { name: /add document/i })
+    const open = screen.getByRole('button', { name: /new document/i })
     await userEvent.click(open)
-    await userEvent.click(screen.getByRole('button', { name: /add document/i }))
+    await userEvent.click(screen.getByRole('button', { name: /new document/i }))
     expect(screen.queryByLabelText(/paste/i)).toBeNull()
   })
 
@@ -714,7 +731,7 @@ describe('the intake panel', () => {
      * this asserts the zone exists and is associated, not that the copy moved.
      */
     await renderPanel()
-    await userEvent.click(screen.getByRole('button', { name: /add document/i }))
+    await userEvent.click(screen.getByRole('button', { name: /new document/i }))
     const zone = screen.getByTestId('drop-zone')
     expect(zone.tagName.toLowerCase()).toBe('label')
     expect(zone).toHaveAttribute('for', 'doc-file')
