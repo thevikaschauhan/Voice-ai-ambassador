@@ -642,6 +642,87 @@ describe('choosing a file', () => {
   })
 })
 
+/**
+ * The intake as a panel, with the list first (finding G6's intake half).
+ *
+ * G6: "the intake form dominates the top (huge textarea, full-width black 'Add
+ * document' bar) pushing the list down". A reviewer opens /admin/knowledge to
+ * READ the library far more often than to add to it, and the page opened with
+ * a five-row textarea and a full-width submit before showing a single
+ * document. The list goes first; adding is a panel you open.
+ *
+ * COLLAPSED IS NOT HIDDEN. The trigger reports `aria-expanded`, so a screen
+ * reader user knows the form exists and whether it is open - which a div that
+ * simply appears would not tell them. And the panel is UNMOUNTED when closed
+ * rather than hidden with CSS: a form still in the DOM keeps its fields in the
+ * tab order and its inputs reachable by label, so `getByLabelText(/paste/i)`
+ * would find a control nobody can see.
+ *
+ * E'S "Choose file" CTA STAYS AS IT IS. This pair moves the form; it does not
+ * touch the control inside it, and every case from that pair still runs
+ * against the opened panel.
+ */
+describe('the intake panel', () => {
+  async function renderPanel() {
+    const { KnowledgeIntake } = (await load(
+      '@/components/admin/knowledge-intake',
+    )) as unknown as { KnowledgeIntake: () => ReactElement }
+    return render(<KnowledgeIntake />)
+  }
+
+  it('starts closed, with a trigger that says so', async () => {
+    await renderPanel()
+    const trigger = screen.getByRole('button', { name: /add document/i })
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('keeps the form out of the DOM until it is opened', async () => {
+    /*
+     * Unmounted, not hidden: a form still in the DOM keeps its fields in the
+     * tab order and findable by label, so a keyboard user would tab into
+     * controls that are not on screen.
+     */
+    await renderPanel()
+    expect(screen.queryByLabelText(/paste/i)).toBeNull()
+    expect(screen.queryByLabelText(/^title/i)).toBeNull()
+  })
+
+  it('opens the form and says it is open', async () => {
+    await renderPanel()
+    const trigger = screen.getByRole('button', { name: /add document/i })
+    await userEvent.click(trigger)
+    expect(
+      screen.getByRole('button', { name: /add document/i }),
+    ).toHaveAttribute('aria-expanded', 'true')
+    // The precondition for every intake case that follows: the form is there.
+    expect(screen.getByLabelText(/paste/i)).toBeInTheDocument()
+  })
+
+  it('closes again, so the list is one press away', async () => {
+    await renderPanel()
+    const open = screen.getByRole('button', { name: /add document/i })
+    await userEvent.click(open)
+    await userEvent.click(screen.getByRole('button', { name: /add document/i }))
+    expect(screen.queryByLabelText(/paste/i)).toBeNull()
+  })
+
+  it('wraps the file input in a drop zone that names what it takes', async () => {
+    /*
+     * A styled label around the native input, so the whole area is a drop
+     * target and a click target rather than a button beside a filename. The
+     * accepted formats stay the FIELD's description - one hint, not two - so
+     * this asserts the zone exists and is associated, not that the copy moved.
+     */
+    await renderPanel()
+    await userEvent.click(screen.getByRole('button', { name: /add document/i }))
+    const zone = screen.getByTestId('drop-zone')
+    expect(zone.tagName.toLowerCase()).toBe('label')
+    expect(zone).toHaveAttribute('for', 'doc-file')
+    // E's CTA is still inside it, unchanged.
+    expect(within(zone).getByRole('button', { name: /choose file/i })).toBeInTheDocument()
+  })
+})
+
 describe('the knowledge list a reviewer reads', () => {
   const SPELLED: DocumentRow[] = [
     {
