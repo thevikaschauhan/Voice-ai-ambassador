@@ -392,6 +392,129 @@ describe('the document list', () => {
   })
 })
 
+/**
+ * The knowledge list a reviewer can read (finding G6).
+ *
+ * G6's list half: "source shows raw 'PASTE'", "the Draft badge is stretched to
+ * the column width", "timestamps without zone", "no counts, filters or empty
+ * state". The intake half is PR F's.
+ *
+ * THE SOURCE IS THE ONE THAT MATTERS MOST, because it is the only cell on the
+ * row whose value is an ENUM NAME rather than a word. `source_type` is
+ * pdf|docx|txt|paste in the database, and the list rendered it uppercased -
+ * so a pasted paragraph read as "PASTE", which is a database value on a
+ * reviewer's screen and not English. "Word" for `docx` is the same argument
+ * one step further: nobody outside this repository calls a Word document a
+ * docx.
+ *
+ * THE STRETCHED BADGE HAS A CAUSE, not just a symptom. The status cell wraps
+ * its badge in `flex flex-col`, and a flex column stretches its children to
+ * the full cross-axis by default - so the badge grew to the column's width
+ * and a two-word status became a banner. `items-start` is the fix, and these
+ * cases assert the class because that is what the card allows for badge
+ * sizing and what jsdom can actually see: stylex classes carry no computed
+ * width here.
+ */
+describe('the knowledge list a reviewer reads', () => {
+  const SPELLED: DocumentRow[] = [
+    {
+      id: 'doc-paste',
+      revision: 1,
+      title: 'A pasted note',
+      source_type: 'paste',
+      status: 'draft',
+      parse_error_code: null,
+      created_at: '2026-09-03T09:00:00Z',
+      published_at: null,
+    },
+    {
+      id: 'doc-docx',
+      revision: 2,
+      title: 'A Word file',
+      source_type: 'docx',
+      status: 'published',
+      parse_error_code: null,
+      created_at: '2026-09-02T09:00:00Z',
+      published_at: '2026-09-02T10:00:00Z',
+    },
+    {
+      id: 'doc-txt',
+      revision: 1,
+      title: 'A text file',
+      source_type: 'txt',
+      status: 'draft',
+      parse_error_code: null,
+      created_at: '2026-09-01T09:00:00Z',
+      published_at: null,
+    },
+    {
+      id: 'doc-pdf',
+      revision: 1,
+      title: 'A PDF',
+      source_type: 'pdf',
+      status: 'draft',
+      parse_error_code: null,
+      created_at: '2026-08-31T09:00:00Z',
+      published_at: null,
+    },
+  ]
+
+  it('spells the source in English rather than showing the enum', async () => {
+    await renderDocuments(SPELLED)
+    for (const spelled of ['Pasted', 'Word', 'Text', 'PDF']) {
+      expect(screen.getByText(spelled), spelled).toBeInTheDocument()
+    }
+    // The raw values are gone, not merely joined by the spelled ones.
+    expect(screen.queryByText('PASTE')).toBeNull()
+    expect(screen.queryByText('DOCX')).toBeNull()
+    expect(screen.queryByText('TXT')).toBeNull()
+  })
+
+  it('keeps the status badge the width of its own words', async () => {
+    await renderDocuments(SPELLED)
+    const badge = screen.getByText('Published')
+    // Positive first: the badge is inside the stack the status cell renders,
+    // so the class assertion below is about that stack and not about some
+    // other element that happens to match.
+    const stack = badge.closest('[data-status-cell]')
+    expect(stack).not.toBeNull()
+    // A flex column stretches its children unless told not to, which is what
+    // turned a two-word badge into a full-width banner.
+    expect(stack?.className).toContain('items-start')
+  })
+
+  it('says when a document arrived without making a reviewer guess the zone', async () => {
+    /*
+     * G6: "timestamps without zone". `2026-09-03 09:00` on its own is
+     * unreadable across a team in two places - it could be Dubai or UTC, and
+     * the difference decides whether a document landed before or after a
+     * call. The relative age is what a reviewer scans; the exact UTC instant
+     * stays on `title` and in `dateTime`.
+     */
+    await renderDocuments(SPELLED)
+    const when = screen.getByTitle('2026-09-03T09:00:00Z')
+    expect(when.tagName.toLowerCase()).toBe('time')
+    expect(when).toHaveAttribute('datetime', '2026-09-03T09:00:00Z')
+  })
+
+  it('says how many documents there are, and how many are published', async () => {
+    /*
+     * Both numbers, because they answer different questions: how much is in
+     * the library, and how much of it the ambassador may actually draw on. A
+     * library of forty drafts and one published document is a very different
+     * state from forty published ones, and the list showed neither.
+     */
+    await renderDocuments(SPELLED)
+    expect(screen.getByText(/4 documents/i)).toBeInTheDocument()
+    expect(screen.getByText(/1 published/i)).toBeInTheDocument()
+  })
+
+  it('counts one document in the singular', async () => {
+    await renderDocuments([SPELLED[0]])
+    expect(screen.getByText(/^1 document, 0 published$/i)).toBeInTheDocument()
+  })
+})
+
 describe('intake', () => {
   it('posts pasted text as its own source type', async () => {
     const sent = stubFetch(201, { id: 'doc-9' })
