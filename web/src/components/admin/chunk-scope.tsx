@@ -117,7 +117,17 @@ export function ChunkScope({
             id={`scope-${chunk.id}`}
             value={scope}
             onChange={(event) => setScope(event.target.value as RetrievalScope)}
-            className="w-full rounded border border-current/25 bg-transparent px-3 py-2 text-[13px]"
+            /*
+              STYLED FROM THE THEME, not from the current colour (finding
+              G7: "native unstyled <select> beside an Astryx button"). It was
+              always inside Astryx's Field - the label wiring was never the
+              problem - but the old border came from border-current/25, which
+              takes the TEXT colour at an opacity, so it sat beside themed
+              controls looking like neither. The token below is the one every
+              bordered surface uses, and --radius-element is the same 4px the
+              buttons carry.
+            */
+            className="w-full rounded-[var(--radius-element)] border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-[13px]"
           >
             {RETRIEVAL_SCOPES.map((option) => (
               <option key={option} value={option}>
@@ -133,7 +143,17 @@ export function ChunkScope({
               id={`project-${chunk.id}`}
               value={projectId}
               onChange={(event) => setProjectId(event.target.value)}
-              className="w-full rounded border border-current/25 bg-transparent px-3 py-2 text-[13px]"
+              /*
+              STYLED FROM THE THEME, not from the current colour (finding
+              G7: "native unstyled <select> beside an Astryx button"). It was
+              always inside Astryx's Field - the label wiring was never the
+              problem - but the old border came from border-current/25, which
+              takes the TEXT colour at an opacity, so it sat beside themed
+              controls looking like neither. The token below is the one every
+              bordered surface uses, and --radius-element is the same 4px the
+              buttons carry.
+            */
+            className="w-full rounded-[var(--radius-element)] border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-[13px]"
             >
               <option value="">Choose a project</option>
               {projectIds.map((id) => (

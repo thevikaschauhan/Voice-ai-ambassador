@@ -3,7 +3,6 @@
 import { useCallback, useState } from 'react'
 import { Badge } from '@astryxdesign/core/Badge'
 import { Button } from '@astryxdesign/core/Button'
-import { Card } from '@astryxdesign/core/Card'
 import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Text } from '@astryxdesign/core/Text'
 import { scopeCanReachACall } from '@/lib/admin/knowledge'
@@ -94,9 +93,27 @@ export function FigureReview({
     )
   }
 
+  const approvedCount = figures.filter(
+    (figure) =>
+      decided[figure.id] === 'approved' ||
+      (decided[figure.id] === undefined && figure.active_approval_id !== null),
+  ).length
+
   return (
     <div className="flex flex-col gap-3">
-      <ol className="flex flex-col gap-3">
+      {/*
+        THE SUMMARY FIRST (finding G7: "no per-chunk summary"). "4 figures, 1
+        approved" is the whole question a reviewer has about a section they
+        have not opened yet; without it they had to count pills down the page.
+        Counted from the SAME optimistic state the rows render from, so it
+        moves the instant a figure is approved rather than disagreeing with
+        the rows above it until a reload.
+      */}
+      <Text as="p" display="block" type="supporting" color="secondary">
+        {`${figures.length === 1 ? '1 figure' : `${figures.length} figures`}, ${approvedCount} approved`}
+      </Text>
+
+      <ol className="flex flex-col">
         {figures.map((figure) => {
           const state = decided[figure.id]
           const approved =
@@ -112,10 +129,20 @@ export function FigureReview({
           const unscoped = !governed && !scopeCanReachACall(chunkScope)
 
           return (
-            <li key={figure.id}>
-              <Card padding={4}>
-                <div className="flex flex-col gap-2">
-              <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            /*
+              ONE DENSE ROW, not a Card each (finding G7: "four figures fill a
+              screen"). A hairline between rows instead of four padded cards,
+              and the value, its kind, the sentence it came from and the
+              control that acts on it all on one line above lg. A document
+              with a dozen extracted numbers is a normal payment-plan PDF, and
+              it used to be a dozen screens of scrolling.
+            */
+            <li
+              key={figure.id}
+              data-testid="figure-row"
+              className="flex flex-col gap-2 border-b border-[var(--color-border)] py-3 last:border-b-0 lg:flex-row lg:items-baseline lg:gap-4"
+            >
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 lg:w-[38%] lg:shrink-0">
                 <Text as="span" type="large" weight="semibold">
                   {figure.surface}
                 </Text>
@@ -140,29 +167,47 @@ export function FigureReview({
                   the one screen where getting it wrong puts an unreviewed
                   number in an ambassador's mouth.
                 */}
+                {/*
+                  THE WEIGHTS FOLLOW PR E'S RULE, not the card's literal
+                  "approved in brass": brass marks WHAT NEEDS A REVIEWER,
+                  which is why `qualified` is neutral on the leads list while
+                  `unreviewed` is brass. An approved figure painted brass
+                  would make brass mean "done" here and "needs you" there -
+                  two vocabularies again, the thing pair 1 just fixed in the
+                  lead detail. So the ACTION is brass and finished work is
+                  quiet.
+
+                  No `warning` anywhere: an unscoped section is the DEFAULT
+                  state of a freshly parsed document, so yellow told a
+                  reviewer something had gone wrong on every figure of every
+                  new document. The WORDS still separate the four states,
+                  which is what a colour-blind reviewer reads.
+                */}
                 {governed ? (
                   // Approved or not, this cannot reach a call. Saying "speakable"
                   // here would be the lie the closure exists to prevent.
                   <Badge variant="neutral" label="inventory governs this value" />
                 ) : unscoped ? (
                   <Badge
-                    variant="warning"
+                    variant={approved ? 'neutral' : 'accent'}
                     label={approved ? 'approved, but this section is admin-only' : 'not approved'}
                   />
                 ) : approved ? (
-                  <Badge variant="success" label="speakable" />
+                  <Badge variant="neutral" label="speakable" />
                 ) : (
-                  <Badge variant="neutral" label="not approved" />
+                  <Badge variant="accent" label="not approved" />
                 )}
               </div>
 
               {/* The sentence is the review. A value without it is a number
-                  somebody is guessing about. */}
+                  somebody is guessing about. `min-w-0` so a long sentence
+                  wraps inside its share of the row instead of pushing the
+                  action off the end. */}
               <Text as="p" display="block">
                 {figure.source_sentence}
               </Text>
 
-              <div className="flex gap-3">
+              <div className="flex gap-3 lg:ml-auto lg:shrink-0">
                 {/*
                   THE VISIBLE WORD IS STILL "Approve"; the ACCESSIBLE NAME says
                   which occurrence. Two occurrences of one value produce two
@@ -192,8 +237,6 @@ export function FigureReview({
                   />
                 )}
               </div>
-                </div>
-              </Card>
             </li>
           )
         })}
