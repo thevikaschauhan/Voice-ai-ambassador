@@ -628,6 +628,15 @@ async def upload_document(
 
 @app.get("/v1/knowledge/documents", dependencies=[Depends(require_bearer)])
 async def list_documents() -> list[dict[str, Any]]:
+    """Every document at its latest revision, the extracted text excluded.
+
+    Each row carries `figures_pending`: how many figures on that revision are
+    awaiting approval. The overview's "Needs attention" panel needs it for all
+    of them at once, so it is counted in the list query - asking the detail
+    route per document would be an N+1 across a network boundary. The count
+    is the repository's, and a second pass over these rows here would be a
+    second answer to the same question.
+    """
     return await repository_of(app).list_documents()
 
 
