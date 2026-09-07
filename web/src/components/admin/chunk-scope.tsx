@@ -1,6 +1,11 @@
 'use client'
 
 import { useCallback, useState } from 'react'
+import { Badge } from '@astryxdesign/core/Badge'
+import { Button } from '@astryxdesign/core/Button'
+import { Card } from '@astryxdesign/core/Card'
+import { Field } from '@astryxdesign/core/Field'
+import { Text } from '@astryxdesign/core/Text'
 import {
   CONFLICT_EFFECTS,
   CONFLICT_LABELS,
@@ -80,29 +85,39 @@ export function ChunkScope({
   return (
     <div className="flex flex-col gap-3">
       {chunk.conflict_code !== null ? (
-        <div className="border border-warn-500/40 px-4 py-3">
-          <p className="text-[12px] tracking-[0.1em] text-ink-200 uppercase">
-            {CONFLICT_LABELS[chunk.conflict_code]}
-          </p>
-          <p className="mt-1 max-w-[80ch] text-[12px] leading-relaxed text-ink-400">
-            {CONFLICT_EFFECTS[chunk.conflict_code]}
-          </p>
-        </div>
+        /*
+          A Card with a warning badge rather than Astryx's Banner: Banner
+          renders role=alert for its warning status, and this conflict is
+          state the page was loaded with, not something that just happened.
+          An alert region announcing on load talks over whatever the reviewer
+          was reading.
+        */
+        <Card padding={4}>
+          <div className="flex flex-col gap-2">
+            <Badge variant="warning" label={CONFLICT_LABELS[chunk.conflict_code]} />
+            <Text as="p" display="block" color="secondary">
+              {CONFLICT_EFFECTS[chunk.conflict_code]}
+            </Text>
+          </div>
+        </Card>
       ) : null}
 
       <div className="flex flex-wrap items-end gap-4">
-        <div className="flex flex-col gap-1.5">
-          <label
-            className="text-[11px] tracking-[0.12em] text-ink-400 uppercase"
-            htmlFor={`scope-${chunk.id}`}
-          >
-            Scope
-          </label>
+        {/*
+          NATIVE <select>s INSIDE ASTRYX'S Field, and measured rather than
+          lazy: Astryx's Selector is a combobox exposing role=listbox through
+          its own popup, not a <select>. Adopting it would change these
+          controls' role and break `userEvent.selectOptions`, which is how the
+          closure's cases choose a scope and a project. Field gives the label
+          wiring and the spacing; the element stays the one the platform gets
+          right. Astryx 0.5.3 ships no native-select component.
+        */}
+        <Field label="Scope" inputID={`scope-${chunk.id}`}>
           <select
             id={`scope-${chunk.id}`}
             value={scope}
             onChange={(event) => setScope(event.target.value as RetrievalScope)}
-            className="border border-ink-700 bg-ink-900 px-4 py-2.5 text-[13px] text-ink-100"
+            className="w-full rounded border border-current/25 bg-transparent px-3 py-2 text-[13px]"
           >
             {RETRIEVAL_SCOPES.map((option) => (
               <option key={option} value={option}>
@@ -110,21 +125,15 @@ export function ChunkScope({
               </option>
             ))}
           </select>
-        </div>
+        </Field>
 
         {needsProject ? (
-          <div className="flex flex-col gap-1.5">
-            <label
-              className="text-[11px] tracking-[0.12em] text-ink-400 uppercase"
-              htmlFor={`project-${chunk.id}`}
-            >
-              Project
-            </label>
+          <Field label="Project" inputID={`project-${chunk.id}`}>
             <select
               id={`project-${chunk.id}`}
               value={projectId}
               onChange={(event) => setProjectId(event.target.value)}
-              className="border border-ink-700 bg-ink-900 px-4 py-2.5 text-[13px] text-ink-100"
+              className="w-full rounded border border-current/25 bg-transparent px-3 py-2 text-[13px]"
             >
               <option value="">Choose a project</option>
               {projectIds.map((id) => (
@@ -133,32 +142,34 @@ export function ChunkScope({
                 </option>
               ))}
             </select>
-          </div>
+          </Field>
         ) : null}
 
-        <button
-          type="button"
-          disabled={busy || blocked}
+        <Button
+          label={busy ? 'Saving' : 'Save scope'}
+          variant="primary"
+          /* Both halves kept from #150: disabled while the request is in
+             flight, and disabled when the SERVER has already refused this
+             chunk - which is not a missing input. A missing project is
+             answered by pressing it, not by fading it. */
+          isDisabled={busy || blocked}
           onClick={() => void save()}
-          className="border border-ink-600 px-5 py-2.5 text-[13px] text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
-        >
-          {busy ? 'Saving' : 'Save scope'}
-        </button>
+        />
       </div>
 
       {/* What the chosen scope does, next to the choice rather than in a doc. */}
-      <p className="max-w-[80ch] text-[12px] leading-relaxed text-ink-500">
+      <Text as="p" display="block" color="secondary">
         {SCOPE_EFFECTS[scope]}
-      </p>
+      </Text>
 
       {saved ? (
-        <p className="text-[12px] text-ink-400" role="status">
-          Scope saved. Reload to see how the closure resolved it.
+        <p role="status">
+          <Text as="span">Scope saved. Reload to see how the closure resolved it.</Text>
         </p>
       ) : null}
       {problem !== null ? (
-        <p className="border border-warn-500/40 px-4 py-3 text-[12px] text-ink-300" role="status">
-          {problem}
+        <p role="status">
+          <Text as="span">{problem}</Text>
         </p>
       ) : null}
     </div>

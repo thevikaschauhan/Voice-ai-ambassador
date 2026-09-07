@@ -142,13 +142,22 @@ describe('the extracted figure list', () => {
     // Approval is per occurrence (docs/10- step 6). A bulk control is how a
     // reviewer approves a sentence they never read.
     expect(screen.queryByRole('button', { name: /approve all|approve everything/i })).toBeNull()
-    expect(screen.getAllByRole('button', { name: /^approve$/i })).toHaveLength(2)
+    // `/^approve /` rather than the `/^approve$/` this case used before: each
+    // control now names the occurrence it acts on, so the name is "Approve
+    // <value>, page N" and an anchored exact match finds nothing. The claim is
+    // the same one and the guard above it is untouched - no bulk control, and
+    // exactly one per-occurrence button per figure.
+    expect(screen.getAllByRole('button', { name: /^approve /i })).toHaveLength(2)
   })
 
   it('approves one occurrence without touching another of the same value', async () => {
     const sent = stubFetch()
     await renderFigures({ figures: [UNAPPROVED, SAME_VALUE_ELSEWHERE] })
-    await userEvent.click(screen.getAllByRole('button', { name: /^approve$/i })[0])
+    // Picked BY ITS NAME rather than by taking [0] out of a list of identical
+    // buttons. That is the point of the change under this commit: choosing the
+    // occurrence by the page it is on is what a reviewer does, where indexing
+    // a NodeList is something only a test could do. fig-1 is the page-4 one.
+    await userEvent.click(screen.getByRole('button', { name: /^approve .*page 4$/i }))
     await waitFor(() => expect(sent).toHaveLength(1))
     expect(sent[0].url).toBe('/api/admin/knowledge/figures/fig-1/reviews')
     expect(sent[0].body).toMatchObject({ action: 'approved' })
