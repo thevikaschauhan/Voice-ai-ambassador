@@ -582,7 +582,7 @@ describe('the overview needs-attention panel', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows exactly the two panels it can honestly populate', async () => {
+  it('shows all three panels now that the API carries pending figure counts', async () => {
     /*
      * See the note above this describe block. A third panel for figures
      * awaiting approval would be empty because no list read carries figure
@@ -591,8 +591,8 @@ describe('the overview needs-attention panel', () => {
      */
     await renderOverview(leadsNeeding(1), [DOC])
     const panels = screen.getAllByRole('region')
-    expect(panels).toHaveLength(2)
-    expect(screen.queryByText(/figures? awaiting approval/i)).toBeNull()
+    expect(panels).toHaveLength(3)
+    expect(screen.getByRole('region', { name: 'Figures awaiting approval' })).toBeInTheDocument()
   })
 })
 
