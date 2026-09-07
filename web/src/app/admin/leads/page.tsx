@@ -1,5 +1,5 @@
-import Link from 'next/link'
 import { Banner } from '@astryxdesign/core/Banner'
+import { Link } from '@astryxdesign/core/Link'
 import { headers } from 'next/headers'
 import { AdminAppShell } from '@/components/admin/app-shell'
 import { LeadList } from '@/components/admin/lead-list'
@@ -22,7 +22,7 @@ export default async function LeadsPage() {
           status="info"
           title={
             <>
-              <Link href="/admin">Sign in</Link> to see leads.
+              <Link href="/admin" hasUnderline>Sign in</Link> to see leads.
             </>
           }
         />

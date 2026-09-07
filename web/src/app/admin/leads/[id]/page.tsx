@@ -1,5 +1,5 @@
-import Link from 'next/link'
 import { Banner } from '@astryxdesign/core/Banner'
+import { Link } from '@astryxdesign/core/Link'
 import { AdminAppShell } from '@/components/admin/app-shell'
 import { headers } from 'next/headers'
 import { LeadDetail } from '@/components/admin/lead-detail'
@@ -24,7 +24,7 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
       and this page had the second one.
     */
     <AdminAppShell title="Lead" heading={read.state === 'ok' ? read.data.session_id : 'Lead'}>
-      <Link href="/admin/leads">All leads</Link>
+      <Link href="/admin/leads" hasUnderline>All leads</Link>
       {read.state === 'unauthenticated' ? (
         /* Banner's prop is `status`, not variant, and `title` is required -
            it renders role=status for info/success and role=alert for
@@ -33,7 +33,7 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
           status="info"
           title={
             <>
-              <Link href="/admin">Sign in</Link> to see this lead.
+              <Link href="/admin" hasUnderline>Sign in</Link> to see this lead.
             </>
           }
         />

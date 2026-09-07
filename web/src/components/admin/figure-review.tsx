@@ -19,7 +19,18 @@ import type { KnowledgeFigureView, RetrievalScope } from '@/lib/admin/knowledge'
  */
 function occurrenceOf(figure: KnowledgeFigureView): string {
   if (figure.page !== null) return `page ${figure.page}`
-  return `occurrence starting "${figure.source_sentence.slice(0, 40)}"`
+  // Trimmed at a WORD boundary. The first cut of this said
+  // `slice(0, 40)` and the browser run read it back as
+  // "...20 percent on bookin" - a name that ends mid-word is a name a screen
+  // reader mispronounces, and pasted text has no pages, so this branch is the
+  // one every pasted document uses.
+  const words = figure.source_sentence.split(/\s+/)
+  let text = ''
+  for (const word of words) {
+    if (text.length + word.length + 1 > 40) break
+    text = text === '' ? word : `${text} ${word}`
+  }
+  return `occurrence starting "${text === '' ? figure.source_sentence.slice(0, 40) : text}"`
 }
 
 /**

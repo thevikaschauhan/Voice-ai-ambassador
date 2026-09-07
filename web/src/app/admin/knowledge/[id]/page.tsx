@@ -1,5 +1,5 @@
-import Link from 'next/link'
 import { Banner } from '@astryxdesign/core/Banner'
+import { Link } from '@astryxdesign/core/Link'
 import { Card } from '@astryxdesign/core/Card'
 import { Text } from '@astryxdesign/core/Text'
 import { DocumentStatusBadge } from '@/components/admin/status-badge'
@@ -49,14 +49,14 @@ export default async function KnowledgeDocumentPage({
       title="Document"
       heading={read.state === 'ok' ? read.data.title : 'Document'}
     >
-      <Link href="/admin/knowledge">All documents</Link>
+      <Link href="/admin/knowledge" hasUnderline>All documents</Link>
 
       {read.state === 'unauthenticated' ? (
         <Banner
           status="info"
           title={
             <>
-              <Link href="/admin">Sign in</Link> to review this document.
+              <Link href="/admin" hasUnderline>Sign in</Link> to review this document.
             </>
           }
         />

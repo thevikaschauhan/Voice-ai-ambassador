@@ -1,5 +1,5 @@
-import Link from 'next/link'
 import { Banner } from '@astryxdesign/core/Banner'
+import { Link } from '@astryxdesign/core/Link'
 import { DocumentList } from '@/components/admin/document-list'
 import { KnowledgeIntake } from '@/components/admin/knowledge-intake'
 import { headers } from 'next/headers'
@@ -23,7 +23,7 @@ export default async function KnowledgePage() {
           status="info"
           title={
             <>
-              <Link href="/admin">Sign in</Link> to review knowledge.
+              <Link href="/admin" hasUnderline>Sign in</Link> to review knowledge.
             </>
           }
         />
