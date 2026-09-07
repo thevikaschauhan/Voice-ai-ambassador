@@ -327,6 +327,13 @@ needs_database = pytest.mark.skipif(
 )
 
 
+def _versions_after(version: str) -> list[str]:
+    """The migration versions the runner still has to apply, from the tree."""
+    return sorted(
+        path.name[:4] for path in MIGRATIONS.glob("*.sql") if path.name[:4] > version
+    )
+
+
 async def _fresh_database() -> tuple[str, str]:
     import asyncpg
 
@@ -439,7 +446,11 @@ async def test_0004_upgrades_a_database_already_at_0003(tmp_path: Path) -> None:
         finally:
             await connection.close()
 
-        assert await apply_migrations(dsn) == ["0004"]
+        # Everything from 0004 on, read from the directory rather than named
+        # here: this assertion said ["0004"] when 0004 was the newest file, and
+        # adding 0005 broke a test about call end reasons. A test that names
+        # today's newest version has an expiry date nobody can see in a diff.
+        assert await apply_migrations(dsn) == _versions_after("0003")
 
         connection = await asyncpg.connect(dsn)
         try:

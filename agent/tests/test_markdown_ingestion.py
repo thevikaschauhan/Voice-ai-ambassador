@@ -253,6 +253,13 @@ needs_database = pytest.mark.skipif(
 )
 
 
+def _versions_after(version: str) -> list[str]:
+    """The migration versions the runner still has to apply, from the tree."""
+    return sorted(
+        path.name[:4] for path in MIGRATIONS.glob("*.sql") if path.name[:4] > version
+    )
+
+
 async def _fresh_database() -> tuple[str, str]:
     import asyncpg
 
@@ -360,7 +367,10 @@ async def test_0005_upgrades_a_database_already_at_0004(tmp_path: Path) -> None:
         finally:
             await connection.close()
 
-        assert await apply_migrations(dsn) == ["0005"]
+        # From the tree, not named here: writing ["0005"] would break the
+        # first time somebody adds 0006, which is exactly how this change
+        # broke the 0004 case in tests/test_call_end_reason.py.
+        assert await apply_migrations(dsn) == _versions_after("0004")
 
         connection = await asyncpg.connect(dsn)
         try:
