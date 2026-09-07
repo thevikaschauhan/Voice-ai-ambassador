@@ -215,12 +215,41 @@ describe('chunk scope', () => {
     ])
   })
 
-  it('requires a project before project_knowledge can be saved', async () => {
+  /**
+   * REWRITTEN, not deleted (task-web-silent-disabled-family). The claim is
+   * unchanged - project_knowledge is not saveable without a project - but the
+   * old version asserted it as a DISABLED button, and a disabled button is
+   * how the reviewer finds out nothing. The rule now: never disabled for a
+   * missing input; pressing it names the input.
+   */
+  it('names the missing project instead of disabling the save', async () => {
+    const sent = stubFetch()
     await renderScope(base)
     await userEvent.selectOptions(screen.getByLabelText(/scope/i), 'project_knowledge')
-    expect(screen.getByRole('button', { name: /save scope/i })).toBeDisabled()
+
+    const save = screen.getByRole('button', { name: /save scope/i })
+    expect(save).toBeEnabled()
+    await userEvent.click(save)
+    expect(await screen.findByRole('status')).toHaveTextContent(/choose a project/i)
+    // The claim the old test made, kept: nothing is saved without a project.
+    expect(sent).toHaveLength(0)
+
     await userEvent.selectOptions(screen.getByLabelText(/project/i), 'binghatti-skyrise')
-    expect(screen.getByRole('button', { name: /save scope/i })).toBeEnabled()
+    await userEvent.click(save)
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0].body).toMatchObject({
+      action: 'project_knowledge',
+      project_id: 'binghatti-skyrise',
+    })
+  })
+
+  it('stays disabled when the SERVER has already refused, which is not a missing input', async () => {
+    // #113's deliberate half, and the one exception to the rule: an
+    // `unknown_project` closure means the server will not publish this chunk
+    // whatever the reviewer picks, so there is no input that would make the
+    // press succeed and nothing for a message to ask for.
+    await renderScope({ ...base, conflict_code: 'unknown_project' })
+    expect(screen.getByRole('button', { name: /save scope/i })).toBeDisabled()
   })
 
   it('says what unknown_project means and that it stays closed', async () => {

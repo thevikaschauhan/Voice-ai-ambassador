@@ -98,6 +98,21 @@ export function TalkCall({
   }, [])
 
   const start = useCallback(async () => {
+    // Answered HERE rather than by disabling the control, so the button and
+    // the Enter key get the same answer: the guard used to sit in both the
+    // button's `disabled` and the submit handler, and fixing one would have
+    // left the other silent.
+    //
+    // The page says READY beside this form, and that is true of the SERVICE -
+    // so the form has to answer for itself rather than leave a visitor to
+    // reconcile a readiness badge with a control that does nothing.
+    if (code.trim() === '') {
+      setRefusal('Enter the access code.')
+      return
+    }
+    // An empty code never reaches /api/talk: minting a room token for a press
+    // that carried nothing spends an attempt and creates a room nobody joins.
+
     setRefusal(null)
     setTrouble(null)
     setEnding(null)
@@ -234,7 +249,7 @@ export function TalkCall({
           className="flex flex-wrap items-end justify-center gap-3"
           onSubmit={(event) => {
             event.preventDefault()
-            if (busy || code.trim() === '') return
+            if (busy) return
             void start()
           }}
         >
@@ -292,8 +307,8 @@ export function TalkCall({
           )}
           <button
             type="submit"
-            disabled={busy || code.trim() === ''}
-            className="border border-ink-600 px-5 py-2.5 text-[13px] tracking-wide text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
+            disabled={busy}
+            className="border border-brass-500/60 px-5 py-2.5 text-[13px] tracking-wide text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
           >
             {busy ? 'Starting' : ending !== null ? 'Start another call' : 'Start call'}
           </button>
