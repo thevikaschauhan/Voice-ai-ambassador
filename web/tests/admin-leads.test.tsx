@@ -504,6 +504,147 @@ describe('the lead detail', () => {
   })
 })
 
+/**
+ * The lead detail a reviewer can decide from (finding G5).
+ *
+ * G5: "title is the session id; 'All leads' is an underlined body-text link,
+ * not a breadcrumb; six full-width stacked cards each carrying one line ('No
+ * summary yet.', 'No score...', 'Not captured (not asked)', an EMPTY 'Buyer
+ * turns cited by the score' card); Qualify/Reject are plain text buttons; no
+ * layout hierarchy; the decision form is below the fold."
+ *
+ * THE SHAPE OF THE FIX IS ABOUT WHERE THE WORK IS. A reviewer opens this page
+ * to make one decision, and the control for it was last on a column of
+ * full-width cards - so the page put the evidence above the fold and the
+ * action below it. Two columns above lg put the evidence on the left and the
+ * decision beside it, which is the only change that makes the form reachable
+ * without scrolling on a 900px viewport.
+ *
+ * AND FOUR CARDS SAYING NOTHING IS WORSE THAN ONE. On an unanalysed lead the
+ * page rendered "No summary yet.", "No score: the analysis has not
+ * completed.", an empty turns card and "Not captured (not asked)" - four
+ * full-width cards, four scroll-lengths, one fact. They collapse into a single
+ * "Awaiting analysis" card, and the inverse case below proves the collapse is
+ * conditional rather than a deletion.
+ *
+ * ONE CASE HERE IS NOT IN THE CARD and is a miss from PR E: the cited-turn
+ * badge is still `variant="warning"`. E collapsed the LIST's badges to three
+ * weights and left this one yellow, so the admin still runs two badge
+ * vocabularies - one per surface. An incomplete turn is a fact about the
+ * recording, not a warning a reviewer must act on, exactly as on the list.
+ *
+ * WHY THE DECISION CONTROL IS NOT ASTRYX'S SegmentedControl, measured rather
+ * than preferred: that component is a RADIOGROUP - role=radio, aria-checked,
+ * arrow-key selection-follows-focus - so adopting it would replace
+ * `role=button` + `aria-pressed` with radio semantics. The card asks for a
+ * segmented control "(aria-pressed kept)", and those two cannot both be true
+ * of Astryx's component. So the SEGMENTED PATTERN is built on the existing
+ * ToggleButtons: joined into one control visually, each half still a button
+ * that reports whether it is pressed. The existing aria-pressed case above
+ * stays green, unchanged.
+ */
+describe('the lead detail a reviewer decides from', () => {
+  /** A lead whose analysis has produced nothing yet. */
+  const AWAITING: LeadDetailRecord = {
+    ...DETAIL,
+    summary: null,
+    score: null,
+    turns: [],
+    analysis_status: 'pending',
+    contact: { status: 'not_asked', name: null, phone: null, email: null },
+  }
+
+  it('groups the lead identity into one header block', async () => {
+    await renderDetail(DETAIL)
+    const header = screen.getByTestId('lead-header')
+    // Everything that identifies the call, in one place rather than strung
+    // along a line of supporting text.
+    expect(header.textContent).toMatch(/sess-1/)
+    expect(header.textContent).toMatch(/EN/)
+    expect(header.textContent).toMatch(/Buyer said goodbye/)
+    expect(within(header).getByText('Unreviewed')).toBeInTheDocument()
+  })
+
+  it('puts the evidence and the decision in two columns', async () => {
+    /*
+     * Structural rather than a class assertion: which SECTION sits in which
+     * column is the thing that decides whether the form is reachable without
+     * scrolling, and a class name would pass while the sections were in the
+     * wrong halves.
+     */
+    await renderDetail(DETAIL)
+    const main = screen.getByTestId('detail-main')
+    const aside = screen.getByTestId('detail-aside')
+    expect(within(main).getByRole('heading', { name: /summary/i })).toBeInTheDocument()
+    expect(within(main).getByRole('heading', { name: /interest score/i })).toBeInTheDocument()
+    expect(within(aside).getByRole('heading', { name: /contact/i })).toBeInTheDocument()
+    expect(within(aside).getByRole('heading', { name: /decisions/i })).toBeInTheDocument()
+    expect(within(aside).getByRole('heading', { name: /your decision/i })).toBeInTheDocument()
+    // The decision control is in the aside, which is the whole point of the
+    // split: it is beside the evidence rather than below it.
+    expect(within(aside).getByRole('button', { name: /qualify/i })).toBeInTheDocument()
+  })
+
+  it('collapses the empty analysis cards into one', async () => {
+    await renderDetail(AWAITING)
+    expect(
+      screen.getByRole('heading', { name: /awaiting analysis/i }),
+    ).toBeInTheDocument()
+    // The four cards that each carried one absence are gone, not merely
+    // rearranged.
+    expect(screen.queryByRole('heading', { name: /^summary$/i })).toBeNull()
+    expect(screen.queryByRole('heading', { name: /interest score/i })).toBeNull()
+    expect(screen.queryByRole('heading', { name: /buyer turns cited/i })).toBeNull()
+    expect(screen.queryByText('No summary yet.')).toBeNull()
+    expect(screen.queryByText(/no score: the analysis has not completed/i)).toBeNull()
+  })
+
+  it('still offers the decision on a lead with nothing analysed', async () => {
+    /*
+     * The collapse must not take the ACTION with it. A pending analysis is
+     * exactly when a reviewer might reject a lead as not interested, and the
+     * card that says "awaiting analysis" is not a reason to hide the form.
+     */
+    await renderDetail(AWAITING)
+    expect(screen.getByRole('button', { name: /qualify/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /your decision/i })).toBeInTheDocument()
+  })
+
+  it('keeps the separate sections when there is something to show', async () => {
+    // The inverse, so the collapse is conditional rather than a deletion.
+    await renderDetail(DETAIL)
+    expect(screen.queryByRole('heading', { name: /awaiting analysis/i })).toBeNull()
+    expect(screen.getByRole('heading', { name: /^summary$/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /interest score/i })).toBeInTheDocument()
+  })
+
+  it('joins qualify and reject into one segmented control', async () => {
+    await renderDetail(DETAIL)
+    const qualify = screen.getByRole('button', { name: /qualify/i })
+    const group = qualify.closest('[data-segmented]')
+    expect(group).not.toBeNull()
+    // Both halves in the same control, and both still buttons that report
+    // whether they are pressed - see the note above on why this is not
+    // Astryx's SegmentedControl.
+    expect(within(group as HTMLElement).getByRole('button', { name: /reject/i })).toBeInTheDocument()
+    expect(qualify).toHaveAttribute('aria-pressed')
+  })
+
+  it('stops using warning yellow for an incomplete turn, as the list already does', async () => {
+    /*
+     * PR E's miss. The list's "incomplete" badge went neutral and this one
+     * stayed yellow, so the admin ran two badge vocabularies, one per
+     * surface. An incomplete recording is a fact, not an action.
+     */
+    await renderDetail({
+      ...DETAIL,
+      turns: [{ turn_index: 4, speaker: 'buyer', text: 'A partial turn.', audit_incomplete: true }],
+    })
+    const badge = screen.getByText('incomplete')
+    expect(badge.closest('[data-variant]')).toHaveAttribute('data-variant', 'neutral')
+  })
+})
+
 describe('qualifying and rejecting', () => {
   function stubDecision(status: number, body: unknown) {
     const sent: { url: string; body: unknown }[] = []
