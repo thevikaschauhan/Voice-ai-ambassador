@@ -266,10 +266,24 @@ describe('qualifying and rejecting', () => {
     expect(await screen.findByText(/somebody else|reload|moved/i)).toBeInTheDocument()
   })
 
-  it('does not send anything until a decision is chosen', async () => {
+  /**
+   * REWRITTEN, not deleted (task-web-silent-disabled-family). The claim it
+   * made is the one that matters and is kept verbatim - nothing is posted
+   * until a decision is chosen - but it asserted that claim AS A DISABLED
+   * BUTTON, and a disabled button is how an admin finds out nothing. Qualify
+   * or reject is a choice they can make, so the press asks for it.
+   */
+  it('names the missing choice instead of disabling the save, and sends nothing', async () => {
     const sent = stubDecision(201, {})
     await renderDetail(DETAIL)
-    expect(screen.getByRole('button', { name: /save decision/i })).toBeDisabled()
+
+    const save = screen.getByRole('button', { name: /save decision/i })
+    expect(save).toBeEnabled()
+    await userEvent.click(save)
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      /choose qualify or reject/i,
+    )
+    // The original claim, kept: no decision reaches the lead without a choice.
     expect(sent).toHaveLength(0)
   })
 })
