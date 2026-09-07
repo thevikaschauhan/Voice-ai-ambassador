@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactElement, ReactNode } from 'react'
@@ -201,6 +203,46 @@ describe('the Binghatti theme tokens', () => {
     // leaves the whole declaration invalid rather than falling back.
     expect(body).toMatch(/,\s*\S/)
     expect(heading).toMatch(/,\s*\S/)
+  })
+
+  it('declares those same variables in the next/font call, which cannot import them', async () => {
+    /*
+     * ADDED WITH THE GREEN, not with the RED, and the reason is the finding
+     * itself: the case above was written expecting `faces.ts` to IMPORT
+     * `FONT_VARIABLES`, which would have made the compiler hold the two sides
+     * together. next/font forbids it - it is a compile-time transform, not a
+     * function call, and `variable: FONT_VARIABLES.display` fails the build
+     * with "Font loader values must be explicitly written literals". So the
+     * literals have to be written twice, and nothing in the type system
+     * connects them any more.
+     *
+     * Reading the source as TEXT is a blunt instrument and it is the right one
+     * here. The failure it guards is silent in every direction: rename the
+     * variable in `fonts.ts` and the theme follows it while next/font keeps
+     * declaring the old name, so `--font-family-body` resolves to nothing,
+     * the declaration is dropped, and the entire admin renders in the fallback
+     * stack with no error, no warning and no visual clue beyond "the type
+     * looks a bit plain". A test that cannot be fooled by a rename is worth
+     * more than an elegant one that never runs.
+     */
+    const { FONT_VARIABLES } = (await load('@/theme/fonts')) as unknown as {
+      FONT_VARIABLES: { display: string; body: string }
+    }
+    // Resolved from the project root rather than from `import.meta.url`:
+    // under vitest's jsdom environment that is not a `file:` URL, and
+    // `readFile` rejects with "The URL must be of scheme file". vitest runs
+    // with `web/` as the cwd (see the `include` glob in vitest.config.ts),
+    // and a wrong path here throws rather than passing quietly.
+    const source = await readFile(resolve(process.cwd(), 'src/theme/faces.ts'), 'utf8')
+    // The positive precondition: this really is the module that calls
+    // next/font. Without it, a renamed or deleted file would leave the two
+    // assertions below passing over an empty string.
+    expect(source).toContain('next/font/local')
+    for (const variable of [FONT_VARIABLES.display, FONT_VARIABLES.body]) {
+      expect(source, `faces.ts must declare variable: '${variable}'`).toContain(
+        `variable: '${variable}'`,
+      )
+    }
   })
 
   it('seeds the brass accent as a light/dark pair so its foreground is generated with it', async () => {

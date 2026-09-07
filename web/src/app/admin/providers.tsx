@@ -3,24 +3,32 @@
 import Link from 'next/link'
 import { LinkProvider } from '@astryxdesign/core/Link'
 import { Theme } from '@astryxdesign/core/theme'
-import { neutralTheme } from '@astryxdesign/theme-neutral/built'
+import { binghattiTheme } from '@/theme/binghatti'
 import type { ReactNode } from 'react'
 
 /**
- * Astryx's theme, mounted for the admin route group only.
+ * The Binghatti theme, mounted once for the whole admin route group.
  *
- * `LinkProvider` hands Astryx next/link, so a SideNavItem with an `href`
- * client-navigates instead of reloading the document - without it every nav
- * click would be a full page load and the admin would feel worse than the
- * two-card page it replaced.
+ * ONE THEME, BOTH SURFACES (finding G1). This provider sits in the route
+ * group's layout, so the sign-in door and the dashboard are inside the same
+ * one - which is the fix for /admin having shipped as two products: the
+ * dashboard painted Astryx's light neutral surface while the door painted
+ * nothing and let the root ink-950 body show through behind it.
  *
- * Dark mode is Astryx's own: `neutralTheme` carries both palettes and follows
- * `prefers-color-scheme`, so there is no toggle to keep in sync and no second
- * source of truth for a colour.
+ * `mode="dark"` IS A DECISION, not a default. Astryx's `mode="system"` hands
+ * the product's identity to `prefers-color-scheme`, which means /admin looked
+ * like a different product per visitor and any contrast ratio measured for it
+ * described only the machine it was measured on. Pinned, the palette in
+ * `binghatti.theme.ts` is the palette every reviewer sees and the AA ratios in
+ * the PR body are facts about the product. It also matches the demo surface,
+ * whose `globals.css` sets `color-scheme: dark` outright.
+ *
+ * `LinkProvider` hands Astryx next/link, so a SideNavItem or a breadcrumb with
+ * an `href` client-navigates instead of reloading the document.
  */
 export function AdminProviders({ children }: { children: ReactNode }) {
   return (
-    <Theme theme={neutralTheme}>
+    <Theme theme={binghattiTheme} mode="dark">
       <LinkProvider component={Link}>{children}</LinkProvider>
     </Theme>
   )
