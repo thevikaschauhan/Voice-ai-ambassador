@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactElement } from 'react'
@@ -79,6 +79,34 @@ async function renderShell(children: ReactElement = <p>Page body</p>) {
     AdminAppShell: (p: { title: string; children: ReactElement }) => ReactElement
   }
   return render(<AdminAppShell title="Overview">{children}</AdminAppShell>)
+}
+
+/**
+ * The shell inside a build-identity provider, which is how the footer's sha
+ * reaches a client component: the admin LAYOUT reads process.env on the server
+ * and hands the value down, rather than each page remembering to pass it. A
+ * rule every page has to remember is a rule some page will forget - all five
+ * admin routes lost their h1 exactly that way once already.
+ */
+async function renderShellWithSha(commitSha: string | null) {
+  const { BuildInfoProvider } = (await load(
+    '@/components/admin/build-info',
+  )) as unknown as {
+    BuildInfoProvider: (p: {
+      commitSha: string | null
+      children: ReactElement
+    }) => ReactElement
+  }
+  const { AdminAppShell } = (await load('@/components/admin/app-shell')) as unknown as {
+    AdminAppShell: (p: { title: string; children: ReactElement }) => ReactElement
+  }
+  return render(
+    <BuildInfoProvider commitSha={commitSha}>
+      <AdminAppShell title="Overview">
+        <p>Page body</p>
+      </AdminAppShell>
+    </BuildInfoProvider>,
+  )
 }
 
 /**
@@ -242,6 +270,168 @@ describe('the admin app shell', () => {
     await renderShell()
     await userEvent.click(screen.getByRole('button', { name: /sign out/i }))
     expect(sent).toEqual(['/api/admin/logout'])
+  })
+})
+
+/**
+ * The top bar and the footer (task-web-admin-premium-pass, finding G2).
+ *
+ * WHAT G2 SAYS IS WRONG, and all three parts are the same mistake: the shell
+ * spends its two edges on nothing. The top bar is a grey strip that REPEATS
+ * the page's own h1 - "Overview" above "Overview" - so a reviewer three levels
+ * into a lead has no idea where they are and nothing to click to get back. The
+ * footer floats a bare "Sign out" with no identity beside it and no statement
+ * of which build is answering, which is the first question anybody debugging a
+ * deployed page asks.
+ *
+ * THE TRAIL IS ANCESTORS ONLY, AND THAT IS A DELIBERATE DEPARTURE from the
+ * card's sketch of "Overview / Leads / <lead>". Ending the trail at the
+ * current page puts that page's name in the top bar AND in the h1 directly
+ * below it, which is the duplication finding G2 is about, in a new shape. So
+ * the trail carries only the levels ABOVE this page - every crumb is a live
+ * link to somewhere else - and the page announces itself once, in the h1,
+ * which is where a screen reader's document outline looks for it. The root
+ * has no ancestors and therefore no trail. One line in `ancestorsOf` reverses
+ * this if that call goes the other way.
+ *
+ * ASTRYX AUTO-MARKS THE LAST CRUMB AS THE CURRENT PAGE. Measured in
+ * BreadcrumbItem: an item with no explicit `isCurrent` runs an effect that
+ * sets `aria-current="page"` on itself if it is last and no sibling claims it
+ * - including when that item is a LINK. On an ancestors-only trail that is a
+ * lie a screen reader reads out: the last ancestor would announce itself as
+ * the page you are on. `isCurrent={false}` opts each item out, and the case
+ * below exists because nothing about deleting that prop looks wrong.
+ */
+describe('the shell top bar', () => {
+  /** The trail, or null when the shell renders none. */
+  function trail(): string[] | null {
+    const nav = screen.queryByRole('navigation', { name: /breadcrumb/i })
+    if (nav === null) return null
+    return within(nav)
+      .getAllByRole('link')
+      .map((link) => link.textContent ?? '')
+  }
+
+  it('gives each route a trail of the levels above it, and the root none', async () => {
+    for (const [route, expected] of [
+      ['/admin', null],
+      ['/admin/leads', ['Overview']],
+      ['/admin/leads/lead-1', ['Overview', 'Leads']],
+      ['/admin/knowledge', ['Overview']],
+      ['/admin/knowledge/doc-1', ['Overview', 'Knowledge']],
+    ] as const) {
+      pathname = route
+      await renderShell()
+      // The precondition, so a shell that rendered nothing at all cannot pass
+      // the `null` row by accident: there is always a main landmark.
+      expect(screen.getByRole('main'), route).toBeInTheDocument()
+      expect(trail(), route).toEqual(expected === null ? null : [...expected])
+      cleanup()
+    }
+  })
+
+  it('points each crumb at the level it names', async () => {
+    pathname = '/admin/leads/lead-1'
+    await renderShell()
+    const nav = screen.getByRole('navigation', { name: /breadcrumb/i })
+    expect(within(nav).getByRole('link', { name: 'Overview' })).toHaveAttribute(
+      'href',
+      '/admin',
+    )
+    expect(within(nav).getByRole('link', { name: 'Leads' })).toHaveAttribute(
+      'href',
+      '/admin/leads',
+    )
+  })
+
+  it('lets no crumb claim to be the current page', async () => {
+    /*
+     * Astryx marks the last item current by itself unless told otherwise (see
+     * the note above). On a trail of ancestors that would announce the section
+     * a reviewer came FROM as the page they are on.
+     */
+    pathname = '/admin/leads/lead-1'
+    await renderShell()
+    const nav = screen.getByRole('navigation', { name: /breadcrumb/i })
+    // Positive first: the trail is really there and really has two items, so
+    // the negative below is a claim about them rather than about an empty nav.
+    expect(within(nav).getAllByRole('link')).toHaveLength(2)
+    expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(0)
+  })
+
+  it('stops the top bar repeating the page heading', async () => {
+    /*
+     * The finding itself: "the top bar is an empty grey strip repeating the h1
+     * ('Overview' twice)". AppShell wraps its header region in role="banner",
+     * so this asks the exact question - is the page's own title printed up
+     * there as well as in the content?
+     */
+    for (const [route, heading] of [
+      ['/admin', 'Overview'],
+      ['/admin/leads', 'Leads'],
+      ['/admin/knowledge', 'Knowledge'],
+    ] as const) {
+      pathname = route
+      await renderShell()
+      const banner = screen.getByRole('banner')
+      // Positive precondition: the h1 really does say this, so the negative is
+      // about a DUPLICATE and not about a page that renders no title at all.
+      expect(
+        screen.getByRole('heading', { level: 1, name: heading }),
+        route,
+      ).toBeInTheDocument()
+      expect(within(banner).queryByText(heading), route).toBeNull()
+      cleanup()
+    }
+  })
+})
+
+describe('the shell footer', () => {
+  const FULL_SHA = '3bf4ec63d9a1f0e2b7c4a5968d3e1f2a0b9c8d7e'
+
+  it('says which build is answering, with the whole sha in reach', async () => {
+    /*
+     * "BUILT FROM", not "running": the web service redeploys on web/** and
+     * data/** only, so a merge touching neither leaves this at the previous
+     * commit - which is the true identity of the running image and the same
+     * one the deploy sweeps print. The short form is what a human reads; the
+     * full sha stays on the element so nobody has to retype a prefix into a
+     * `git show`.
+     */
+    await renderShellWithSha(FULL_SHA)
+    const element = screen.getByTitle(FULL_SHA)
+    expect(element).toBeInTheDocument()
+    expect(element.textContent).toContain('3bf4ec6')
+    expect(element.textContent).toMatch(/built from/i)
+  })
+
+  it('omits the line entirely when the platform did not set one', async () => {
+    /*
+     * Locally, in CI and in any test there is no RAILWAY_GIT_COMMIT_SHA, and a
+     * placeholder would be worse than silence: a reviewer reading "dev" on a
+     * deployed page learns something false, where a reviewer seeing no line
+     * learns only that the page is not saying - which is true.
+     */
+    await renderShellWithSha(null)
+    // Positive precondition: the footer IS rendered and Sign out is in it, so
+    // "no sha line" is a fact about this footer rather than about no footer.
+    expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument()
+    expect(screen.queryByText(/built from/i)).toBeNull()
+    expect(screen.queryByTitle(FULL_SHA)).toBeNull()
+  })
+
+  it('names who is signed in beside the way out', async () => {
+    /*
+     * G2: "Sign out floats at the bottom with no separator or identity". There
+     * is no per-person identity in this deployment - one shared access code -
+     * so the honest line names the SESSION, not a user. Saying "Signed in" and
+     * nothing more is what the footer can truthfully claim.
+     */
+    await renderShellWithSha(null)
+    const footerText = screen.getByRole('button', { name: /sign out/i })
+      .closest('[data-admin-identity]')
+    expect(footerText).not.toBeNull()
+    expect(footerText?.textContent).toMatch(/signed in/i)
   })
 })
 
