@@ -227,6 +227,126 @@ describe('the extracted figure list', () => {
   })
 })
 
+/**
+ * The document detail a reviewer can scope from (finding G7).
+ *
+ * G7: "native unstyled <select> beside an Astryx button; each figure is a full
+ * card (value, tiny type label, yellow 'not approved' pill, sentence, grey
+ * Approve) so four figures fill a screen; 'not approved' in warning yellow for
+ * a DEFAULT state; no per-chunk summary ('4 figures, 0 approved'); 'All
+ * documents' link pattern as G5."
+ *
+ * FOUR FIGURES FILLING A SCREEN IS THE REAL COST. Every figure was its own
+ * Card with its own padding, so a document with a dozen extracted numbers -
+ * which is a normal payment-plan PDF - became a dozen screens of scrolling to
+ * approve a dozen values. Dense one-line rows put the whole decision in view,
+ * and the per-chunk summary means a reviewer can tell at a glance whether a
+ * section needs them at all.
+ *
+ * THE BADGE WEIGHTS DEPART FROM THE CARD, DELIBERATELY, and this is the one
+ * judgement in F worth arguing. The card says "'pending' neutral instead of
+ * warning yellow, approved in brass". The first half is right and is here. The
+ * second half contradicts the badge rule PR E established and god accepted on
+ * the record - brass marks WHAT NEEDS A REVIEWER, which is why `qualified` is
+ * neutral on the leads list while `unreviewed` is brass. Painting an APPROVED
+ * figure brass would make brass mean "done" on this screen and "needs you" on
+ * the other, which is exactly the two-vocabularies problem pair 1 just fixed
+ * in the lead detail. So: NOT APPROVED is brass because it is the action, and
+ * SPEAKABLE is neutral because it is finished. One line to reverse if god
+ * wants the card read literally.
+ */
+describe('the document detail a reviewer scopes from', () => {
+  const CHUNK_SCOPE = 'general_knowledge' as const
+
+  async function renderDense(figures: KnowledgeFigureView[]) {
+    return renderFigures({ figures, chunkScope: CHUNK_SCOPE })
+  }
+
+  it('summarises each section before a reviewer reads a single row', async () => {
+    /*
+     * "4 figures, 1 approved" is the whole question a reviewer has about a
+     * section they have not opened. Without it they had to count pills.
+     */
+    await renderDense([UNAPPROVED, SAME_VALUE_ELSEWHERE, APPROVED])
+    expect(screen.getByText(/3 figures, 1 approved/i)).toBeInTheDocument()
+  })
+
+  it('counts one figure in the singular', async () => {
+    await renderDense([UNAPPROVED])
+    expect(screen.getByText(/^1 figure, 0 approved$/i)).toBeInTheDocument()
+  })
+
+  it('puts each figure on one dense row rather than in its own card', async () => {
+    await renderDense([UNAPPROVED, APPROVED])
+    const rows = screen.getAllByTestId('figure-row')
+    expect(rows).toHaveLength(2)
+    // The row carries the whole decision: the value, what kind it is, the
+    // sentence it came from, and the control that acts on it.
+    const first = rows[0]
+    expect(within(first).getByText(UNAPPROVED.surface)).toBeInTheDocument()
+    expect(within(first).getByText(UNAPPROVED.source_sentence)).toBeInTheDocument()
+    expect(within(first).getByRole('button', { name: /approve/i })).toBeInTheDocument()
+  })
+
+  it('marks an unapproved figure in brass, because that is the one needing a reviewer', async () => {
+    await renderDense([UNAPPROVED])
+    const badge = screen.getByText('not approved')
+    expect(badge.closest('[data-variant]')).toHaveAttribute('data-variant', 'accent')
+  })
+
+  it('leaves a speakable figure quiet, because it is finished work', async () => {
+    await renderDense([APPROVED])
+    const badge = screen.getByText('speakable')
+    expect(badge.closest('[data-variant]')).toHaveAttribute('data-variant', 'neutral')
+  })
+
+  it('uses no warning yellow anywhere in the figure list', async () => {
+    /*
+     * G7's actual complaint. An unscoped section is the DEFAULT state of a
+     * freshly parsed document - it is what the reviewer is here to change,
+     * not a fault - and warning yellow told them something had gone wrong on
+     * every figure of every new document.
+     */
+    /*
+     * ON AN admin_only CHUNK, which is the state that matters: that is the
+     * DEFAULT scope of a freshly parsed document and the only branch that
+     * renders warning yellow today. My first draft of this case passed a
+     * general_knowledge chunk, where the warning branch is unreachable - a
+     * case that could not fail, testing the fixture rather than the code.
+     */
+    await renderFigures({
+      figures: [UNAPPROVED, SAME_VALUE_ELSEWHERE, APPROVED],
+      chunkScope: 'admin_only',
+    })
+    // Positive precondition: there ARE badges to check.
+    const badges = document.querySelectorAll('[data-variant]')
+    expect(badges.length).toBeGreaterThan(0)
+    expect([...badges].map((b) => b.getAttribute('data-variant'))).not.toContain('warning')
+  })
+
+  it('styles the scope select from the theme rather than from the current colour', async () => {
+    /*
+     * G7: "native unstyled <select> beside an Astryx button". It was already
+     * inside Astryx's Field - the label wiring was never the problem - but it
+     * drew its own border from `border-current/25`, so it took the text
+     * colour at whatever opacity rather than the theme's border token, and sat
+     * beside themed controls looking like neither.
+     */
+    await renderScope({
+      id: 'chunk-1',
+      ordinal: 0,
+      heading: 'Payment plan',
+      retrieval_scope: 'admin_only',
+      project_id: null,
+      conflict_code: null,
+      figures: [],
+    } as never)
+    const select = screen.getByLabelText(/scope/i)
+    expect(select.className).toContain('var(--color-border)')
+    expect(select.className).not.toContain('border-current')
+  })
+})
+
 describe('chunk scope', () => {
   const base: KnowledgeChunkView = {
     id: 'chunk-1',
