@@ -7,6 +7,7 @@ import { Text } from '@astryxdesign/core/Text'
 import { PARSE_ERROR_ADVICE, PARSE_ERROR_LABELS } from '@/lib/admin/knowledge'
 import type { DocumentRow } from '@/lib/admin/knowledge'
 import { DocumentStatusBadge } from './status-badge'
+import { relativeAge } from './age'
 
 /**
  * The documents the ambassador may draw on, with their status.
@@ -21,6 +22,26 @@ import { DocumentStatusBadge } from './status-badge'
 /** See lead-list.tsx: Astryx's Table needs an index signature its rows lack. */
 type TableRow = DocumentRow & Record<string, unknown>
 
+/**
+ * How a source reads on screen (finding G6: "source shows raw 'PASTE'").
+ *
+ * `source_type` is the only cell on this row whose value is an ENUM NAME
+ * rather than a word, and the list uppercased it - so a pasted paragraph read
+ * as "PASTE", which is a database value on a reviewer's screen. "Word" for
+ * `docx` is the same argument one step further: nobody outside this
+ * repository calls a Word document a docx.
+ *
+ * Typed on the full union, so a source type added upstream fails the build
+ * here rather than rendering as `undefined` - the same guard the status maps
+ * carry, and for the same reason.
+ */
+const SOURCE_LABELS: Record<DocumentRow['source_type'], string> = {
+  paste: 'Pasted',
+  pdf: 'PDF',
+  docx: 'Word',
+  txt: 'Text',
+}
+
 export function DocumentList({ rows }: { rows: readonly DocumentRow[] }) {
   if (rows.length === 0) {
     return (
@@ -31,70 +52,106 @@ export function DocumentList({ rows }: { rows: readonly DocumentRow[] }) {
     )
   }
 
+  const published = rows.filter((row) => row.status === 'published').length
+
   return (
-    <Table<TableRow>
-      data={[...rows] as TableRow[]}
-      idKey="id"
-      density="balanced"
-      hasHover
-      columns={[
-        {
-          key: 'title',
-          header: 'Document',
-          width: proportional(2),
-          renderCell: (row: TableRow) => (
-            <div className="flex flex-col gap-1">
-              <Link className="underline decoration-current/40" href={`/admin/knowledge/${row.id}`}>
-                {row.title}
-              </Link>
-              <Text as="span" type="supporting" color="secondary">
-                revision {row.revision}
-              </Text>
-            </div>
-          ),
-        },
-        {
-          key: 'source_type',
-          header: 'Source',
-          width: proportional(1),
-          renderCell: (row: TableRow) => (
-            // Uppercased in the STRING, not by a CSS text-transform: the cell
-            // used to carry "pdf" in the DOM and show "PDF" on screen, the
-            // same mismatch the status badge fixes.
-            <Text as="span">{row.source_type.toUpperCase()}</Text>
-          ),
-        },
-        {
-          key: 'created_at',
-          header: 'Added',
-          width: proportional(1),
-          renderCell: (row: TableRow) => (
-            // A native <time>: Text's `as` has no time tag, and the
-            // machine-readable timestamp is worth keeping.
-            <time className="text-[12px]" dateTime={row.created_at}>
-              {row.created_at.slice(0, 16).replace('T', ' ')}
-            </time>
-          ),
-        },
-        {
-          key: 'status',
-          header: 'Status',
-          width: proportional(2),
-          renderCell: (row: TableRow) => (
-            <div className="flex flex-col gap-1">
-              <DocumentStatusBadge status={row.status} />
-              {row.parse_error_code === null ? null : (
-                <Text as="p" display="block" type="supporting" color="secondary">
-                  {PARSE_ERROR_LABELS[row.parse_error_code]}
-                  {PARSE_ERROR_ADVICE[row.parse_error_code] === undefined
-                    ? null
-                    : ` - ${PARSE_ERROR_ADVICE[row.parse_error_code]}`}
+    <div className="flex flex-col gap-3">
+      {/*
+        BOTH NUMBERS, because they answer different questions: how much is in
+        the library, and how much of it the ambassador may actually draw on. A
+        library of forty drafts and one published document is a very different
+        state from forty published ones, and the list showed neither.
+
+        Singular is a real branch: "1 documents" is how a screen starts
+        looking unfinished.
+      */}
+      <Text as="p" display="block" type="supporting" color="secondary">
+        {rows.length === 1 ? '1 document' : `${rows.length} documents`}
+        {`, ${published} published`}
+      </Text>
+
+      <Table<TableRow>
+        data={[...rows] as TableRow[]}
+        idKey="id"
+        density="balanced"
+        hasHover
+        columns={[
+          {
+            key: 'title',
+            header: 'Document',
+            width: proportional(2),
+            renderCell: (row: TableRow) => (
+              <div className="flex flex-col gap-1">
+                <Link className="underline decoration-current/40" href={`/admin/knowledge/${row.id}`}>
+                  {row.title}
+                </Link>
+                <Text as="span" type="supporting" color="secondary">
+                  revision {row.revision}
                 </Text>
-              )}
-            </div>
-          ),
-        },
-      ]}
-    />
+              </div>
+            ),
+          },
+          {
+            key: 'source_type',
+            header: 'Source',
+            width: proportional(1),
+            renderCell: (row: TableRow) => (
+              // The spelled label, in the DOM as it appears on screen - no CSS
+              // text-transform, which is the mismatch the status badge fixes.
+              <Text as="span">{SOURCE_LABELS[row.source_type]}</Text>
+            ),
+          },
+          {
+            key: 'created_at',
+            header: 'Added',
+            width: proportional(1),
+            renderCell: (row: TableRow) => (
+              /*
+                A relative age to scan, the exact UTC instant on `title` and in
+                `dateTime`. G6 names "timestamps without zone", and it is not a
+                detail: "2026-09-03 09:00" alone is unreadable across a team in
+                two places, and Dubai or UTC decides whether a document landed
+                before or after the call that needed it.
+
+                A native <time>: Text's `as` has no time tag, and the
+                machine-readable timestamp is worth keeping.
+              */
+              <time
+                className="whitespace-nowrap text-[13px]"
+                dateTime={row.created_at}
+                title={row.created_at}
+              >
+                {relativeAge(row.created_at)}
+              </time>
+            ),
+          },
+          {
+            key: 'status',
+            header: 'Status',
+            width: proportional(2),
+            renderCell: (row: TableRow) => (
+              /*
+                `items-start` is the whole fix for G6's "the Draft badge is
+                stretched to the column width". A flex column stretches its
+                children on the cross axis by DEFAULT, so the badge grew to the
+                column's width and a two-word status became a banner. The
+                symptom looked like a Badge problem and was a container one.
+              */
+              <div data-status-cell className="flex flex-col items-start gap-1">
+                <DocumentStatusBadge status={row.status} />
+                {row.parse_error_code === null ? null : (
+                  <Text as="p" display="block" type="supporting" color="secondary">
+                    {PARSE_ERROR_LABELS[row.parse_error_code]}
+                    {PARSE_ERROR_ADVICE[row.parse_error_code] === undefined
+                      ? null
+                      : ` - ${PARSE_ERROR_ADVICE[row.parse_error_code]}`}
+                  </Text>
+                )}
+              </div>
+            ),
+          },
+        ]}
+        />
+    </div>
   )
 }
