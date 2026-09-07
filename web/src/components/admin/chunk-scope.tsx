@@ -42,6 +42,17 @@ export function ChunkScope({
   const blocked = chunk.conflict_code === 'unknown_project'
 
   const save = useCallback(async () => {
+    // Answered HERE rather than by disabling the control. `blocked` is the one
+    // state that still disables it, and the difference is the whole rule: a
+    // missing project is an input the reviewer can supply, so the press asks
+    // for it; an `unknown_project` closure is the SERVER refusing whatever
+    // they pick, so there is nothing to ask for.
+    if (needsProject && projectId === '') {
+      setSaved(false)
+      setProblem('Choose a project for this scope.')
+      return
+    }
+
     setBusy(true)
     setProblem(null)
     try {
@@ -127,7 +138,7 @@ export function ChunkScope({
 
         <button
           type="button"
-          disabled={busy || blocked || (needsProject && projectId === '')}
+          disabled={busy || blocked}
           onClick={() => void save()}
           className="border border-ink-600 px-5 py-2.5 text-[13px] text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
         >
