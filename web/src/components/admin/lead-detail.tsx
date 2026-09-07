@@ -87,6 +87,25 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
   const [problem, setProblem] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
+  /**
+   * Whether the analysis produced anything worth its own cards.
+   *
+   * The three FIELDS, not `analysis_status`: a lead can sit at 'complete'
+   * with a null score if the rubric declined to score it, and one at
+   * 'pending' can already carry a summary. The question this answers is "is
+   * there anything to show", and the fields are what answer it - the same
+   * reasoning `toScore` uses in leads.server.ts, where consulting
+   * analysis_status instead of the fields was the wrong instinct.
+   *
+   * TURNS ARE DELIBERATELY NOT PART OF THIS, and including them was a defect
+   * the browser caught: a failed analysis on a real call still HAS a
+   * transcript, so `turns.length > 0` made this true and rendered all three
+   * cards again - "Analysis failed" in one, "No score" in the next - which is
+   * the pile of empty cards the collapse exists to remove. The transcript is
+   * not analysis output; it stands on its own below.
+   */
+  const analysed = lead.summary !== null || lead.score !== null
+
   const save = useCallback(async () => {
     // Answered rather than pre-empted by a disabled button: qualify or reject
     // is a choice the admin can make, so the press asks for it. The early
@@ -139,12 +158,26 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
 
   return (
     <div className="flex flex-col gap-6">
-      {/*
+{/*
+        THE HEADER BLOCK (finding G5). Everything that identifies this call in
+        one place: which call, what language, how it ended, and where the
+        review stands. It was a line of supporting text with a badge stranded
+        beside it, so the page opened with its least useful information at
+        full size and its identity in 12px grey.
+
         No h1 here. The session id is the page heading and AdminAppShell
         renders it, so this component adding one gave /admin/leads/<id> two
-        level-one headings.
+        level-one headings. The id is repeated in this block as SUPPORTING
+        text on purpose - a reviewer cross-referencing a log needs it beside
+        the facts, not only in the title bar.
       */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <div
+        data-testid="lead-header"
+        className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-[var(--color-border)] pb-4"
+      >
+        <Text as="span" type="supporting" color="secondary">
+          {lead.session_id}
+        </Text>
         <Text as="span" type="supporting" color="secondary">
           {endReasonLabel(lead.call_end_reason)}
           {lead.ended_cleanly ? '' : ' - incomplete'}
@@ -154,222 +187,295 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
         <LeadStatusBadge status={lead.status} />
       </div>
 
-      <Section
-        heading="Summary"
-        /* The label is not a footnote: it is the difference between a sentence
-           a person wrote and one a model produced. A neutral badge rather than
-           a coloured one - it is a provenance fact, not a problem. */
-        aside={<Badge variant="neutral" label="model-generated" />}
-      >
-        {lead.summary === null ? (
-          <Text as="p" display="block" color="secondary">
-            {lead.analysis_status === 'failed'
-              ? 'Analysis failed for this call, so there is no summary. The call itself is saved.'
-              : 'No summary yet.'}
-          </Text>
-        ) : (
-          <Text as="p" display="block">
-            {lead.summary}
-          </Text>
-        )}
-      </Section>
+      {/*
+        TWO COLUMNS ABOVE lg (finding G5: "six full-width stacked cards ... the
+        decision form is below the fold"). The evidence on the left, the
+        decision beside it rather than under it - which is the only change
+        that makes the form reachable without scrolling on a 900px viewport.
+        One column below lg, because two 300px columns are worse than a
+        scroll.
 
-      <Section
-        heading="Interest score"
-        aside={
-          lead.score !== null ? (
-            <Text as="span" type="supporting" color="secondary">
-              rubric {lead.score.score_version}
-            </Text>
-          ) : null
-        }
-      >
-        {lead.score === null ? (
-          <Text as="p" display="block" color="secondary">
-            No score: the analysis has not completed.
-          </Text>
-        ) : (
-          <>
-            <Text as="p" display="block" type="display-2">
-              {lead.score.total}
-            </Text>
-            <ol className="flex flex-col gap-2">
-              {lead.score.breakdown.map((item) => (
-                <li
-                  key={item.signal}
-                  className="flex flex-wrap items-baseline gap-x-4 border-b border-current/10 pb-2"
-                >
-                  <span className="inline-block min-w-[16rem]">
-                    <Text as="span">{SIGNAL_LABELS[item.signal]}</Text>
-                  </span>
-                  <Text as="span">{item.points_awarded}</Text>
-                  <Text as="span" color="secondary">
-                    of {item.max_points}
-                  </Text>
-                  {item.observed ? (
-                    <Text as="span" color="secondary">
-                      {item.evidence_turn_indexes.length === 0
-                        ? 'no cited turn'
-                        : item.evidence_turn_indexes.map((index) => `turn ${index}`).join(', ')}
-                    </Text>
-                  ) : (
-                    // Shown rather than omitted: a total that cannot be
-                    // reconciled with the rows above it is not evidence.
-                    <Text as="span" color="secondary">
-                      not observed
-                    </Text>
-                  )}
-                </li>
-              ))}
-            </ol>
-          </>
-        )}
-      </Section>
-
-      <Section heading="Contact">
-        <Text as="p" display="block">
-          {lead.contact.status === 'captured'
-            ? [lead.contact.name, lead.contact.phone, lead.contact.email]
-                .filter((value) => value !== null && value !== '')
-                .join(' · ')
-            : `Not captured (${lead.contact.status.replace('_', ' ')})`}
-        </Text>
-      </Section>
-
-      <Section heading="Buyer turns cited by the score">
-        <ol className="flex flex-col gap-2">
-          {lead.turns.map((turn) => (
-            <li key={turn.turn_index} className="flex flex-wrap items-baseline gap-2">
-              <Text as="span" type="supporting" color="secondary">
-                turn {turn.turn_index}
+        `items-start` so the two columns do not stretch each other to the
+        taller one's height: a short aside next to a long transcript would
+        otherwise render a card with a lot of nothing under its content.
+      */}
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <div data-testid="detail-main" className="flex flex-col gap-6">
+          {analysed ? (
+            <>
+          <Section
+            heading="Summary"
+            /* The label is not a footnote: it is the difference between a sentence
+               a person wrote and one a model produced. A neutral badge rather than
+               a coloured one - it is a provenance fact, not a problem. */
+            aside={<Badge variant="neutral" label="model-generated" />}
+          >
+            {lead.summary === null ? (
+              <Text as="p" display="block" color="secondary">
+                {lead.analysis_status === 'failed'
+                  ? 'Analysis failed for this call, so there is no summary. The call itself is saved.'
+                  : 'No summary yet.'}
               </Text>
-              <Text as="span">{turn.text}</Text>
-              {turn.audit_incomplete ? <Badge variant="warning" label="incomplete" /> : null}
-            </li>
-          ))}
-        </ol>
-      </Section>
+            ) : (
+              <Text as="p" display="block">
+                {lead.summary}
+              </Text>
+            )}
+          </Section>
 
-      <Section heading="Decisions">
-        {lead.decisions.length === 0 ? (
-          <Text as="p" display="block" color="secondary">
-            No decision has been recorded yet.
-          </Text>
-        ) : (
-          <ol className="flex flex-col gap-2">
-            {lead.decisions.map((decision) => (
-              /*
-                Append-only in the database (ADR-020), so there is nothing
-                interactive in here and a case asserts that: a row that looked
-                editable would be lying about the contract.
-              */
-              <li key={decision.id} className="flex flex-wrap items-baseline gap-2">
+          <Section
+            heading="Interest score"
+            aside={
+              lead.score !== null ? (
                 <Text as="span" type="supporting" color="secondary">
-                  #{decision.sequence}
+                  rubric {lead.score.score_version}
                 </Text>
-                <LeadStatusBadge status={decision.new_status} />
-                <Text as="span" color="secondary">
-                  {REASON_LABELS[decision.reason_code]}
+              ) : null
+            }
+          >
+            {lead.score === null ? (
+              <Text as="p" display="block" color="secondary">
+                No score: the analysis has not completed.
+              </Text>
+            ) : (
+              <>
+                <Text as="p" display="block" type="display-2">
+                  {lead.score.total}
                 </Text>
-                {decision.note === null ? null : <Text as="span">- {decision.note}</Text>}
-                <time className="text-[12px] opacity-70" dateTime={decision.decided_at}>
-                  {decision.decided_at.slice(0, 16).replace('T', ' ')}
-                </time>
-              </li>
-            ))}
-          </ol>
-        )}
-      </Section>
+                <ol className="flex flex-col gap-2">
+                  {lead.score.breakdown.map((item) => (
+                    <li
+                      key={item.signal}
+                      className="flex flex-wrap items-baseline gap-x-4 border-b border-current/10 pb-2"
+                    >
+                      <span className="inline-block min-w-[16rem]">
+                        <Text as="span">{SIGNAL_LABELS[item.signal]}</Text>
+                      </span>
+                      <Text as="span">{item.points_awarded}</Text>
+                      <Text as="span" color="secondary">
+                        of {item.max_points}
+                      </Text>
+                      {item.observed ? (
+                        <Text as="span" color="secondary">
+                          {item.evidence_turn_indexes.length === 0
+                            ? 'no cited turn'
+                            : item.evidence_turn_indexes.map((index) => `turn ${index}`).join(', ')}
+                        </Text>
+                      ) : (
+                        // Shown rather than omitted: a total that cannot be
+                        // reconciled with the rows above it is not evidence.
+                        <Text as="span" color="secondary">
+                          not observed
+                        </Text>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+          </Section>
 
-      <Section heading="Your decision">
-        <Text as="p" display="block" color="secondary">
-          The score is guidance. Qualifying or rejecting is your call, it is recorded
-          against this revision of the lead, and it cannot be edited afterwards.
-        </Text>
+            </>
+          ) : (
+            /*
+              FOUR CARDS SAYING NOTHING BECOME ONE. An unanalysed lead used to
+              render "No summary yet.", "No score: the analysis has not
+              completed." and an empty turns card - three full-width cards,
+              three scroll-lengths, one fact. The reviewer's next step is to
+              wait or to retry, and neither needs three cards to say.
 
-        {saved ? (
-          <p role="status">
-            <Text as="span">Decision saved. Reload to see it in the history above.</Text>
-          </p>
-        ) : (
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap gap-3">
-              {(
-                [
-                  ['qualified', 'Qualify'],
-                  ['rejected', 'Reject'],
-                ] as const
-              ).map(([value, label]) => (
-                /*
-                  A ToggleButton, so the choice is IN THE ACCESSIBILITY TREE:
-                  it keeps role=button - the cases press it by that role - and
-                  adds aria-pressed, which two tinted borders never carried.
-                  Before this, a screen reader user could not tell which
-                  decision they were about to save.
+              Conditional, not a deletion: the sections come back the moment
+              there is something in them, which the inverse case asserts.
+            */
+            <Section heading="Awaiting analysis">
+              <Text as="p" display="block" color="secondary">
+                {lead.analysis_status === 'failed'
+                  ? 'The analysis failed, so there is no summary, score or cited turn for this call. The transcript was still recorded.'
+                  : 'The analysis has not completed, so there is no summary, score or cited turn yet. It runs after the call ends.'}
+              </Text>
+            </Section>
+          )}
 
-                  Exclusive by construction: setting the choice un-presses the
-                  other one, and pressing the pressed one clears it rather than
-                  leaving a decision selected that the reviewer tried to undo.
-                */
-                <ToggleButton
-                  key={value}
-                  label={label}
-                  isPressed={choice === value}
-                  onPressedChange={(isPressed) => setChoice(isPressed ? value : null)}
-                />
-              ))}
-            </div>
-
-            {/*
-              A NATIVE <select> INSIDE ASTRYX'S Field, and it is measured
-              rather than lazy: Astryx's Selector is a combobox that exposes
-              role=listbox with its own popup, not a <select>. Swapping to it
-              would change this control's role and break
-              `userEvent.selectOptions`, which is how the closure's own cases
-              choose a reason. Field supplies the label wiring and the spacing;
-              the element stays the one the platform already gets right.
-            */}
-            <Field label="Reason" inputID="decision-reason" width="24ch">
-              <select
-                id="decision-reason"
-                value={reason}
-                onChange={(event) => setReason(event.target.value as ReasonCode)}
-                className="w-full rounded border border-current/25 bg-transparent px-3 py-2 text-[13px]"
-              >
-                {REASONS.map((code) => (
-                  <option key={code} value={code}>
-                    {REASON_LABELS[code]}
-                  </option>
+          {/*
+            The transcript, on its own guard. It is what the CALL produced,
+            not what the ANALYSIS produced, so it survives a failed analysis
+            and disappears only when there are no turns at all.
+          */}
+          {lead.turns.length === 0 ? null : (
+            <Section heading="Buyer turns cited by the score">
+              <ol className="flex flex-col gap-2">
+                {lead.turns.map((turn) => (
+                  <li key={turn.turn_index} className="flex flex-wrap items-baseline gap-2">
+                    <Text as="span" type="supporting" color="secondary">
+                      turn {turn.turn_index}
+                    </Text>
+                    <Text as="span">{turn.text}</Text>
+                    {/*
+                      NEUTRAL, not warning. PR E collapsed the list's badges to
+                      three weights and left this one yellow, so the admin ran two
+                      badge vocabularies, one per surface. An incomplete recording
+                      is a fact about the call, not an action a reviewer must take.
+                    */}
+                    {turn.audit_incomplete ? <Badge variant="neutral" label="incomplete" /> : null}
+                  </li>
                 ))}
-              </select>
-            </Field>
+              </ol>
+            </Section>
+          )}
+        </div>
 
-            <TextArea
-              label="Note"
-              rows={3}
-              value={note}
-              onChange={(next) => setNote(next)}
-              width="60ch"
-            />
+        <div data-testid="detail-aside" className="flex flex-col gap-6">
+          <Section heading="Contact">
+            <Text as="p" display="block">
+              {lead.contact.status === 'captured'
+                ? [lead.contact.name, lead.contact.phone, lead.contact.email]
+                    .filter((value) => value !== null && value !== '')
+                    .join(' · ')
+                : `Not captured (${lead.contact.status.replace('_', ' ')})`}
+            </Text>
+          </Section>
 
-            <Button
-              label={busy ? 'Saving' : 'Save decision'}
-              variant="primary"
-              /* Disabled only while the request is in flight, never for a
-                 missing choice: pressing it with no choice is how a reviewer
-                 finds out one is needed (#150). */
-              isDisabled={busy}
-              onClick={() => void save()}
-            />
-          </div>
-        )}
+          <Section heading="Decisions">
+            {lead.decisions.length === 0 ? (
+              <Text as="p" display="block" color="secondary">
+                No decision has been recorded yet.
+              </Text>
+            ) : (
+              <ol className="flex flex-col gap-2">
+                {lead.decisions.map((decision) => (
+                  /*
+                    Append-only in the database (ADR-020), so there is nothing
+                    interactive in here and a case asserts that: a row that looked
+                    editable would be lying about the contract.
+                  */
+                  <li key={decision.id} className="flex flex-wrap items-baseline gap-2">
+                    <Text as="span" type="supporting" color="secondary">
+                      #{decision.sequence}
+                    </Text>
+                    <LeadStatusBadge status={decision.new_status} />
+                    <Text as="span" color="secondary">
+                      {REASON_LABELS[decision.reason_code]}
+                    </Text>
+                    {decision.note === null ? null : <Text as="span">- {decision.note}</Text>}
+                    <time className="text-[12px] opacity-70" dateTime={decision.decided_at}>
+                      {decision.decided_at.slice(0, 16).replace('T', ' ')}
+                    </time>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Section>
 
-        {problem !== null ? (
-          <p role="status">
-            <Text as="span">{problem}</Text>
-          </p>
-        ) : null}
-      </Section>
+          <Section heading="Your decision">
+            <Text as="p" display="block" color="secondary">
+              The score is guidance. Qualifying or rejecting is your call, it is recorded
+              against this revision of the lead, and it cannot be edited afterwards.
+            </Text>
+
+            {saved ? (
+              <p role="status">
+                <Text as="span">Decision saved. Reload to see it in the history above.</Text>
+              </p>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {/*
+                  ONE SEGMENTED CONTROL, and NOT Astryx's SegmentedControl.
+                  Measured rather than preferred: that component is a
+                  RADIOGROUP - role=radio, aria-checked, arrow-key
+                  selection-follows-focus - so adopting it would replace
+                  `role=button` + `aria-pressed` with radio semantics. The
+                  card asks for a segmented control "(aria-pressed kept)", and
+                  both cannot be true of Astryx's component; the accessibility
+                  contract the closure's cases pin is worth more than the
+                  component. It also could not express clearing the choice,
+                  which the toggles below do.
+
+                  So the PATTERN goes on the ToggleButtons: one bordered
+                  container, no gap, a hairline between the halves. Each half
+                  is still a button that says whether it is pressed.
+                */}
+                <div
+                  data-segmented
+                  className="inline-flex w-fit overflow-hidden rounded-[var(--radius-element)] border border-[var(--color-border)] [&>*+*]:border-l [&>*+*]:border-[var(--color-border)]"
+                >
+                  {(
+                    [
+                      ['qualified', 'Qualify'],
+                      ['rejected', 'Reject'],
+                    ] as const
+                  ).map(([value, label]) => (
+                    /*
+                      A ToggleButton, so the choice is IN THE ACCESSIBILITY TREE:
+                      it keeps role=button - the cases press it by that role - and
+                      adds aria-pressed, which two tinted borders never carried.
+                      Before this, a screen reader user could not tell which
+                      decision they were about to save.
+
+                      Exclusive by construction: setting the choice un-presses the
+                      other one, and pressing the pressed one clears it rather than
+                      leaving a decision selected that the reviewer tried to undo.
+                    */
+                    <ToggleButton
+                      key={value}
+                      label={label}
+                      isPressed={choice === value}
+                      onPressedChange={(isPressed) => setChoice(isPressed ? value : null)}
+                    />
+                  ))}
+                </div>
+
+                {/*
+                  A NATIVE <select> INSIDE ASTRYX'S Field, and it is measured
+                  rather than lazy: Astryx's Selector is a combobox that exposes
+                  role=listbox with its own popup, not a <select>. Swapping to it
+                  would change this control's role and break
+                  `userEvent.selectOptions`, which is how the closure's own cases
+                  choose a reason. Field supplies the label wiring and the spacing;
+                  the element stays the one the platform already gets right.
+                */}
+                <Field label="Reason" inputID="decision-reason" width="24ch">
+                  <select
+                    id="decision-reason"
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value as ReasonCode)}
+                    className="w-full rounded border border-current/25 bg-transparent px-3 py-2 text-[13px]"
+                  >
+                    {REASONS.map((code) => (
+                      <option key={code} value={code}>
+                        {REASON_LABELS[code]}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                <TextArea
+                  label="Note"
+                  rows={3}
+                  value={note}
+                  onChange={(next) => setNote(next)}
+                  width="60ch"
+                />
+
+                <Button
+                  label={busy ? 'Saving' : 'Save decision'}
+                  variant="primary"
+                  /* Disabled only while the request is in flight, never for a
+                     missing choice: pressing it with no choice is how a reviewer
+                     finds out one is needed (#150). */
+                  isDisabled={busy}
+                  onClick={() => void save()}
+                />
+              </div>
+            )}
+
+            {problem !== null ? (
+              <p role="status">
+                <Text as="span">{problem}</Text>
+              </p>
+            ) : null}
+          </Section>
+        </div>
+      </div>
     </div>
   )
 }

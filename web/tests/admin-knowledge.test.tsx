@@ -58,11 +58,24 @@ async function renderDocuments(rows: DocumentRow[]) {
   return render(<DocumentList rows={rows} />)
 }
 
+/**
+ * The intake with its panel OPEN, which is what every case about the form
+ * wants.
+ *
+ * The panel is collapsed by default (finding G6's intake half: the page opened
+ * with a five-row textarea above the first document), so a bare render puts no
+ * form in the DOM at all - deliberately, since a form that is merely hidden
+ * keeps its fields in the tab order. Opening it here means every existing case
+ * asserts exactly what it asserted before, against exactly the same form; the
+ * collapsed state has its own cases in 'the intake panel'.
+ */
 async function renderIntake() {
   const { KnowledgeIntake } = (await load('@/components/admin/knowledge-intake')) as unknown as {
     KnowledgeIntake: () => ReactElement
   }
-  return render(<KnowledgeIntake />)
+  const rendered = render(<KnowledgeIntake />)
+  await userEvent.click(screen.getByRole('button', { name: /new document/i }))
+  return rendered
 }
 
 const UNAPPROVED: KnowledgeFigureView = {
@@ -224,6 +237,150 @@ describe('the extracted figure list', () => {
     // material into prompt material. The tick is real; the consequence is not.
     expect(within(row).getByText(/inventory governs this/i)).toBeInTheDocument()
     expect(within(row).queryByText(/^speakable$/i)).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * The document detail a reviewer can scope from (finding G7).
+ *
+ * G7: "native unstyled <select> beside an Astryx button; each figure is a full
+ * card (value, tiny type label, yellow 'not approved' pill, sentence, grey
+ * Approve) so four figures fill a screen; 'not approved' in warning yellow for
+ * a DEFAULT state; no per-chunk summary ('4 figures, 0 approved'); 'All
+ * documents' link pattern as G5."
+ *
+ * FOUR FIGURES FILLING A SCREEN IS THE REAL COST. Every figure was its own
+ * Card with its own padding, so a document with a dozen extracted numbers -
+ * which is a normal payment-plan PDF - became a dozen screens of scrolling to
+ * approve a dozen values. Dense one-line rows put the whole decision in view,
+ * and the per-chunk summary means a reviewer can tell at a glance whether a
+ * section needs them at all.
+ *
+ * THE BADGE WEIGHTS DEPART FROM THE CARD, DELIBERATELY, and this is the one
+ * judgement in F worth arguing. The card says "'pending' neutral instead of
+ * warning yellow, approved in brass". The first half is right and is here. The
+ * second half contradicts the badge rule PR E established and god accepted on
+ * the record - brass marks WHAT NEEDS A REVIEWER, which is why `qualified` is
+ * neutral on the leads list while `unreviewed` is brass. Painting an APPROVED
+ * figure brass would make brass mean "done" on this screen and "needs you" on
+ * the other, which is exactly the two-vocabularies problem pair 1 just fixed
+ * in the lead detail. So: NOT APPROVED is brass because it is the action, and
+ * SPEAKABLE is neutral because it is finished. One line to reverse if god
+ * wants the card read literally.
+ */
+describe('the document detail a reviewer scopes from', () => {
+  const CHUNK_SCOPE = 'general_knowledge' as const
+
+  async function renderDense(figures: KnowledgeFigureView[]) {
+    return renderFigures({ figures, chunkScope: CHUNK_SCOPE })
+  }
+
+  it('summarises each section before a reviewer reads a single row', async () => {
+    /*
+     * "4 figures, 1 approved" is the whole question a reviewer has about a
+     * section they have not opened. Without it they had to count pills.
+     */
+    await renderDense([UNAPPROVED, SAME_VALUE_ELSEWHERE, APPROVED])
+    expect(screen.getByText(/3 figures, 1 approved/i)).toBeInTheDocument()
+  })
+
+  it('counts one figure in the singular', async () => {
+    await renderDense([UNAPPROVED])
+    expect(screen.getByText(/^1 figure, 0 approved$/i)).toBeInTheDocument()
+  })
+
+  it('puts each figure on one dense row rather than in its own card', async () => {
+    await renderDense([UNAPPROVED, APPROVED])
+    const rows = screen.getAllByTestId('figure-row')
+    expect(rows).toHaveLength(2)
+    // The row carries the whole decision: the value, what kind it is, the
+    // sentence it came from, and the control that acts on it.
+    const first = rows[0]
+    expect(within(first).getByText(UNAPPROVED.surface)).toBeInTheDocument()
+    expect(within(first).getByText(UNAPPROVED.source_sentence)).toBeInTheDocument()
+    expect(within(first).getByRole('button', { name: /approve/i })).toBeInTheDocument()
+  })
+
+  it('marks an unapproved figure in brass, because that is the one needing a reviewer', async () => {
+    await renderDense([UNAPPROVED])
+    const badge = screen.getByText('not approved')
+    expect(badge.closest('[data-variant]')).toHaveAttribute('data-variant', 'accent')
+  })
+
+  it('leaves a speakable figure quiet, because it is finished work', async () => {
+    await renderDense([APPROVED])
+    const badge = screen.getByText('speakable')
+    expect(badge.closest('[data-variant]')).toHaveAttribute('data-variant', 'neutral')
+  })
+
+  it('uses no warning yellow anywhere in the figure list', async () => {
+    /*
+     * G7's actual complaint. An unscoped section is the DEFAULT state of a
+     * freshly parsed document - it is what the reviewer is here to change,
+     * not a fault - and warning yellow told them something had gone wrong on
+     * every figure of every new document.
+     */
+    /*
+     * ON AN admin_only CHUNK, which is the state that matters: that is the
+     * DEFAULT scope of a freshly parsed document and the only branch that
+     * renders warning yellow today. My first draft of this case passed a
+     * general_knowledge chunk, where the warning branch is unreachable - a
+     * case that could not fail, testing the fixture rather than the code.
+     */
+    await renderFigures({
+      figures: [UNAPPROVED, SAME_VALUE_ELSEWHERE, APPROVED],
+      chunkScope: 'admin_only',
+    })
+    // Positive precondition: there ARE badges to check.
+    const badges = document.querySelectorAll('[data-variant]')
+    expect(badges.length).toBeGreaterThan(0)
+    expect([...badges].map((b) => b.getAttribute('data-variant'))).not.toContain('warning')
+  })
+
+  it('spells the source in the detail header too, not only on the list', async () => {
+    /*
+     * FOUND IN THE BROWSER: PR E spelled the source on the LIST and left this
+     * header printing `source_type.toUpperCase()`, so "PASTE" was still on a
+     * reviewer's screen one click away. The same one-surface miss that left a
+     * warning-yellow badge on the lead detail after E collapsed the list's
+     * badges - which is why the map now lives in lib/admin/knowledge and both
+     * surfaces read it.
+     */
+    const { SOURCE_LABELS } = (await load('@/lib/admin/knowledge')) as unknown as {
+      SOURCE_LABELS: Record<string, string>
+    }
+    // Exhaustive on purpose: the map is a Record over the union, so this
+    // fails the day a source type is added and nobody teaches it a word -
+    // which is exactly what happened when 'md' landed.
+    expect(SOURCE_LABELS).toEqual({
+      paste: 'Pasted',
+      pdf: 'PDF',
+      docx: 'Word',
+      txt: 'Text',
+      md: 'Markdown',
+    })
+  })
+
+  it('styles the scope select from the theme rather than from the current colour', async () => {
+    /*
+     * G7: "native unstyled <select> beside an Astryx button". It was already
+     * inside Astryx's Field - the label wiring was never the problem - but it
+     * drew its own border from `border-current/25`, so it took the text
+     * colour at whatever opacity rather than the theme's border token, and sat
+     * beside themed controls looking like neither.
+     */
+    await renderScope({
+      id: 'chunk-1',
+      ordinal: 0,
+      heading: 'Payment plan',
+      retrieval_scope: 'admin_only',
+      project_id: null,
+      conflict_code: null,
+      figures: [],
+    } as never)
+    const select = screen.getByLabelText(/scope/i)
+    expect(select.className).toContain('var(--color-border)')
+    expect(select.className).not.toContain('border-current')
   })
 })
 
@@ -485,8 +642,10 @@ describe('choosing a file', () => {
     const input = nativeInput()
     expect(input).toBeInTheDocument()
     expect(input.className).toContain('sr-only')
-    // The contract the closure's other cases depend on, unchanged.
-    expect(input.accept).toBe('.pdf,.docx,.txt')
+    // The contract the closure's other cases depend on. The string itself
+    // moved when the API learned Markdown; what this case protects is that
+    // hiding the input did not DROP it.
+    expect(input.accept).toBe('.pdf,.docx,.txt,.md,.markdown')
     expect(input.id).toBe('doc-file')
   })
 
@@ -519,6 +678,91 @@ describe('choosing a file', () => {
     const submit = screen.getByRole('button', { name: /add document/i })
     expect(submit).toHaveAttribute('data-variant', 'primary')
     expect(cta.getAttribute('data-variant')).not.toBe('primary')
+  })
+})
+
+/**
+ * The intake as a panel, with the list first (finding G6's intake half).
+ *
+ * G6: "the intake form dominates the top (huge textarea, full-width black 'Add
+ * document' bar) pushing the list down". A reviewer opens /admin/knowledge to
+ * READ the library far more often than to add to it, and the page opened with
+ * a five-row textarea and a full-width submit before showing a single
+ * document. The list goes first; adding is a panel you open.
+ *
+ * COLLAPSED IS NOT HIDDEN. The trigger reports `aria-expanded`, so a screen
+ * reader user knows the form exists and whether it is open - which a div that
+ * simply appears would not tell them. And the panel is UNMOUNTED when closed
+ * rather than hidden with CSS: a form still in the DOM keeps its fields in the
+ * tab order and its inputs reachable by label, so `getByLabelText(/paste/i)`
+ * would find a control nobody can see.
+ *
+ * E'S "Choose file" CTA STAYS AS IT IS. This pair moves the form; it does not
+ * touch the control inside it, and every case from that pair still runs
+ * against the opened panel.
+ */
+describe('the intake panel', () => {
+  async function renderPanel() {
+    const { KnowledgeIntake } = (await load(
+      '@/components/admin/knowledge-intake',
+    )) as unknown as { KnowledgeIntake: () => ReactElement }
+    return render(<KnowledgeIntake />)
+  }
+
+  it('starts closed, with a trigger that says so', async () => {
+    await renderPanel()
+    const trigger = screen.getByRole('button', { name: /new document/i })
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('keeps the form out of the DOM until it is opened', async () => {
+    /*
+     * Unmounted, not hidden: a form still in the DOM keeps its fields in the
+     * tab order and findable by label, so a keyboard user would tab into
+     * controls that are not on screen.
+     */
+    await renderPanel()
+    expect(screen.queryByLabelText(/paste/i)).toBeNull()
+    expect(screen.queryByLabelText(/^title/i)).toBeNull()
+  })
+
+  it('opens the form and says it is open', async () => {
+    await renderPanel()
+    const trigger = screen.getByRole('button', { name: /new document/i })
+    await userEvent.click(trigger)
+    expect(
+      screen.getByRole('button', { name: /new document/i }),
+    ).toHaveAttribute('aria-expanded', 'true')
+    // The submit inside keeps its own word, and the two are now
+    // distinguishable by name - which is why the trigger is not also called
+    // "Add document".
+    expect(screen.getByRole('button', { name: /^add document$/i })).toBeInTheDocument()
+    // The precondition for every intake case that follows: the form is there.
+    expect(screen.getByLabelText(/paste/i)).toBeInTheDocument()
+  })
+
+  it('closes again, so the list is one press away', async () => {
+    await renderPanel()
+    const open = screen.getByRole('button', { name: /new document/i })
+    await userEvent.click(open)
+    await userEvent.click(screen.getByRole('button', { name: /new document/i }))
+    expect(screen.queryByLabelText(/paste/i)).toBeNull()
+  })
+
+  it('wraps the file input in a drop zone that names what it takes', async () => {
+    /*
+     * A styled label around the native input, so the whole area is a drop
+     * target and a click target rather than a button beside a filename. The
+     * accepted formats stay the FIELD's description - one hint, not two - so
+     * this asserts the zone exists and is associated, not that the copy moved.
+     */
+    await renderPanel()
+    await userEvent.click(screen.getByRole('button', { name: /new document/i }))
+    const zone = screen.getByTestId('drop-zone')
+    expect(zone.tagName.toLowerCase()).toBe('label')
+    expect(zone).toHaveAttribute('for', 'doc-file')
+    // E's CTA is still inside it, unchanged.
+    expect(within(zone).getByRole('button', { name: /choose file/i })).toBeInTheDocument()
   })
 })
 
@@ -649,9 +893,21 @@ describe('intake', () => {
   })
 
   it('names the formats the API will accept and no others', async () => {
+    /*
+     * Markdown joined the list when the API learned to reduce it to prose
+     * before chunking (task-api-upload-markdown, schema 0005). The browser
+     * must not offer a format the server refuses - accepting .md here before
+     * the API landed would have turned every Markdown upload into a 422
+     * rendered as prose - and it must not withhold one the server takes.
+     */
     await renderIntake()
     const input = screen.getByLabelText(/file/i) as HTMLInputElement
-    expect(input.accept).toBe('.pdf,.docx,.txt')
+    expect(input.accept).toBe('.pdf,.docx,.txt,.md,.markdown')
+  })
+
+  it('tells the reviewer Markdown is accepted, in the field description', async () => {
+    await renderIntake()
+    expect(screen.getByText(/PDF, DOCX, TXT or Markdown/i)).toBeInTheDocument()
   })
 
   /**
@@ -710,7 +966,7 @@ describe('intake', () => {
      */
     await renderIntake()
     const input = screen.getByLabelText(/file/i)
-    expect(input).toHaveAccessibleDescription(/pdf, docx or txt/i)
+    expect(input).toHaveAccessibleDescription(/pdf, docx, txt or markdown/i)
     expect(input).toHaveAccessibleDescription(/ocr is deferred/i)
   })
 

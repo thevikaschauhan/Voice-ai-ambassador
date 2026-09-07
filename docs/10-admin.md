@@ -348,6 +348,25 @@ association, the size check and the post-add reset are unchanged. Hiding the
 chrome also hid the file's name, so the chosen name and size are rendered in
 prose beside the button.
 
+The picker's `accept` string is the browser's half of one contract with the
+server, and both halves must agree: the API refuses anything outside its own
+extension table, so a format offered here and refused there becomes a 422
+rendered as prose, and a format the server takes but the picker hides is a
+capability nobody can reach. It reads `.pdf,.docx,.txt,.md,.markdown` -
+Markdown was added on the browser side only after the API could reduce it to
+prose (schema 0005). `sourceLabel()` spells the stored type for both the list
+and the document header, and falls back to the RAW VALUE for a type this tier
+has not been told about: indexing the map directly yields `undefined`, which
+React renders as an empty cell, so a reviewer would see a document with no
+source and nothing to search for. Same rule as `endReasonLabel`.
+
+The intake itself is a COLLAPSED PANEL above the list, opened by a "New
+document" button that reports `aria-expanded`. The form is unmounted when
+closed rather than hidden, so its fields stay out of the tab order, and the
+trigger is deliberately not also called "Add document" - two buttons with one
+name gave a screen reader user nothing to choose between while the panel was
+open.
+
 A detail route passes `heading` as well as `title`: `title` is the section
 label the navigation marks, the `h1` says which record ("sess-1"). Without that
 split a detail page had to choose between a useless `h1` and a second one of

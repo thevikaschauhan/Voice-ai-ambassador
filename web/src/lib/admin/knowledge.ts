@@ -33,7 +33,16 @@ export type ParseErrorCode =
   | 'no_extractable_text'
   | 'malformed'
 
-export type SourceType = 'pdf' | 'docx' | 'txt' | 'paste'
+/**
+ * How a document reached us.
+ *
+ * `md` joined when the API learned to reduce Markdown to prose before
+ * chunking (task-api-upload-markdown, schema 0005). Widening this union is
+ * what makes the label map below fail the BUILD until it is taught the new
+ * member, which is the whole reason the map is a `Record` over the union
+ * rather than a lookup with a default.
+ */
+export type SourceType = 'pdf' | 'docx' | 'txt' | 'paste' | 'md'
 
 export interface DocumentRow {
   id: string
@@ -140,9 +149,65 @@ export const PARSE_ERROR_ADVICE: Partial<Record<ParseErrorCode, string>> = {
  */
 export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 
-export const ACCEPTED_UPLOAD_EXTENSIONS = '.pdf,.docx,.txt'
+/**
+ * What the file picker offers, and it must MATCH THE SERVER.
+ *
+ * The API refuses anything outside its own extension table
+ * (`ingestion.py`, `unsupported_type`) and the schema's CHECK constraint
+ * admits only the types it knows, so a format offered here and refused there
+ * becomes a 422 rendered as prose - and a format the server takes but the
+ * picker hides is a capability nobody can reach. Both halves are wrong; this
+ * string is the browser's half of one contract.
+ *
+ * `.markdown` as well as `.md`: the server's table takes both, and a
+ * reviewer whose file is named that way should not have to rename it.
+ */
+export const ACCEPTED_UPLOAD_EXTENSIONS = '.pdf,.docx,.txt,.md,.markdown'
 
 /** Only these two are ever prompt material (`knowledge.py`'s _PROMPT_ELIGIBLE). */
 export function scopeCanReachACall(scope: RetrievalScope): boolean {
   return scope === 'general_knowledge' || scope === 'project_knowledge'
+}
+
+/**
+ * How a source reads on screen.
+ *
+ * `source_type` is the only field on a document whose value is an ENUM NAME
+ * rather than a word, and both the list and the detail header used to
+ * uppercase it - so a pasted paragraph read as "PASTE", a database value on a
+ * reviewer's screen. "Word" for `docx` follows the same rule: nobody outside
+ * this repository calls a Word document a docx.
+ *
+ * IT LIVES HERE BECAUSE TWO SURFACES SHOW IT. PR E spelled it on the list and
+ * left the document detail printing the raw enum, which is the same one-surface
+ * miss that left a warning-yellow badge on the lead detail. One map, and the
+ * `Record` over the union means the day a source type is added upstream the
+ * build fails here rather than rendering `undefined`.
+ */
+export const SOURCE_LABELS: Record<DocumentRow['source_type'], string> = {
+  paste: 'Pasted',
+  pdf: 'PDF',
+  docx: 'Word',
+  txt: 'Text',
+  md: 'Markdown',
+}
+
+/**
+ * The label to show, and never nothing.
+ *
+ * THE SAME DEFECT `endReasonLabel` EXISTS FOR, on a second enum. Indexing
+ * `SOURCE_LABELS` directly is safe only while the tier's union matches the
+ * API's; the day the API sends a type this copy has not been told about, the
+ * lookup yields `undefined` and React renders an EMPTY CELL. A reviewer sees
+ * a document with no source and nothing to search for, and no error anywhere
+ * says why.
+ *
+ * Falling back to the raw value keeps the failure legible and greppable -
+ * which is what turns "the UI looks broken" into "the API sends a type we do
+ * not label yet". The parameter is widened to `string` deliberately: the
+ * whole point is a value from outside the union, which is the case the type
+ * cannot express.
+ */
+export function sourceLabel(value: string): string {
+  return SOURCE_LABELS[value as DocumentRow['source_type']] ?? value
 }

@@ -81,6 +81,15 @@ export function KnowledgeIntake() {
    * the button until some other state happened to change. The ref stays, but
    * only to CLEAR the input, which is the one thing state cannot do.
    */
+  /**
+   * Whether the form is showing (finding G6's intake half).
+   *
+   * A reviewer opens this page to READ the library far more often than to add
+   * to it, and it used to open with a five-row textarea and a full-width
+   * submit above the first document. Closed by default; the list is what the
+   * page is for.
+   */
+  const [open, setOpen] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -160,8 +169,41 @@ export function KnowledgeIntake() {
   }, [file, text, title])
 
   return (
+    <div className="flex flex-col gap-3">
+      {/*
+        THE TRIGGER, which reports whether the form is open. `aria-expanded`
+        is what tells a screen reader user the form EXISTS and what state it
+        is in; a panel that simply appeared would tell them neither.
+
+        "NEW DOCUMENT", NOT "ADD DOCUMENT", and that is a correction rather
+        than a preference. Naming the trigger after the submit put TWO buttons
+        called "Add document" on the page whenever the panel was open, and a
+        screen reader user hearing them in sequence has nothing to choose
+        between - the same ambiguity the figure list already solved by naming
+        each Approve after its occurrence. The trigger opens a blank form; the
+        submit inside performs the add and keeps its own word untouched.
+      */}
+      <Button
+        type="button"
+        label="New document"
+        variant="secondary"
+        aria-expanded={open}
+        aria-controls="knowledge-intake-panel"
+        onClick={() => setOpen((wasOpen) => !wasOpen)}
+      />
+
+      {/*
+        UNMOUNTED WHEN CLOSED, not hidden with CSS. A form still in the DOM
+        keeps its fields in the tab order and findable by label, so a keyboard
+        user would tab into controls that are not on screen - and a test's
+        `getByLabelText` would resolve to an invisible input. Unmounting also
+        means the draft is discarded on close, which is the honest behaviour
+        for a panel whose trigger says "Add document" rather than "Resume".
+      */}
+      {open ? (
     <form
-      className="flex flex-col gap-4"
+      id="knowledge-intake-panel"
+      className="flex flex-col gap-4 rounded-[var(--radius-container)] border border-[var(--color-border)] p-4"
       onSubmit={(event) => {
         event.preventDefault()
         if (busy) return
@@ -206,7 +248,7 @@ export function KnowledgeIntake() {
       <Field
         label="Or a file"
         inputID="doc-file"
-        description={`PDF, DOCX or TXT, up to ${Math.round(
+        description={`PDF, DOCX, TXT or Markdown, up to ${Math.round(
           MAX_UPLOAD_BYTES / (1024 * 1024),
         )}MB. A scanned PDF has no extractable text and will fail: OCR is deferred.`}
       >
@@ -227,7 +269,23 @@ export function KnowledgeIntake() {
           accept string and drive this element with `userEvent.upload`, and the
           form resets it through `fileRef.current.value`.
         */}
-        <div data-file-field className="flex flex-wrap items-center gap-3">
+        {/*
+          A DROP ZONE, which is a styled <label> and not a div: the label's
+          `htmlFor` makes the WHOLE AREA a click target for the input as well
+          as a drop target, with no JavaScript and no second click handler to
+          keep in step with the button. The accepted formats stay the FIELD's
+          description above - one hint, not two.
+
+          E's Choose file CTA is unchanged inside it. The button is what a
+          reviewer presses; the zone is what they can also drop onto or click
+          anywhere in.
+        */}
+        <label
+          htmlFor="doc-file"
+          data-testid="drop-zone"
+          data-file-field
+          className="flex flex-wrap items-center gap-3 rounded-[var(--radius-element)] border border-dashed border-[var(--color-border)] px-4 py-3"
+        >
           <input
             id="doc-file"
             aria-describedby="doc-file-desc"
@@ -251,12 +309,16 @@ export function KnowledgeIntake() {
             input hid "No file chosen" with it, so the chosen file has to be
             named here or a reviewer cannot tell whether the picker took.
           */}
-          {file === null ? null : (
+          {file === null ? (
+            <Text as="span" type="supporting" color="secondary">
+              or drop one here
+            </Text>
+          ) : (
             <Text as="span" type="supporting" color="secondary">
               {`${file.name}, ${fileSize(file.size)}`}
             </Text>
           )}
-        </div>
+        </label>
       </Field>
 
       <Button
@@ -279,5 +341,7 @@ export function KnowledgeIntake() {
         </p>
       ) : null}
     </form>
+      ) : null}
+    </div>
   )
 }
