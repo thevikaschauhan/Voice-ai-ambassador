@@ -59,6 +59,14 @@ _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 _PARAGRAPH_BREAK: Final = "\n\n"
 
+# How a table row's cells are joined, for every format that has tables. One
+# constant rather than a literal in each parser: DOCX joined with " | " for
+# months while Markdown was written to join with ", ", and a figure's
+# source_sentence carried the separator into review and into speech. The two
+# produce text for the same chunker, so "the same way" should be a fact rather
+# than a coincidence two files have to keep agreeing on.
+_TABLE_CELL_JOIN: Final = ", "
+
 
 class ParseFailed(Exception):
     """A parse that failed for a reason worth showing an admin.
@@ -217,7 +225,13 @@ def _extract_pdf(raw: bytes) -> str:
 
 
 def _extract_docx(raw: bytes) -> str:
-    """Paragraphs and table cells in document order (docs/10- step 2)."""
+    """Paragraphs and table cells in document order (docs/10- step 2).
+
+    A row is one paragraph with its cells joined by `_TABLE_CELL_JOIN`, so it
+    reads as a sentence rather than as a drawing: the separator ends up inside
+    a figure's `source_sentence`, which an admin reads in review and the
+    chunker hands on to be spoken.
+    """
     import docx
     from docx.opc.exceptions import PackageNotFoundError
 
@@ -231,7 +245,7 @@ def _extract_docx(raw: bytes) -> str:
         for row in table.rows:
             cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
             if cells:
-                parts.append(" | ".join(cells))
+                parts.append(_TABLE_CELL_JOIN.join(cells))
     return _PARAGRAPH_BREAK.join(part for part in parts if part)
 
 
@@ -386,7 +400,7 @@ def _markdown_table_row(line: str) -> str:
     if cells and all(_MD_TABLE_SEPARATOR_CELL.match(cell) for cell in cells):
         return ""
     rendered = [_markdown_inline(cell) for cell in cells]
-    return ", ".join(cell for cell in rendered if cell)
+    return _TABLE_CELL_JOIN.join(cell for cell in rendered if cell)
 
 
 def _markdown_inline(text: str) -> str:

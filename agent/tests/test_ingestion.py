@@ -87,6 +87,67 @@ def _pdf_bytes(page_text: str | None) -> bytes:
     return bytes(out)
 
 
+def _docx_bytes_with_table(intro: str, rows: list[list[str]]) -> bytes:
+    """A .docx with a real table in it, built by python-docx rather than by
+    hand: the table XML a Word table actually carries is more shape than is
+    worth hand-writing, and python-docx is already a main dependency (asserted
+    by test_the_parser_libraries_are_main_dependencies_not_dev below), so the
+    fixture is written by the same library that reads it back."""
+    import io
+
+    import docx
+
+    document = docx.Document()
+    document.add_paragraph(intro)
+    table = document.add_table(rows=len(rows), cols=len(rows[0]))
+    for row_index, row in enumerate(rows):
+        for cell_index, cell in enumerate(row):
+            table.cell(row_index, cell_index).text = cell
+    buf = io.BytesIO()
+    document.save(buf)
+    return buf.getvalue()
+
+
+def test_a_docx_table_row_reads_as_cells_rather_than_as_a_grid() -> None:
+    """One row, one line, cells joined by ', ' - the same join the Markdown
+    extractor uses, because the two produce text for the same chunker."""
+    from adapter.ingestion import parse_document
+
+    parsed = parse_document(
+        _docx_bytes_with_table(
+            "NOTAREAL Tower payment plans.",
+            [["Unit type", "Price"], ["Two bedroom", "AED 2,000,000"]],
+        ),
+        "notareal.docx",
+    )
+    assert "Two bedroom, AED 2,000,000" in parsed.text
+    assert "Unit type, Price" in parsed.text
+    assert "|" not in parsed.text
+
+
+def test_a_docx_table_figure_carries_a_sentence_with_no_pipe_in_it() -> None:
+    """The reason the join matters.
+
+    `source_sentence` is what an admin reads when approving a number and what
+    anchors it afterwards, and chunk text is spoken. A cell separator inside
+    that sentence is unreadable in review and unspeakable in a call.
+    """
+    from adapter.ingestion import figures_in, parse_document
+
+    parsed = parse_document(
+        _docx_bytes_with_table(
+            "NOTAREAL Tower payment plans.",
+            [["Unit type", "Price"], ["Two bedroom", "AED 2,000,000"]],
+        ),
+        "notareal.docx",
+    )
+    figures = figures_in(parsed.text)
+    assert figures, "AED 2,000,000 in a table cell is still a figure"
+    for figure in figures:
+        assert "|" not in figure.source_sentence
+        assert "|" not in figure.surface
+
+
 def test_pdf_docx_txt_and_paste_parse_while_a_scanned_pdf_reports_no_text() -> None:
     """The card's named test: all four sources, and the one that must fail loudly.
 
