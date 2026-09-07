@@ -237,6 +237,59 @@ describe('the lead detail', () => {
     // Append-only in the database (ADR-020), so nothing here is editable.
     expect(history.querySelectorAll('input, textarea, select, button')).toHaveLength(0)
   })
+
+  it('leaves the page heading to the shell instead of adding a second one', async () => {
+    /*
+     * A DEFECT THIS PR INTRODUCED, found by reading the detail page rather
+     * than by the browser run - which only visited /admin, /admin/leads and
+     * /admin/knowledge, never a detail route. AdminAppShell now renders the
+     * page h1 so that no page can forget one; this component still renders its
+     * own h1 for the session id, so /admin/leads/<id> ships TWO level-one
+     * headings and a screen reader user navigating by h1 gets two page titles,
+     * neither of which is the page.
+     *
+     * The shell owns the h1, so the component must not have one. The session
+     * id is not lost: the shell takes it as the page heading and the top bar
+     * keeps the short label.
+     */
+    await renderDetail(DETAIL)
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull()
+  })
+
+  it('says which decision is chosen, not just which one is tinted', async () => {
+    /*
+     * Qualify and Reject are two buttons whose selected state is carried
+     * ENTIRELY by a border and a text colour. Nothing in the accessibility
+     * tree changes when one is pressed, so a screen reader user cannot tell
+     * which decision they are about to save - and neither can a sighted
+     * reviewer who cannot separate brass from ink. The choice is exclusive, so
+     * pressing one must also un-announce the other.
+     */
+    await renderDetail(DETAIL)
+    const qualify = screen.getByRole('button', { name: /qualify/i })
+    const reject = screen.getByRole('button', { name: /reject/i })
+    expect(qualify).toHaveAttribute('aria-pressed', 'false')
+
+    await userEvent.click(qualify)
+    expect(qualify).toHaveAttribute('aria-pressed', 'true')
+    expect(reject).toHaveAttribute('aria-pressed', 'false')
+
+    await userEvent.click(reject)
+    expect(qualify).toHaveAttribute('aria-pressed', 'false')
+    expect(reject).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('names the statuses it shows in the words the closure uses', async () => {
+    /*
+     * The same raw-enum-under-a-CSS-uppercase as the two lists, twice on this
+     * page: the lead's own status in the header, and each recorded decision's
+     * status in the history.
+     */
+    await renderDetail(DETAIL)
+    expect(screen.getByText('Unreviewed')).toBeInTheDocument()
+    const history = screen.getByText(/called back later/).closest('li') as HTMLElement
+    expect(within(history).getByText('Rejected')).toBeInTheDocument()
+  })
 })
 
 describe('qualifying and rejecting', () => {
@@ -316,9 +369,16 @@ describe('qualifying and rejecting', () => {
     const save = screen.getByRole('button', { name: /save decision/i })
     expect(save).toBeEnabled()
     await userEvent.click(save)
-    expect(await screen.findByRole('status')).toHaveTextContent(
-      /choose qualify or reject/i,
+    // FIXTURE STRENGTHENING, riding with this RED for the same reason 671a1ef's
+    // did: the GREEN puts an Astryx Button on this form, and Astryx's Button
+    // renders its OWN role=status live region for its "Loading" announcement -
+    // so a bare `findByRole('status')` goes ambiguous the moment it lands. The
+    // claim gets stronger rather than weaker: THIS sentence is the announced
+    // one, where the role query only said some live region held the words.
+    const status = (await screen.findByText(/choose qualify or reject/i)).closest(
+      '[role="status"]',
     )
+    expect(status).not.toBeNull()
     // The original claim, kept: no decision reaches the lead without a choice.
     expect(sent).toHaveLength(0)
   })
