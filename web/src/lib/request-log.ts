@@ -65,3 +65,40 @@ export function logAdminProxy(
     }),
   )
 }
+
+/**
+ * Written by `src/lib/admin/read.ts` when a page read finishes.
+ *
+ * A THIRD EVENT RATHER THAN A WIDER `admin_proxy`, and the distinction is not
+ * cosmetic. An admin PAGE does not fetch its own `/api/admin/*` route: `read.ts`
+ * calls `forward` directly, because a page making an HTTP round trip to itself
+ * to reach a service it can already reach is a hop that can fail on its own. So
+ * a page read never passes `proxy()` and was invisible to `admin_proxy` - found
+ * when web's one `admin_proxy` line disagreed with admin-api's ten access lines
+ * over the same window. Widening `admin_proxy` would have fixed the count going
+ * forward and silently rewritten the meaning of every count already taken from
+ * it; a new name leaves the old series intact and comparable.
+ *
+ * `status` is what the read was ANSWERED with, refusals included, on the same
+ * vocabulary `proxy()` uses (401 no session, 503 unconfigured, 502 no answer,
+ * otherwise the upstream's own code). There is no 403: a page read is not a
+ * mutation, so the same-origin check does not apply to it.
+ */
+export function logAdminPageRead(
+  method: string,
+  route: string,
+  status: number,
+  durationMs: number,
+): void {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'info',
+      event: 'admin_page_read',
+      method,
+      route,
+      status,
+      duration_ms: durationMs,
+    }),
+  )
+}

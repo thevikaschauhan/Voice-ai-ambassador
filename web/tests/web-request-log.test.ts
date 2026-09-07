@@ -205,3 +205,112 @@ describe('middleware writes one line per admin request that arrives', () => {
     expect(matcher.every((m) => m.startsWith('/admin') || m.startsWith('/api/admin'))).toBe(true)
   })
 })
+
+describe('a page read writes its own line, and not the proxy\'s', () => {
+  /**
+   * WHY A THIRD EVENT RATHER THAN A WIDER `admin_proxy` (task-web-request-log-page-reads).
+   *
+   * Measured on deployment 12ea951e's window: web logged 43 `web_request` and
+   * ONE `admin_proxy` while admin-api logged about ten GETs. Not a bug in the
+   * emitter - a boundary nobody had noticed. `read.ts` says in its own
+   * docstring that a server component calls `forward` directly rather than
+   * fetching its own `/api/admin/*` proxy, so a page read never passes
+   * `proxy()`, which is where `admin_proxy` is written. Page reads had an
+   * arrival line and no outcome line: no status, no duration, no route.
+   *
+   * The fix is a THIRD event, not a wider second one. `admin_proxy` keeps
+   * meaning exactly what it has meant since it shipped, so a count by event
+   * stays comparable across the log's whole history - including the 12ea951e
+   * window already read and reported.
+   */
+
+  it('emits exactly one admin_page_read carrying ts, method, route, status and duration', async () => {
+    upstreamAnswers(200, { documents: [] })
+    const lines = captureLines()
+
+    const { readForPage } = await import('@/lib/admin/read')
+    const read = await readForPage(await validCookie(), { route: 'documents' })
+    expect(read.state).toBe('ok')
+
+    expect(lines).toHaveLength(1)
+    const line = JSON.parse(lines[0]) as Record<string, unknown>
+    expect(line.event).toBe('admin_page_read')
+    expect(line.method).toBe('GET')
+    expect(line.route).toBe('documents')
+    expect(line.status).toBe(200)
+    expect(typeof line.duration_ms).toBe('number')
+    expect(line.duration_ms as number).toBeGreaterThanOrEqual(0)
+    expect(new Date(line.ts as string).toISOString()).toBe(line.ts)
+  })
+
+  it('is NOT an admin_proxy line, so counts by event stay comparable across the log history', async () => {
+    // The explicit constraint on this card: widening `admin_proxy` would have
+    // silently rewritten the meaning of every count already taken from it.
+    upstreamAnswers(200, { documents: [] })
+    const lines = captureLines()
+
+    const { readForPage } = await import('@/lib/admin/read')
+    await readForPage(await validCookie(), { route: 'documents' })
+
+    expect(lines).toHaveLength(1)
+    expect(lines.join('\n')).toContain('admin_page_read')
+    expect(lines.join('\n')).not.toContain('"event":"admin_proxy"')
+  })
+
+  it('carries no cookie, no query string and no body, with all three planted', async () => {
+    upstreamAnswers(200, { documents: [] })
+    const lines = captureLines()
+
+    const { readForPage } = await import('@/lib/admin/read')
+    const cookie = `${await validCookie()}; tracking=${MARKER}-cookie`
+    await readForPage(cookie, {
+      route: 'documents',
+      search: `?project=${MARKER}-query`,
+      body: { note: `${MARKER}-body` },
+    })
+
+    // The existence precondition, for the reason recorded on the first leak
+    // case in this file: with nothing logged, "contains no marker" is vacuously
+    // true and the case cannot fail.
+    expect(lines).toHaveLength(1)
+    const everything = lines.join('\n')
+    expect(everything).not.toContain(MARKER)
+    expect(everything).not.toContain(cookie.split('=')[1].split(';')[0])
+    expect(everything).not.toContain(TOKEN)
+    expect(everything).not.toContain(UPSTREAM)
+  })
+
+  it('reports the upstream status it was answered with, not the state it returns', async () => {
+    // `readForPage` maps a 404 to state 'unavailable' with prose. The LOG must
+    // carry 404: "no such document" and "the API is broken" are the same state
+    // to a page and different diagnoses to whoever reads the log.
+    upstreamAnswers(404, { detail: 'nope' })
+    const lines = captureLines()
+
+    const { readForPage } = await import('@/lib/admin/read')
+    const read = await readForPage(await validCookie(), { route: 'document', id: 'abc' })
+    expect(read.state).toBe('unavailable')
+
+    expect(lines).toHaveLength(1)
+    const line = JSON.parse(lines[0]) as Record<string, unknown>
+    expect(line.event).toBe('admin_page_read')
+    expect(line.status).toBe(404)
+    expect(line.route).toBe('document')
+  })
+
+  it('writes a line for a refusal too, where no upstream call happens at all', async () => {
+    // Same property as the proxy's refusal case: an absence in the log must
+    // mean no read happened, never "the read was refused at the door".
+    const lines = captureLines()
+
+    const { readForPage } = await import('@/lib/admin/read')
+    const read = await readForPage(null, { route: 'documents' })
+    expect(read.state).toBe('unauthenticated')
+
+    expect(lines).toHaveLength(1)
+    const line = JSON.parse(lines[0]) as Record<string, unknown>
+    expect(line.event).toBe('admin_page_read')
+    expect(line.status).toBe(401)
+    expect(line.route).toBe('documents')
+  })
+})
