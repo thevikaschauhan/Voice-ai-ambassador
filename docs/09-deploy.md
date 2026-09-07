@@ -423,7 +423,9 @@ railway logs -s agent-worker -d
 Up means a record whose message is `registered worker`, carrying the worker's
 `id`, the `url` it registered against, and the `region`
 (`livekit/agents/worker.py`). Until that line appears the worker is not in the
-pool and no buyer can reach it, whatever the dashboard says.
+pool and no buyer can reach it, whatever the dashboard says. That settles the
+deploy; before a demo, ask the later question in "The pre-demo check" - whether
+the *most recent* such line still stands unanswered by a reconnect attempt.
 
 Two details will trip you up if you go looking for the wrong shape:
 
@@ -574,6 +576,22 @@ field for a caller to slip a cookie into - and asserted in
 `tests/web-request-log.test.ts`, which plants the marker `NOTAREAL` in the
 cookie, the query string and the body of one request and greps every emitted
 line for it.
+
+**Which surface is recorded where.** The matcher covers the admin surface only,
+so a zero in web's log is evidence about `/admin` and about nothing else:
+
+| what was used | where the request is recorded |
+| --- | --- |
+| an `/admin` page | `web_request` on web |
+| `/api/admin/*` | `web_request` **and** `admin_proxy` on web, plus the uvicorn access line on admin-api |
+| `/talk`, and the demo APIs it calls | **nothing on web** - the worker's event stream is the only record |
+
+The third row is the one that misleads. `/talk` is not under `/admin`, and the
+routes it calls (`/api/talk`, `/api/session/room`, `/api/session/stream`,
+`/api/text-turn`) are not under `/api/admin`, so a visit to the demo surface and
+a full call produce **no web line at all**. Read a demo call in the worker log,
+never in web's; a web zero says nothing about whether anyone called. Logging
+public page views is a separate decision and has not been taken.
 
 ### `web`: on `api/session/room`, the reason is the evidence
 
@@ -1405,6 +1423,29 @@ continues with its base inventory, finishes the authored farewell and emits a
 classified failure without buyer words. Free-tier restore through Studio is
 available for one year after a pause; a paid Supabase plan, which does not
 inactivity-pause, is the production answer.
+
+**And confirm the worker is still registered, which is a different question from
+whether it registered.** The check above covers the Phase 2 database; this one
+covers the voice path, and a failure here does block the call. Read the worker
+log's **last** lines rather than its first:
+
+```
+registered worker
+failed to connect to livekit, retrying in <delay>
+```
+
+The pass condition is that the most recent `registered worker` line comes
+**after** every `failed to connect` line - not that a registration appears
+somewhere in the log. "`agent-worker`: you are looking for one log line" is
+right about the deploy - until that line appears, nobody can reach the worker -
+but it answers a question about *then*, and this one is about *now*: the
+connection has been observed dropping hours into a healthy deployment and
+re-registering itself in under a tenth of a second, with the deployment status
+still `SUCCESS` and the container still healthy throughout. A drop that did not
+self-heal would look identical from the platform: a green deployment, a live
+container, and a log whose newest interesting line is hours old. That is why
+this reads the ordering of the last two shapes and not the presence of the
+first.
 
 ## Not deployed
 
