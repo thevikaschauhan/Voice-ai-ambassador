@@ -1,8 +1,25 @@
 'use client'
 
 import Link from 'next/link'
+import { Badge } from '@astryxdesign/core/Badge'
+import { EmptyState } from '@astryxdesign/core/EmptyState'
+import { Table, proportional } from '@astryxdesign/core/Table'
+import { Text } from '@astryxdesign/core/Text'
 import { endReasonLabel } from '@/lib/admin/leads'
 import type { LeadSummaryRow } from '@/lib/admin/leads'
+import { LeadStatusBadge } from './status-badge'
+
+/**
+ * MEASURED CONSTRAINT, not a preference: Astryx's Table is generic over
+ * `T extends Record<string, unknown>`, and `LeadSummaryRow` is an INTERFACE -
+ * TypeScript gives interfaces no implicit index signature, so the row type the
+ * rest of the admin uses cannot satisfy that bound on its own. The
+ * intersection adds the signature without weakening a single field, so
+ * `row.session_id` stays typed inside every cell. Do not "fix" this by
+ * loosening the row type to Record<string, unknown>: the cells would then read
+ * `unknown` and every field access would need a cast of its own.
+ */
+type TableRow = LeadSummaryRow & Record<string, unknown>
 
 /**
  * Every call that finished, as a table of operational facts.
@@ -20,94 +37,145 @@ import type { LeadSummaryRow } from '@/lib/admin/leads'
  * zero - zero would read as "this buyer was uninterested" when what happened is
  * that nobody knows yet.
  */
+
 export function LeadList({ rows }: { rows: readonly LeadSummaryRow[] }) {
   if (rows.length === 0) {
     return (
-      <p className="border border-ink-800 px-5 py-4 text-[13px] text-ink-400">
-        No calls have been recorded yet. A lead appears here as soon as a call ends,
-        including one that was cut short.
-      </p>
+      <EmptyState
+        // The same two sentences the paragraph carried, in the same order, now
+        // a title and a description: the first is what happened, the second is
+        // what to expect. EmptyState gives the first one a heading, which is
+        // what a screen reader user navigating an empty page had nothing to
+        // land on before.
+        title="No calls have been recorded yet."
+        description="A lead appears here as soon as a call ends, including one that was cut short."
+      />
     )
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[52rem] border-collapse text-left">
-        <thead>
-          <tr className="border-b border-ink-800">
-            {['Call', 'When', 'Language', 'Projects', 'Score', 'Contact', 'Status'].map(
-              (heading) => (
-                <th
-                  key={heading}
-                  className="px-3 py-2 text-[11px] tracking-[0.12em] text-ink-500 uppercase"
-                  scope="col"
-                >
-                  {heading}
-                </th>
-              ),
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.id} className="border-b border-ink-900 align-top">
-              <td className="px-3 py-3">
-                <Link
-                  className="text-[13px] text-ink-100 underline decoration-ink-700 hover:text-brass-400"
-                  href={`/admin/leads/${row.id}`}
-                >
-                  {row.session_id}
-                </Link>
-                <p className="mt-1 text-[11px] text-ink-500">
+    <Table<TableRow>
+      // Copied rather than cast: `data` is a mutable T[] and the prop here is
+      // readonly, and a cast would have claimed a mutability the caller never
+      // granted.
+      data={[...rows] as TableRow[]}
+      // `idKey`, not a getRowKey callback: the row identity prop takes a key
+      // name or a function, and it is what keeps React's reconciliation stable
+      // when the list reorders.
+      idKey="id"
+      density="balanced"
+      hasHover
+      // Every column declares a width: Astryx skips the minimum-width floor
+      // for a column that does not, which collapses columns on a narrow
+      // screen instead of scrolling the table.
+      columns={[
+        {
+          key: 'session',
+          header: 'Call',
+          width: proportional(2),
+          renderCell: (row: TableRow) => (
+            <div className="flex flex-col gap-1">
+              <Link className="underline decoration-current/40" href={`/admin/leads/${row.id}`}>
+                {row.session_id}
+              </Link>
+              <div className="flex flex-wrap items-center gap-2">
+                <Text as="span" type="supporting" color="secondary">
                   {endReasonLabel(row.call_end_reason)}
-                  {row.ended_cleanly ? null : (
-                    <span className="ml-2 border border-warn-500/40 px-1.5 py-0.5 text-[10px] tracking-[0.1em] text-ink-300 uppercase">
-                      incomplete
-                    </span>
-                  )}
-                </p>
-              </td>
-              <td className="px-3 py-3 text-[12px] text-ink-400">
-                <time dateTime={row.created_at}>{when(row.created_at)}</time>
-                <p className="mt-1 text-[11px] text-ink-600">{duration(row)}</p>
-              </td>
-              <td className="px-3 py-3 text-[12px] text-ink-300 uppercase">{row.language}</td>
-              <td className="px-3 py-3 text-[12px] text-ink-300">
-                {row.project_ids.length === 0 ? (
-                  <span className="text-ink-600">none named</span>
-                ) : (
-                  row.project_ids.join(', ')
+                </Text>
+                {row.ended_cleanly ? null : (
+                  // The word, not a colour: a badge whose meaning is only its
+                  // variant is a badge a colour-blind reviewer cannot read.
+                  <Badge variant="warning" label="incomplete" />
                 )}
-              </td>
-              <td className="px-3 py-3">
-                {row.analysis_status === 'failed' ? (
-                  // Not a zero: zero reads as an uninterested buyer, and what
-                  // happened is that nobody knows yet.
-                  <span className="text-[12px] text-warn-500">analysis failed</span>
-                ) : row.score_total === null ? (
-                  <span className="text-[12px] text-ink-600">pending</span>
-                ) : (
-                  <span className="text-[15px] text-ink-100">{row.score_total}</span>
-                )}
-              </td>
-              <td className="px-3 py-3 text-[12px]">
-                {/* Whether, never what. */}
-                {row.contact_present ? (
-                  <span className="text-ink-300">captured</span>
-                ) : (
-                  <span className="text-ink-600">none</span>
-                )}
-              </td>
-              <td className="px-3 py-3">
-                <span className="text-[11px] tracking-[0.12em] text-ink-300 uppercase">
-                  {row.status}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+              </div>
+            </div>
+          ),
+        },
+        {
+          key: 'when',
+          header: 'When',
+          width: proportional(1),
+          renderCell: (row: TableRow) => (
+            <div className="flex flex-col gap-1">
+              {/*
+                A native <time>, because Text's `as` accepts only
+                div/span/p/label/h1-h3 - and dropping the element would drop
+                the machine-readable timestamp with it.
+              */}
+              <time className="text-[12px]" dateTime={row.created_at}>
+                {when(row.created_at)}
+              </time>
+              <Text as="span" type="supporting" color="secondary">
+                {duration(row)}
+              </Text>
+            </div>
+          ),
+        },
+        {
+          key: 'language',
+          header: 'Language',
+          width: proportional(1),
+          renderCell: (row: TableRow) => (
+            // Uppercased in the STRING, not by a CSS text-transform: the cell
+            // used to carry "en" in the DOM and show "EN" on screen, the same
+            // mismatch the status badge fixes.
+            <Text as="span">{row.language.toUpperCase()}</Text>
+          ),
+        },
+        {
+          key: 'projects',
+          header: 'Projects',
+          width: proportional(1),
+          renderCell: (row: TableRow) =>
+            row.project_ids.length === 0 ? (
+              <Text as="span" color="secondary">
+                none named
+              </Text>
+            ) : (
+              <Text as="span">{row.project_ids.join(', ')}</Text>
+            ),
+        },
+        {
+          key: 'score',
+          header: 'Score',
+          width: proportional(1),
+          renderCell: (row: TableRow) =>
+            row.analysis_status === 'failed' ? (
+              // Not a zero: zero reads as an uninterested buyer, and what
+              // happened is that nobody knows yet.
+              <Badge variant="error" label="analysis failed" />
+            ) : row.score_total === null ? (
+              <Badge variant="neutral" label="pending" />
+            ) : (
+              <Text as="span" type="display-3" display="block">
+                {row.score_total}
+              </Text>
+            ),
+        },
+        {
+          key: 'contact',
+          header: 'Contact',
+          width: proportional(1),
+          renderCell: (row: TableRow) =>
+            // Whether, never what.
+            row.contact_present ? (
+              <Badge variant="info" label="captured" />
+            ) : (
+              <Text as="span" color="secondary">
+                none
+              </Text>
+            ),
+        },
+        {
+          key: 'status',
+          header: 'Status',
+          width: proportional(1),
+          renderCell: (row: TableRow) => (
+            <LeadStatusBadge status={row.status} />
+          ),
+        },
+      ]}
+    />
   )
 }
 

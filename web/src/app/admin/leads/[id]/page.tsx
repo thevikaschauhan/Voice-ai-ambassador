@@ -1,4 +1,5 @@
-import Link from 'next/link'
+import { Banner } from '@astryxdesign/core/Banner'
+import { Link } from '@astryxdesign/core/Link'
 import { AdminAppShell } from '@/components/admin/app-shell'
 import { headers } from 'next/headers'
 import { LeadDetail } from '@/components/admin/lead-detail'
@@ -16,21 +17,28 @@ export default async function LeadPage({ params }: { params: Promise<{ id: strin
   )
 
   return (
-    <AdminAppShell title="Lead">
-      <Link className="text-[12px] text-ink-400 hover:text-brass-400" href="/admin/leads">
-        All leads
-      </Link>
+    /*
+      `heading` is the session id and `title` stays "Lead": the top bar says
+      what kind of page this is, the h1 says which record. Passing only one
+      string here meant either a useless h1 or a second one from the component,
+      and this page had the second one.
+    */
+    <AdminAppShell title="Lead" heading={read.state === 'ok' ? read.data.session_id : 'Lead'}>
+      <Link href="/admin/leads" hasUnderline>All leads</Link>
       {read.state === 'unauthenticated' ? (
-        <p className="border border-ink-700 px-5 py-3.5 text-[13px] text-ink-300">
-          <Link className="underline hover:text-brass-400" href="/admin">
-            Sign in
-          </Link>{' '}
-          to see this lead.
-        </p>
+        /* Banner's prop is `status`, not variant, and `title` is required -
+           it renders role=status for info/success and role=alert for
+           error/warning, so the message keeps a live region either way. */
+        <Banner
+          status="info"
+          title={
+            <>
+              <Link href="/admin" hasUnderline>Sign in</Link> to see this lead.
+            </>
+          }
+        />
       ) : read.state === 'unavailable' ? (
-        <p className="border border-warn-500/40 px-5 py-3.5 text-[13px] text-ink-300">
-          {read.reason}
-        </p>
+        <Banner status="error" title={read.reason} />
       ) : (
         <LeadDetail lead={read.data} />
       )}

@@ -310,6 +310,31 @@ endpoint, so the numbers cannot disagree with the list a reviewer opens next.
 Their labels are the closure's own words (`unreviewed`, not `pending`, which
 `AnalysisStatus` owns).
 
+Inside the shell the pages are Astryx too: the lead list and the document list
+are tables, the lead detail and the document's chunks are cards, and every
+status is a badge whose label is a word rather than a colour - a badge
+distinguished only by its variant is a badge a colour-blind reviewer cannot
+read. The status vocabularies live in one module
+(`web/src/components/admin/status-badge.tsx`) because three surfaces show them
+and three copies of a label map is how one status came to be spelled three
+ways.
+
+Two elements stay native inside Astryx's `Field`, and both are measured rather
+than lazy. The scope, project and reason **selects** stay `<select>` because
+Astryx's `Selector` is a combobox exposing `role=listbox` through its own
+popup: adopting it would change the control's role. The **file input** stays
+native because Astryx's `FileInput` is controlled by a `File | null` value
+where intake resets through a ref after a successful add. In both cases `Field`
+supplies the label wiring, and for the file input its `description` is what
+finally attaches the accepted formats and the scanned-PDF warning to the field
+itself.
+
+A detail route passes `heading` as well as `title`: the top bar says what kind
+of page it is ("Lead"), the `h1` says which record ("sess-1"). Without that
+split a detail page had to choose between a useless `h1` and a second one of
+its own, and both detail routes had picked the second - two level-one headings
+each.
+
 ### The API
 
 All admin API routes except `/health` require the shared bearer token. The API

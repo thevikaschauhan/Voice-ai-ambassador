@@ -1,6 +1,15 @@
 'use client'
 
 import { useCallback, useState } from 'react'
+import type { ReactNode } from 'react'
+import { Button } from '@astryxdesign/core/Button'
+import { Badge } from '@astryxdesign/core/Badge'
+import { Card } from '@astryxdesign/core/Card'
+import { Field } from '@astryxdesign/core/Field'
+import { Text } from '@astryxdesign/core/Text'
+import { TextArea } from '@astryxdesign/core/TextArea'
+import { ToggleButton } from '@astryxdesign/core/ToggleButton'
+import { LeadStatusBadge } from './status-badge'
 import {
   endReasonLabel,
   REASON_LABELS,
@@ -35,6 +44,40 @@ const REASONS: ReasonCode[] = [
 ]
 
 type Choice = 'qualified' | 'rejected' | null
+
+/**
+ * One card, one h2. The heading level is fixed at 2 on purpose: the page h1 is
+ * the shell's, so every section here is a child of it - and this component no
+ * longer renders a heading of its own, which is what stopped
+ * /admin/leads/<id> shipping two level-one headings.
+ */
+function Section({
+  heading,
+  aside,
+  children,
+}: {
+  heading: string
+  /** A qualifier that belongs to the heading, like the rubric version. */
+  aside?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <Card padding={4}>
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-baseline gap-2">
+          {/* `large` + semibold: Astryx's TextType has no 'title' - the scale
+              is body/large/label/supporting/code/display-1..3/inherit, and
+              display-3 is the page h1's size. */}
+          <Text as="h2" type="large" weight="semibold">
+            {heading}
+          </Text>
+          {aside}
+        </div>
+        {children}
+      </div>
+    </Card>
+  )
+}
 
 export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
   const [choice, setChoice] = useState<Choice>(null)
@@ -95,146 +138,161 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
   }, [choice, lead.id, lead.revision, note, reason])
 
   return (
-    <div className="flex flex-col gap-8">
-      <section className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
-        <h1 className="text-[15px] tracking-[0.1em] text-ink-100">{lead.session_id}</h1>
-        <p className="text-[12px] text-ink-500">
+    <div className="flex flex-col gap-6">
+      {/*
+        No h1 here. The session id is the page heading and AdminAppShell
+        renders it, so this component adding one gave /admin/leads/<id> two
+        level-one headings.
+      */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Text as="span" type="supporting" color="secondary">
           {endReasonLabel(lead.call_end_reason)}
           {lead.ended_cleanly ? '' : ' - incomplete'}
           {' · '}
           {lead.language.toUpperCase()}
-          {' · '}
-          <span className="uppercase">{lead.status}</span>
-        </p>
-      </section>
+        </Text>
+        <LeadStatusBadge status={lead.status} />
+      </div>
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-[11px] tracking-[0.12em] text-ink-500 uppercase">
-          Summary
-          {/* The label is not a footnote: it is the difference between a
-              sentence a person wrote and one a model produced. */}
-          <span className="ml-2 border border-ink-700 px-1.5 py-0.5 text-[10px] tracking-[0.1em] text-ink-400">
-            model-generated
-          </span>
-        </h2>
+      <Section
+        heading="Summary"
+        /* The label is not a footnote: it is the difference between a sentence
+           a person wrote and one a model produced. A neutral badge rather than
+           a coloured one - it is a provenance fact, not a problem. */
+        aside={<Badge variant="neutral" label="model-generated" />}
+      >
         {lead.summary === null ? (
-          <p className="text-[13px] text-ink-500">
+          <Text as="p" display="block" color="secondary">
             {lead.analysis_status === 'failed'
               ? 'Analysis failed for this call, so there is no summary. The call itself is saved.'
               : 'No summary yet.'}
-          </p>
+          </Text>
         ) : (
-          <p className="max-w-[80ch] text-[13px] leading-relaxed text-ink-200">{lead.summary}</p>
+          <Text as="p" display="block">
+            {lead.summary}
+          </Text>
         )}
-      </section>
+      </Section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-[11px] tracking-[0.12em] text-ink-500 uppercase">
-          Interest score
-          {lead.score !== null ? (
-            <span className="ml-2 text-ink-600">rubric {lead.score.score_version}</span>
-          ) : null}
-        </h2>
+      <Section
+        heading="Interest score"
+        aside={
+          lead.score !== null ? (
+            <Text as="span" type="supporting" color="secondary">
+              rubric {lead.score.score_version}
+            </Text>
+          ) : null
+        }
+      >
         {lead.score === null ? (
-          <p className="text-[13px] text-ink-500">No score: the analysis has not completed.</p>
+          <Text as="p" display="block" color="secondary">
+            No score: the analysis has not completed.
+          </Text>
         ) : (
           <>
-            <p className="text-[24px] leading-none text-ink-100">{lead.score.total}</p>
+            <Text as="p" display="block" type="display-2">
+              {lead.score.total}
+            </Text>
             <ol className="flex flex-col gap-2">
               {lead.score.breakdown.map((item) => (
                 <li
                   key={item.signal}
-                  className="flex flex-wrap items-baseline gap-x-4 border-b border-ink-900 pb-2 text-[12px]"
+                  className="flex flex-wrap items-baseline gap-x-4 border-b border-current/10 pb-2"
                 >
-                  <span className="min-w-[16rem] text-ink-200">{SIGNAL_LABELS[item.signal]}</span>
-                  <span className="text-ink-100">{item.points_awarded}</span>
-                  <span className="text-ink-600">of {item.max_points}</span>
+                  <span className="inline-block min-w-[16rem]">
+                    <Text as="span">{SIGNAL_LABELS[item.signal]}</Text>
+                  </span>
+                  <Text as="span">{item.points_awarded}</Text>
+                  <Text as="span" color="secondary">
+                    of {item.max_points}
+                  </Text>
                   {item.observed ? (
-                    <span className="text-ink-500">
+                    <Text as="span" color="secondary">
                       {item.evidence_turn_indexes.length === 0
                         ? 'no cited turn'
                         : item.evidence_turn_indexes.map((index) => `turn ${index}`).join(', ')}
-                    </span>
+                    </Text>
                   ) : (
                     // Shown rather than omitted: a total that cannot be
                     // reconciled with the rows above it is not evidence.
-                    <span className="text-ink-600">not observed</span>
+                    <Text as="span" color="secondary">
+                      not observed
+                    </Text>
                   )}
                 </li>
               ))}
             </ol>
           </>
         )}
-      </section>
+      </Section>
 
-      <section className="flex flex-col gap-2">
-        <h2 className="text-[11px] tracking-[0.12em] text-ink-500 uppercase">Contact</h2>
-        <p className="text-[13px] text-ink-200">
+      <Section heading="Contact">
+        <Text as="p" display="block">
           {lead.contact.status === 'captured'
             ? [lead.contact.name, lead.contact.phone, lead.contact.email]
                 .filter((value) => value !== null && value !== '')
                 .join(' · ')
             : `Not captured (${lead.contact.status.replace('_', ' ')})`}
-        </p>
-      </section>
+        </Text>
+      </Section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-[11px] tracking-[0.12em] text-ink-500 uppercase">
-          Buyer turns cited by the score
-        </h2>
+      <Section heading="Buyer turns cited by the score">
         <ol className="flex flex-col gap-2">
           {lead.turns.map((turn) => (
-            <li key={turn.turn_index} className="text-[12px] leading-relaxed">
-              <span className="mr-2 text-ink-600">turn {turn.turn_index}</span>
-              <span className="text-ink-200">{turn.text}</span>
-              {turn.audit_incomplete ? (
-                <span className="ml-2 text-[10px] tracking-[0.1em] text-warn-500 uppercase">
-                  incomplete
-                </span>
-              ) : null}
+            <li key={turn.turn_index} className="flex flex-wrap items-baseline gap-2">
+              <Text as="span" type="supporting" color="secondary">
+                turn {turn.turn_index}
+              </Text>
+              <Text as="span">{turn.text}</Text>
+              {turn.audit_incomplete ? <Badge variant="warning" label="incomplete" /> : null}
             </li>
           ))}
         </ol>
-      </section>
+      </Section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-[11px] tracking-[0.12em] text-ink-500 uppercase">Decisions</h2>
+      <Section heading="Decisions">
         {lead.decisions.length === 0 ? (
-          <p className="text-[13px] text-ink-500">No decision has been recorded yet.</p>
+          <Text as="p" display="block" color="secondary">
+            No decision has been recorded yet.
+          </Text>
         ) : (
           <ol className="flex flex-col gap-2">
             {lead.decisions.map((decision) => (
-              <li key={decision.id} className="text-[12px] text-ink-300">
-                <span className="text-ink-500">#{decision.sequence}</span>{' '}
-                <span className="uppercase">{decision.new_status}</span>{' '}
-                <span className="text-ink-500">{REASON_LABELS[decision.reason_code]}</span>
-                {decision.note === null ? null : (
-                  <span className="text-ink-400"> - {decision.note}</span>
-                )}
-                <time className="ml-2 text-ink-600" dateTime={decision.decided_at}>
+              /*
+                Append-only in the database (ADR-020), so there is nothing
+                interactive in here and a case asserts that: a row that looked
+                editable would be lying about the contract.
+              */
+              <li key={decision.id} className="flex flex-wrap items-baseline gap-2">
+                <Text as="span" type="supporting" color="secondary">
+                  #{decision.sequence}
+                </Text>
+                <LeadStatusBadge status={decision.new_status} />
+                <Text as="span" color="secondary">
+                  {REASON_LABELS[decision.reason_code]}
+                </Text>
+                {decision.note === null ? null : <Text as="span">- {decision.note}</Text>}
+                <time className="text-[12px] opacity-70" dateTime={decision.decided_at}>
                   {decision.decided_at.slice(0, 16).replace('T', ' ')}
                 </time>
               </li>
             ))}
           </ol>
         )}
-      </section>
+      </Section>
 
-      <section className="flex flex-col gap-3 border-t border-ink-800 pt-5">
-        <h2 className="text-[11px] tracking-[0.12em] text-ink-500 uppercase">
-          Your decision
-        </h2>
-        <p className="max-w-[74ch] text-[12px] leading-relaxed text-ink-500">
+      <Section heading="Your decision">
+        <Text as="p" display="block" color="secondary">
           The score is guidance. Qualifying or rejecting is your call, it is recorded
           against this revision of the lead, and it cannot be edited afterwards.
-        </p>
+        </Text>
 
         {saved ? (
-          <p className="border border-ink-700 px-5 py-3.5 text-[13px] text-ink-300" role="status">
-            Decision saved. Reload to see it in the history above.
+          <p role="status">
+            <Text as="span">Decision saved. Reload to see it in the history above.</Text>
           </p>
         ) : (
-          <>
+          <div className="flex flex-col gap-4">
             <div className="flex flex-wrap gap-3">
               {(
                 [
@@ -242,33 +300,41 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
                   ['rejected', 'Reject'],
                 ] as const
               ).map(([value, label]) => (
-                <button
+                /*
+                  A ToggleButton, so the choice is IN THE ACCESSIBILITY TREE:
+                  it keeps role=button - the cases press it by that role - and
+                  adds aria-pressed, which two tinted borders never carried.
+                  Before this, a screen reader user could not tell which
+                  decision they were about to save.
+
+                  Exclusive by construction: setting the choice un-presses the
+                  other one, and pressing the pressed one clears it rather than
+                  leaving a decision selected that the reviewer tried to undo.
+                */
+                <ToggleButton
                   key={value}
-                  type="button"
-                  onClick={() => setChoice(value)}
-                  className={`border px-5 py-2.5 text-[13px] tracking-wide ${
-                    choice === value
-                      ? 'border-brass-500 text-brass-400'
-                      : 'border-ink-600 text-ink-100 hover:border-brass-500'
-                  }`}
-                >
-                  {label}
-                </button>
+                  label={label}
+                  isPressed={choice === value}
+                  onPressedChange={(isPressed) => setChoice(isPressed ? value : null)}
+                />
               ))}
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <label
-                className="text-[11px] tracking-[0.12em] text-ink-400 uppercase"
-                htmlFor="decision-reason"
-              >
-                Reason
-              </label>
+            {/*
+              A NATIVE <select> INSIDE ASTRYX'S Field, and it is measured
+              rather than lazy: Astryx's Selector is a combobox that exposes
+              role=listbox with its own popup, not a <select>. Swapping to it
+              would change this control's role and break
+              `userEvent.selectOptions`, which is how the closure's own cases
+              choose a reason. Field supplies the label wiring and the spacing;
+              the element stays the one the platform already gets right.
+            */}
+            <Field label="Reason" inputID="decision-reason" width="24ch">
               <select
                 id="decision-reason"
                 value={reason}
                 onChange={(event) => setReason(event.target.value as ReasonCode)}
-                className="w-[24ch] border border-ink-700 bg-ink-900 px-4 py-2.5 text-[13px] text-ink-100"
+                className="w-full rounded border border-current/25 bg-transparent px-3 py-2 text-[13px]"
               >
                 {REASONS.map((code) => (
                   <option key={code} value={code}>
@@ -276,44 +342,34 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
                   </option>
                 ))}
               </select>
-            </div>
+            </Field>
 
-            <div className="flex flex-col gap-1.5">
-              <label
-                className="text-[11px] tracking-[0.12em] text-ink-400 uppercase"
-                htmlFor="decision-note"
-              >
-                Note
-              </label>
-              <textarea
-                id="decision-note"
-                rows={3}
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                className="max-w-[60ch] border border-ink-700 bg-ink-900 px-4 py-2.5 text-[13px] text-ink-100"
-              />
-            </div>
+            <TextArea
+              label="Note"
+              rows={3}
+              value={note}
+              onChange={(next) => setNote(next)}
+              width="60ch"
+            />
 
-            <button
-              type="button"
-              disabled={busy}
+            <Button
+              label={busy ? 'Saving' : 'Save decision'}
+              variant="primary"
+              /* Disabled only while the request is in flight, never for a
+                 missing choice: pressing it with no choice is how a reviewer
+                 finds out one is needed (#150). */
+              isDisabled={busy}
               onClick={() => void save()}
-              className="w-fit border border-ink-600 px-5 py-2.5 text-[13px] tracking-wide text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
-            >
-              {busy ? 'Saving' : 'Save decision'}
-            </button>
-          </>
+            />
+          </div>
         )}
 
         {problem !== null ? (
-          <p
-            className="border border-warn-500/40 px-5 py-3.5 text-[13px] text-ink-300"
-            role="status"
-          >
-            {problem}
+          <p role="status">
+            <Text as="span">{problem}</Text>
           </p>
         ) : null}
-      </section>
+      </Section>
     </div>
   )
 }

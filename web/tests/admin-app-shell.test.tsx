@@ -203,6 +203,31 @@ describe('the admin app shell', () => {
     expect(screen.getByRole('main')).toContainElement(heading)
   })
 
+  it('takes a page heading distinct from the section label when given one', async () => {
+    /*
+     * A detail route needs both: the top bar says what kind of page this is,
+     * the h1 says which record. Without this the page had to choose between a
+     * useless h1 ("Lead") and a second h1 of its own - and the lead detail
+     * chose the second one, which is how /admin/leads/<id> came to ship two.
+     */
+    const { AdminAppShell } = (await load('@/components/admin/app-shell')) as unknown as {
+      AdminAppShell: (p: {
+        title: string
+        heading?: string
+        children: ReactElement
+      }) => ReactElement
+    }
+    render(
+      <AdminAppShell title="Lead" heading="sess-1">
+        <p>Page body</p>
+      </AdminAppShell>,
+    )
+    const heading = screen.getByRole('heading', { level: 1, name: 'sess-1' })
+    expect(screen.getByRole('main')).toContainElement(heading)
+    // One h1, not two: the section label stays a nav label.
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+  })
+
   it('keeps Sign out reachable', async () => {
     await renderShell()
     expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument()

@@ -1,8 +1,37 @@
 'use client'
 
 import { useCallback, useState } from 'react'
+import { Badge } from '@astryxdesign/core/Badge'
+import { Button } from '@astryxdesign/core/Button'
+import { Card } from '@astryxdesign/core/Card'
+import { EmptyState } from '@astryxdesign/core/EmptyState'
+import { Text } from '@astryxdesign/core/Text'
 import { scopeCanReachACall } from '@/lib/admin/knowledge'
 import type { KnowledgeFigureView, RetrievalScope } from '@/lib/admin/knowledge'
+
+/**
+ * How a control names the occurrence it acts on.
+ *
+ * The page, when there is one, because that is what separates two occurrences
+ * of the same value. When there is not, the first words of the sentence: a
+ * figure with no recorded page still needs a name that is not just "Approve",
+ * or the ambiguity this exists to remove comes straight back.
+ */
+function occurrenceOf(figure: KnowledgeFigureView): string {
+  if (figure.page !== null) return `page ${figure.page}`
+  // Trimmed at a WORD boundary. The first cut of this said
+  // `slice(0, 40)` and the browser run read it back as
+  // "...20 percent on bookin" - a name that ends mid-word is a name a screen
+  // reader mispronounces, and pasted text has no pages, so this branch is the
+  // one every pasted document uses.
+  const words = figure.source_sentence.split(/\s+/)
+  let text = ''
+  for (const word of words) {
+    if (text.length + word.length + 1 > 40) break
+    text = text === '' ? word : `${text} ${word}`
+  }
+  return `occurrence starting "${text === '' ? figure.source_sentence.slice(0, 40) : text}"`
+}
 
 /**
  * The extracted figure list, reviewed one occurrence at a time.
@@ -61,9 +90,7 @@ export function FigureReview({
 
   if (figures.length === 0) {
     return (
-      <p className="text-[12px] text-ink-500">
-        No figures were extracted from this section.
-      </p>
+      <EmptyState isCompact title="No figures were extracted from this section." />
     )
   }
 
@@ -85,74 +112,96 @@ export function FigureReview({
           const unscoped = !governed && !scopeCanReachACall(chunkScope)
 
           return (
-            <li key={figure.id} className="flex flex-col gap-1.5 border-b border-ink-900 pb-3">
+            <li key={figure.id}>
+              <Card padding={4}>
+                <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                <span className="text-[14px] text-ink-100">{figure.surface}</span>
+                <Text as="span" type="large" weight="semibold">
+                  {figure.surface}
+                </Text>
                 {figure.unit === null ? null : (
-                  <span className="text-[12px] text-ink-400">{figure.unit}</span>
+                  <Text as="span" color="secondary">
+                    {figure.unit}
+                  </Text>
                 )}
-                <span className="text-[11px] tracking-[0.1em] text-ink-600 uppercase">
+                <Text as="span" type="supporting" color="secondary">
                   {figure.kind}
-                </span>
+                </Text>
                 {figure.page === null ? null : (
-                  <span className="text-[11px] text-ink-600">page {figure.page}</span>
+                  <Text as="span" type="supporting" color="secondary">
+                    page {figure.page}
+                  </Text>
                 )}
+                {/*
+                  ONE OF FOUR STATES, and only one of them means the value can
+                  reach a buyer - so that one is the only `success`. The other
+                  three were four near-identical bordered spans separated by
+                  ink-grey against brass, which is a distinction by colour on
+                  the one screen where getting it wrong puts an unreviewed
+                  number in an ambassador's mouth.
+                */}
                 {governed ? (
                   // Approved or not, this cannot reach a call. Saying "speakable"
                   // here would be the lie the closure exists to prevent.
-                  <span className="border border-ink-700 px-1.5 py-0.5 text-[10px] tracking-[0.1em] text-ink-400 uppercase">
-                    inventory governs this value
-                  </span>
+                  <Badge variant="neutral" label="inventory governs this value" />
                 ) : unscoped ? (
-                  <span className="border border-ink-700 px-1.5 py-0.5 text-[10px] tracking-[0.1em] text-ink-400 uppercase">
-                    {approved ? 'approved, but this section is admin-only' : 'not approved'}
-                  </span>
+                  <Badge
+                    variant="warning"
+                    label={approved ? 'approved, but this section is admin-only' : 'not approved'}
+                  />
                 ) : approved ? (
-                  <span className="border border-brass-500/50 px-1.5 py-0.5 text-[10px] tracking-[0.1em] text-brass-400 uppercase">
-                    speakable
-                  </span>
+                  <Badge variant="success" label="speakable" />
                 ) : (
-                  <span className="border border-ink-700 px-1.5 py-0.5 text-[10px] tracking-[0.1em] text-ink-500 uppercase">
-                    not approved
-                  </span>
+                  <Badge variant="neutral" label="not approved" />
                 )}
               </div>
 
               {/* The sentence is the review. A value without it is a number
                   somebody is guessing about. */}
-              <p className="max-w-[80ch] text-[12px] leading-relaxed text-ink-300">
+              <Text as="p" display="block">
                 {figure.source_sentence}
-              </p>
+              </Text>
 
               <div className="flex gap-3">
+                {/*
+                  THE VISIBLE WORD IS STILL "Approve"; the ACCESSIBLE NAME says
+                  which occurrence. Two occurrences of one value produce two
+                  buttons, and while both were named "Approve" a screen reader
+                  user had nothing to choose between them - on the one screen
+                  where the wrong press makes a figure speakable in a context
+                  nobody reviewed. Named by the page, because that is the fact
+                  that separates them; `occurrence` is the fallback for a
+                  figure whose page was never recorded, since "Approve" alone
+                  would put the ambiguity straight back.
+                */}
                 {approved ? (
-                  <button
-                    type="button"
-                    disabled={pending === figure.id}
+                  <Button
+                    label="Revoke"
+                    aria-label={`Revoke ${figure.surface}, ${occurrenceOf(figure)}`}
+                    variant="secondary"
+                    isDisabled={pending === figure.id}
                     onClick={() => void review(figure.id, 'revoked')}
-                    className="border border-ink-600 px-4 py-1.5 text-[12px] text-ink-200 hover:border-warn-500 disabled:opacity-40"
-                  >
-                    Revoke
-                  </button>
+                  />
                 ) : (
-                  <button
-                    type="button"
-                    disabled={pending === figure.id}
+                  <Button
+                    label="Approve"
+                    aria-label={`Approve ${figure.surface}, ${occurrenceOf(figure)}`}
+                    variant="secondary"
+                    isDisabled={pending === figure.id}
                     onClick={() => void review(figure.id, 'approved')}
-                    className="border border-ink-600 px-4 py-1.5 text-[12px] text-ink-200 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
-                  >
-                    Approve
-                  </button>
+                  />
                 )}
               </div>
+                </div>
+              </Card>
             </li>
           )
         })}
       </ol>
 
       {problem !== null ? (
-        <p className="border border-warn-500/40 px-5 py-3 text-[12px] text-ink-300" role="status">
-          {problem}
+        <p role="status">
+          <Text as="span">{problem}</Text>
         </p>
       ) : null}
     </div>

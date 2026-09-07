@@ -1,4 +1,5 @@
-import Link from 'next/link'
+import { Banner } from '@astryxdesign/core/Banner'
+import { Link } from '@astryxdesign/core/Link'
 import { DocumentList } from '@/components/admin/document-list'
 import { KnowledgeIntake } from '@/components/admin/knowledge-intake'
 import { headers } from 'next/headers'
@@ -18,19 +19,19 @@ export default async function KnowledgePage() {
   return (
     <AdminAppShell title="Knowledge">
       {read.state === 'unauthenticated' ? (
-        <p className="border border-ink-700 px-5 py-3.5 text-[13px] text-ink-300">
-          <Link className="underline hover:text-brass-400" href="/admin">
-            Sign in
-          </Link>{' '}
-          to review knowledge.
-        </p>
+        <Banner
+          status="info"
+          title={
+            <>
+              <Link href="/admin" hasUnderline>Sign in</Link> to review knowledge.
+            </>
+          }
+        />
       ) : (
         <>
           <KnowledgeIntake />
           {read.state === 'unavailable' ? (
-            <p className="border border-warn-500/40 px-5 py-3.5 text-[13px] text-ink-300">
-              {read.reason}
-            </p>
+            <Banner status="error" title={read.reason} />
           ) : (
             <DocumentList rows={read.data} />
           )}

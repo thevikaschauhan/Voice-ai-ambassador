@@ -142,16 +142,53 @@ describe('the extracted figure list', () => {
     // Approval is per occurrence (docs/10- step 6). A bulk control is how a
     // reviewer approves a sentence they never read.
     expect(screen.queryByRole('button', { name: /approve all|approve everything/i })).toBeNull()
-    expect(screen.getAllByRole('button', { name: /^approve$/i })).toHaveLength(2)
+    // `/^approve /` rather than the `/^approve$/` this case used before: each
+    // control now names the occurrence it acts on, so the name is "Approve
+    // <value>, page N" and an anchored exact match finds nothing. The claim is
+    // the same one and the guard above it is untouched - no bulk control, and
+    // exactly one per-occurrence button per figure.
+    expect(screen.getAllByRole('button', { name: /^approve /i })).toHaveLength(2)
   })
 
   it('approves one occurrence without touching another of the same value', async () => {
     const sent = stubFetch()
     await renderFigures({ figures: [UNAPPROVED, SAME_VALUE_ELSEWHERE] })
-    await userEvent.click(screen.getAllByRole('button', { name: /^approve$/i })[0])
+    // Picked BY ITS NAME rather than by taking [0] out of a list of identical
+    // buttons. That is the point of the change under this commit: choosing the
+    // occurrence by the page it is on is what a reviewer does, where indexing
+    // a NodeList is something only a test could do. fig-1 is the page-4 one.
+    await userEvent.click(screen.getByRole('button', { name: /^approve .*page 4$/i }))
     await waitFor(() => expect(sent).toHaveLength(1))
     expect(sent[0].url).toBe('/api/admin/knowledge/figures/fig-1/reviews')
     expect(sent[0].body).toMatchObject({ action: 'approved' })
+  })
+
+  it('tells two occurrences of one value apart by their buttons alone', async () => {
+    /*
+     * THE DEFECT THIS PAGE CAN LEAST AFFORD. Approval is per-occurrence -
+     * approving "AED 2,000,000" on page 4 must not make the same words on page
+     * 9 speakable - and these two fixtures are exactly that pair: same value,
+     * same surface, different sentence and page. On screen they produce two
+     * buttons whose accessible name is the single word "Approve".
+     *
+     * So a screen reader user tabbing this list hears "Approve, Approve" and
+     * has nothing to choose between them, and the consequence is not cosmetic:
+     * the wrong press makes a figure speakable in a context nobody reviewed.
+     * The existing cases avoid the ambiguity by scoping to the row's sentence,
+     * which is a thing a test can do and a person cannot.
+     *
+     * Each control must name the occurrence it acts on. The visible word stays
+     * "Approve"; what changes is the name in the accessibility tree.
+     */
+    await renderFigures({ figures: [UNAPPROVED, SAME_VALUE_ELSEWHERE] })
+    const buttons = screen.getAllByRole('button', { name: /approve/i })
+    expect(buttons).toHaveLength(2)
+    const names = buttons.map((button) => button.getAttribute('aria-label') ?? button.textContent)
+    expect(new Set(names).size).toBe(2)
+    // Named by the fact that separates them, not by an index a reviewer
+    // cannot see: one is on page 4 and the other on page 9.
+    expect(names.some((name) => name?.includes('4'))).toBe(true)
+    expect(names.some((name) => name?.includes('9'))).toBe(true)
   })
 
   it('revokes an approval with the action the contract names', async () => {
@@ -230,7 +267,20 @@ describe('chunk scope', () => {
     const save = screen.getByRole('button', { name: /save scope/i })
     expect(save).toBeEnabled()
     await userEvent.click(save)
-    expect(await screen.findByRole('status')).toHaveTextContent(/choose a project/i)
+    // FIXTURE STRENGTHENING, riding with this RED as 671a1ef's did: the GREEN
+    // puts an Astryx Button on this form, and Astryx's Button renders its OWN
+    // role=status live region for its "Loading" announcement - so a bare
+    // `findByRole('status')` goes ambiguous the moment it lands. Astryx's
+    // EmptyState carries one too, which is a second source on this page.
+    //
+    // THE FULL SENTENCE, not /choose a project/: the project selector's empty
+    // option reads "Choose a project", so the short pattern matches two
+    // elements once the query goes by text instead of by role. The claim ends
+    // up stronger either way - THIS sentence is the announced one.
+    const status = (await screen.findByText(/choose a project for this scope/i)).closest(
+      '[role="status"]',
+    )
+    expect(status).not.toBeNull()
     // The claim the old test made, kept: nothing is saved without a project.
     expect(sent).toHaveLength(0)
 
@@ -293,6 +343,44 @@ describe('the document list', () => {
     await renderDocuments(rows)
     expect(screen.getByText('Skyrise brochure')).toBeInTheDocument()
     expect(screen.getByText(/draft/i)).toBeInTheDocument()
+  })
+
+  it('names every status in the words a reader uses, not the raw enum', async () => {
+    /*
+     * The same defect as the lead list's status cell and the same cause: the
+     * status is rendered straight from the API, and the difference between a
+     * draft, a published document and a failed one is carried by a colour
+     * class. `DocumentStatus` has FIVE values and the colour logic branches on
+     * two of them, so parsing, draft and archived are all styled alike - a
+     * document still being parsed looks exactly like one ready to publish.
+     *
+     * All five asserted together, because the point is that the vocabulary is
+     * covered rather than that one word was fixed.
+     */
+    const all: DocumentRow[] = (
+      ['parsing', 'draft', 'published', 'failed', 'archived'] as const
+    ).map((status, index) => ({
+      ...rows[0],
+      id: `doc-${status}`,
+      title: `Document ${index}`,
+      status,
+      parse_error_code: null,
+    }))
+    await renderDocuments(all)
+    for (const word of ['Parsing', 'Draft', 'Published', 'Failed', 'Archived']) {
+      expect(screen.getByText(word)).toBeInTheDocument()
+    }
+  })
+
+  it('announces an empty library as a titled region, not as loose prose', async () => {
+    /*
+     * As on the lead list: when there is nothing to show, this sentence is the
+     * whole page, and a bare <p> gives a screen reader user navigating by
+     * heading nothing to land on. The words are unchanged.
+     */
+    await renderDocuments([])
+    expect(screen.getByRole('heading', { name: /no documents yet/i })).toBeInTheDocument()
+    expect(screen.getByText(/paste a paragraph or upload a pdf/i)).toBeInTheDocument()
   })
 
   it('explains a scanned PDF rather than showing a bare failure', async () => {
@@ -365,9 +453,35 @@ describe('intake', () => {
     await userEvent.click(screen.getByRole('button', { name: /add document/i }))
     // The reason goes in the region that already exists for problems, so a
     // screen reader announces it rather than a reviewer hunting for a colour.
-    const status = await screen.findByRole('status')
-    expect(status).toHaveTextContent(/paste text or choose a file/i)
+    // FIXTURE STRENGTHENING, riding with this RED as 671a1ef's did: the GREEN
+    // puts an Astryx Button on this form and Astryx's Button renders its OWN
+    // role=status live region, so a bare `findByRole('status')` goes ambiguous
+    // the moment it lands. Stronger, not looser: THIS sentence is the
+    // announced one.
+    const status = (await screen.findByText(/paste text or choose a file/i)).closest(
+      '[role="status"]',
+    )
+    expect(status).not.toBeNull()
     expect(sent).toHaveLength(0)
+  })
+
+  it('tells the file field itself what it accepts and what will fail', async () => {
+    /*
+     * The most important sentence on this form is in a sibling paragraph:
+     * PDF/DOCX/TXT, a size cap, and the one that saves a wasted upload - a
+     * scanned PDF has no extractable text and WILL fail, because OCR is
+     * deferred. Nothing associates it with the input, so a screen reader user
+     * focused on the file field hears "Or a file" and gets none of it. They
+     * find out by uploading a scan and reading the failure afterwards.
+     *
+     * Asserted as the field's accessible DESCRIPTION rather than as text
+     * somewhere on the page - the words are already on the page, and being on
+     * the page is exactly what is not enough.
+     */
+    await renderIntake()
+    const input = screen.getByLabelText(/file/i)
+    expect(input).toHaveAccessibleDescription(/pdf, docx or txt/i)
+    expect(input).toHaveAccessibleDescription(/ocr is deferred/i)
   })
 
   it('titles an upload after its file when the reviewer gave no title', async () => {

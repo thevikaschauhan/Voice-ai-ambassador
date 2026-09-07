@@ -1,4 +1,5 @@
-import Link from 'next/link'
+import { Banner } from '@astryxdesign/core/Banner'
+import { Link } from '@astryxdesign/core/Link'
 import { headers } from 'next/headers'
 import { AdminAppShell } from '@/components/admin/app-shell'
 import { LeadList } from '@/components/admin/lead-list'
@@ -17,16 +18,16 @@ export default async function LeadsPage() {
   return (
     <AdminAppShell title="Leads">
       {read.state === 'unauthenticated' ? (
-        <p className="border border-ink-700 px-5 py-3.5 text-[13px] text-ink-300">
-          <Link className="underline hover:text-brass-400" href="/admin">
-            Sign in
-          </Link>{' '}
-          to see leads.
-        </p>
+        <Banner
+          status="info"
+          title={
+            <>
+              <Link href="/admin" hasUnderline>Sign in</Link> to see leads.
+            </>
+          }
+        />
       ) : read.state === 'unavailable' ? (
-        <p className="border border-warn-500/40 px-5 py-3.5 text-[13px] text-ink-300">
-          {read.reason}
-        </p>
+        <Banner status="error" title={read.reason} />
       ) : (
         <LeadList rows={read.data} />
       )}
