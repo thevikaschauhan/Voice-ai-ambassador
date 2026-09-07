@@ -4,8 +4,7 @@ import Link from 'next/link'
 import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Table, proportional } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
-import { PARSE_ERROR_ADVICE, PARSE_ERROR_LABELS } from '@/lib/admin/knowledge'
-import { sourceLabel } from '@/lib/admin/knowledge'
+import { PARSE_ERROR_ADVICE, PARSE_ERROR_LABELS, pendingFiguresLabel, sourceLabel } from '@/lib/admin/knowledge'
 import type { DocumentRow } from '@/lib/admin/knowledge'
 import { DocumentStatusBadge } from './status-badge'
 import { relativeAge } from './age'
@@ -80,7 +79,12 @@ export function DocumentList({ rows }: { rows: readonly DocumentRow[] }) {
             renderCell: (row: TableRow) => (
               // The spelled label, in the DOM as it appears on screen - no CSS
               // text-transform, which is the mismatch the status badge fixes.
-              <Text as="span">{sourceLabel(row.source_type)}</Text>
+              <div className="flex flex-col gap-1">
+                <Text as="span">{sourceLabel(row.source_type)}</Text>
+                <Text as="span" type="supporting" color="secondary">
+                  {pendingFiguresLabel(row.figures_pending)}
+                </Text>
+              </div>
             ),
           },
           {

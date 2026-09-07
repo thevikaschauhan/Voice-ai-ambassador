@@ -165,6 +165,7 @@ const DOC: DocumentRow = {
   parse_error_code: null,
   created_at: '2026-09-07T05:00:00Z',
   published_at: null,
+  figures_pending: 0,
 }
 
 beforeEach(() => {
@@ -461,19 +462,9 @@ describe('the shell footer', () => {
  * tells a reviewer there are four unreviewed leads and leaves them to find the
  * list, filter it themselves and work out which four.
  *
- * TWO PANELS, NOT THREE, AND THAT IS A RULING RATHER THAN A SHORTCUT. The card
- * asks Needs attention for unreviewed leads, documents awaiting scope AND
- * figures awaiting approval, "all from the existing list reads; no new API
- * route". The first two are derivable - `status === 'unreviewed'` and
- * `status === 'draft'`. The third is not: `list_documents` selects no figure
- * or chunk counts and there is NO route that lists figures across documents,
- * so the only ways to get it are an N+1 of detail reads on this render or a
- * new aggregate route, and the card forbids the second. god ruled the two
- * honest panels ship and a `figures_pending` count becomes an API card. The
- * structural case below pins the count at two on purpose: an empty "figures
- * awaiting approval" panel, empty because nobody asked the database, reads as
- * "nothing needs approval" - a false statement on a reviewer's screen, and
- * worse than no panel.
+ * Originally pinned to two panels because the document list lacked figure
+ * counts. #157 supplies figures_pending, so the third panel now has an API
+ * source. The pending-figure cases live in admin-figures-pending.test.tsx.
  */
 describe('the overview needs-attention panel', () => {
   async function renderOverview(leads: LeadSummaryRow[], documents: DocumentRow[]) {
@@ -584,10 +575,8 @@ describe('the overview needs-attention panel', () => {
 
   it('shows all three panels now that the API carries pending figure counts', async () => {
     /*
-     * See the note above this describe block. A third panel for figures
-     * awaiting approval would be empty because no list read carries figure
-     * state, and a reviewer would read that emptiness as "nothing needs
-     * approval". Pinned so the panel cannot be added without the data.
+     * The API dependency has landed; this replaces the earlier two-panel
+     * assertion rather than deleting the record of that boundary.
      */
     await renderOverview(leadsNeeding(1), [DOC])
     const panels = screen.getAllByRole('region')

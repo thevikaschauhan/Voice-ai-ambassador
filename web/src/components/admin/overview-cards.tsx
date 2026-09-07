@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { Card } from '@astryxdesign/core/Card'
 import { Text } from '@astryxdesign/core/Text'
 import type { DocumentRow } from '@/lib/admin/knowledge'
+import { pendingFiguresLabel } from '@/lib/admin/knowledge'
 import type { LeadSummaryRow } from '@/lib/admin/leads'
 import { relativeAge } from './age'
 
@@ -29,16 +30,8 @@ import { relativeAge } from './age'
  * the filter and reconstruct the same four by hand. The status filters those
  * links use are the ones `list_leads` already accepts.
  *
- * TWO PANELS, NOT THREE. The card asks Needs attention for unreviewed leads,
- * documents awaiting scope and figures awaiting approval, all from the
- * existing list reads. The first two are derivable from `status`; the third is
- * not - `list_documents` selects no figure or chunk counts and no route lists
- * figures across documents, only `GET /v1/knowledge/documents/{id}` per
- * document. An N+1 of detail reads on this render was the alternative to a new
- * route the card forbids, so god ruled the two honest panels ship and a
- * `figures_pending` count on the document list projection becomes an API card.
- * A third panel would have been empty because nobody asked the database, and a
- * reviewer reads that emptiness as "nothing needs approval" - which is false.
+ * The API now supplies figures_pending on every document row (#157), so the
+ * third panel can use the same list read without fetching document details.
  */
 
 /** How many rows a panel shows before it stops being a starting point. */
@@ -92,9 +85,11 @@ function AttentionPanel({
   heading,
   emptySentence,
   items,
+  summary,
 }: {
   heading: string
   emptySentence: string
+  summary?: string
   items: { id: string; href: string; primary: string; secondary: string }[]
 }) {
   const shown = items.slice(0, PANEL_LIMIT)
@@ -113,6 +108,12 @@ function AttentionPanel({
         <Text as="h2" display="block" type="large">
           {heading}
         </Text>
+
+        {summary !== undefined ? (
+          <Text as="p" display="block" type="supporting" color="secondary">
+            {summary}
+          </Text>
+        ) : null}
 
         {shown.length === 0 ? (
           <Text as="p" display="block" type="supporting" color="secondary">
@@ -223,6 +224,16 @@ export function OverviewCards({
       secondary: relativeAge(document.created_at),
     }))
 
+  const awaitingFigures = documents
+    .filter((document) => document.figures_pending > 0)
+    .map((document) => ({
+      id: document.id,
+      href: `/admin/knowledge/${document.id}`,
+      primary: document.title,
+      secondary: pendingFiguresLabel(document.figures_pending),
+    }))
+  const pendingTotal = documents.reduce((sum, document) => sum + document.figures_pending, 0)
+
   return (
     <div className="flex flex-col gap-6">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -238,11 +249,9 @@ export function OverviewCards({
 
       {/*
         Needs attention, below the numbers: the counts say how much, these say
-        which. Two columns above lg so neither panel is below the fold on a
-        laptop - G3's "empty page below the fold" was partly that there was
-        nothing there and partly that what little there was sat too low.
+        which. Stack on small screens and use three columns on wide screens.
       */}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 xl:grid-cols-3">
         <AttentionPanel
           heading="Unreviewed leads"
           emptySentence="Nothing is waiting for a decision."
@@ -252,6 +261,12 @@ export function OverviewCards({
           heading="Documents awaiting scope"
           emptySentence="Every document has been scoped."
           items={awaitingScope}
+        />
+        <AttentionPanel
+          heading="Figures awaiting approval"
+          emptySentence="No figures are awaiting approval."
+          summary={pendingFiguresLabel(pendingTotal)}
+          items={awaitingFigures}
         />
       </div>
     </div>

@@ -316,6 +316,8 @@ endpoint, so the numbers cannot disagree with the list a reviewer opens next.
 Their labels are the closure's own words (`unreviewed`, not `pending`, which
 `AnalysisStatus` owns).
 
+The third attention panel lists documents with `figures_pending > 0`, links to their reviews and totals pending figures; each knowledge-list row repeats its count beside the source, including zero.
+
 Inside the shell the pages are Astryx too: the lead list and the document list
 are tables, the lead detail and the document's chunks are cards, and every
 status is a badge whose label is a word rather than a colour - a badge

@@ -53,6 +53,8 @@ export interface DocumentRow {
   parse_error_code: ParseErrorCode | null
   created_at: string
   published_at: string | null
+  /** Unapproved occurrences on the current revision, from the list API. */
+  figures_pending: number
 }
 
 /**
@@ -87,8 +89,12 @@ export interface KnowledgeChunkView {
   figures: KnowledgeFigureView[]
 }
 
-export interface DocumentDetail extends DocumentRow {
+export interface DocumentDetail extends Omit<DocumentRow, 'figures_pending'> {
   chunks: KnowledgeChunkView[]
+}
+
+export function pendingFiguresLabel(count: number): string {
+  return `${count} ${count === 1 ? 'figure' : 'figures'} awaiting approval`
 }
 
 export const SCOPE_LABELS: Record<RetrievalScope, string> = {
