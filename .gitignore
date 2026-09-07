@@ -24,3 +24,10 @@ node_modules/
 hive/
 roster.json
 roster-backups/
+
+# Commit-message and PR-body scratch files. Agents write these next to the
+# repo root and reach for `git add -A`, which is how one of them ended up
+# committed into four commits of #152 before a diff against the pre-reshape
+# head caught it.
+.commitmsg
+.prbody
