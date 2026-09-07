@@ -453,9 +453,35 @@ describe('intake', () => {
     await userEvent.click(screen.getByRole('button', { name: /add document/i }))
     // The reason goes in the region that already exists for problems, so a
     // screen reader announces it rather than a reviewer hunting for a colour.
-    const status = await screen.findByRole('status')
-    expect(status).toHaveTextContent(/paste text or choose a file/i)
+    // FIXTURE STRENGTHENING, riding with this RED as 671a1ef's did: the GREEN
+    // puts an Astryx Button on this form and Astryx's Button renders its OWN
+    // role=status live region, so a bare `findByRole('status')` goes ambiguous
+    // the moment it lands. Stronger, not looser: THIS sentence is the
+    // announced one.
+    const status = (await screen.findByText(/paste text or choose a file/i)).closest(
+      '[role="status"]',
+    )
+    expect(status).not.toBeNull()
     expect(sent).toHaveLength(0)
+  })
+
+  it('tells the file field itself what it accepts and what will fail', async () => {
+    /*
+     * The most important sentence on this form is in a sibling paragraph:
+     * PDF/DOCX/TXT, a size cap, and the one that saves a wasted upload - a
+     * scanned PDF has no extractable text and WILL fail, because OCR is
+     * deferred. Nothing associates it with the input, so a screen reader user
+     * focused on the file field hears "Or a file" and gets none of it. They
+     * find out by uploading a scan and reading the failure afterwards.
+     *
+     * Asserted as the field's accessible DESCRIPTION rather than as text
+     * somewhere on the page - the words are already on the page, and being on
+     * the page is exactly what is not enough.
+     */
+    await renderIntake()
+    const input = screen.getByLabelText(/file/i)
+    expect(input).toHaveAccessibleDescription(/pdf, docx or txt/i)
+    expect(input).toHaveAccessibleDescription(/ocr is deferred/i)
   })
 
   it('titles an upload after its file when the reviewer gave no title', async () => {
