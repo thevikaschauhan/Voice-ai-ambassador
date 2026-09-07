@@ -351,14 +351,45 @@ class Repository:
         The text is excluded for the same reason the lead list excludes the
         transcript: it is the commercial content, a list does not need it, and
         a response that never carries it cannot leak it.
+
+        `figures_pending` counts the figures awaiting approval on the revision
+        the row describes. It is here rather than on the detail route because
+        the overview's "Needs attention" panel needs it for every document at
+        once, and asking per document is an N+1 against the API.
+
+        Three things about the count are contract rather than detail:
+
+        - it is keyed on `(document_id, document_revision)`, not on the
+          document alone. Figures belong to a revision, so a superseded
+          revision's unapproved figures are not awaiting anything.
+        - `active_approval_id IS NULL` is the question, not the absence of a
+          review row. `knowledge_figure_reviews` is append-only, so an
+          approved-then-revoked figure still has its approval on record and
+          only the projection says it no longer carries one - it is pending
+          again, and counting review rows would miss that.
+        - the aggregate is grouped ONCE and joined, rather than run as a
+          correlated count per row. `knowledge_figures` is indexed on
+          `chunk_id` only, so a per-row count is a fresh scan of the table
+          for every revision of every document.
         """
         rows = await self._pool.fetch(
             """
+            WITH pending_figures AS (
+                SELECT document_id, document_revision, count(*) AS pending
+                FROM knowledge_figures
+                WHERE active_approval_id IS NULL
+                GROUP BY document_id, document_revision
+            )
             SELECT DISTINCT ON (id)
                    id, revision, title, source_type, original_filename,
                    mime_type, source_bytes, status, parse_error_code,
-                   created_at, updated_at, published_at
+                   created_at, updated_at, published_at,
+                   coalesce(pending_figures.pending, 0)::int AS figures_pending
             FROM knowledge_documents
+            LEFT JOIN pending_figures
+                   ON pending_figures.document_id = knowledge_documents.id
+                  AND pending_figures.document_revision
+                      = knowledge_documents.revision
             ORDER BY id, revision DESC
             """
         )
