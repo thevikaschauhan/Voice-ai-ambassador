@@ -67,7 +67,14 @@ vi.mock('next/navigation', () => ({
   usePathname: () => pathname,
 }))
 
-async function renderShell(children: ReactElement = <h1>Overview</h1>) {
+/**
+ * Default children are deliberately NOT a heading named after the section. The
+ * case below asserts the SHELL renders the page h1, so a child
+ * <h1>Overview</h1> would satisfy it on the fixture's own markup - it would
+ * pass with the shell rendering no heading at all, which is the one thing it
+ * exists to catch.
+ */
+async function renderShell(children: ReactElement = <p>Page body</p>) {
   const { AdminAppShell } = (await load('@/components/admin/app-shell')) as unknown as {
     AdminAppShell: (p: { title: string; children: ReactElement }) => ReactElement
   }
@@ -156,9 +163,9 @@ describe('the admin app shell', () => {
   })
 
   it('renders the page content inside the main landmark', async () => {
-    await renderShell(<h1>Overview</h1>)
+    await renderShell(<p>The lead list goes here</p>)
     expect(screen.getByRole('main')).toContainElement(
-      screen.getByRole('heading', { name: 'Overview' }),
+      screen.getByText('The lead list goes here'),
     )
   })
 
@@ -172,6 +179,28 @@ describe('the admin app shell', () => {
     expect(
       screen.getByRole('button', { name: /open navigation/i }),
     ).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('gives the page a level-one heading naming the section', async () => {
+    /*
+     * FOUND BY THE PRODUCTION BROWSER RUN, not by the cases above, and it was
+     * a regression I introduced: wrapping the pages in the shell removed the
+     * per-page <header> that carried each <h1>, and the first text on every
+     * admin page became "Skip to content" with no heading anywhere.
+     *
+     * AppShell deliberately renders no heading - its own docs say the first
+     * heading in the content area is the page h1 - and the title in the top
+     * bar is a nav label, not a heading. So the shell owes the content region
+     * one, or a screen reader user has no document outline to navigate by and
+     * "jump to heading" lands nowhere.
+     *
+     * Asserted on the SHELL rather than page by page for the same reason the
+     * regression happened: a rule each page has to remember is a rule some
+     * page will forget.
+     */
+    await renderShell()
+    const heading = screen.getByRole('heading', { level: 1, name: 'Overview' })
+    expect(screen.getByRole('main')).toContainElement(heading)
   })
 
   it('keeps Sign out reachable', async () => {
