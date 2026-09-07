@@ -45,7 +45,15 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
   const [saved, setSaved] = useState(false)
 
   const save = useCallback(async () => {
-    if (choice === null) return
+    // Answered rather than pre-empted by a disabled button: qualify or reject
+    // is a choice the admin can make, so the press asks for it. The early
+    // return stays - it is what keeps a decision off the lead - it just says
+    // why now.
+    if (choice === null) {
+      setSaved(false)
+      setProblem('Choose qualify or reject.')
+      return
+    }
     setBusy(true)
     setProblem(null)
     try {
@@ -288,7 +296,7 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
 
             <button
               type="button"
-              disabled={choice === null || busy}
+              disabled={busy}
               onClick={() => void save()}
               className="w-fit border border-ink-600 px-5 py-2.5 text-[13px] tracking-wide text-ink-100 hover:border-brass-500 hover:text-brass-400 disabled:opacity-40"
             >
