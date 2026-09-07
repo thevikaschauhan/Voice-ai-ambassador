@@ -154,6 +154,34 @@ describe('the extracted figure list', () => {
     expect(sent[0].body).toMatchObject({ action: 'approved' })
   })
 
+  it('tells two occurrences of one value apart by their buttons alone', async () => {
+    /*
+     * THE DEFECT THIS PAGE CAN LEAST AFFORD. Approval is per-occurrence -
+     * approving "AED 2,000,000" on page 4 must not make the same words on page
+     * 9 speakable - and these two fixtures are exactly that pair: same value,
+     * same surface, different sentence and page. On screen they produce two
+     * buttons whose accessible name is the single word "Approve".
+     *
+     * So a screen reader user tabbing this list hears "Approve, Approve" and
+     * has nothing to choose between them, and the consequence is not cosmetic:
+     * the wrong press makes a figure speakable in a context nobody reviewed.
+     * The existing cases avoid the ambiguity by scoping to the row's sentence,
+     * which is a thing a test can do and a person cannot.
+     *
+     * Each control must name the occurrence it acts on. The visible word stays
+     * "Approve"; what changes is the name in the accessibility tree.
+     */
+    await renderFigures({ figures: [UNAPPROVED, SAME_VALUE_ELSEWHERE] })
+    const buttons = screen.getAllByRole('button', { name: /approve/i })
+    expect(buttons).toHaveLength(2)
+    const names = buttons.map((button) => button.getAttribute('aria-label') ?? button.textContent)
+    expect(new Set(names).size).toBe(2)
+    // Named by the fact that separates them, not by an index a reviewer
+    // cannot see: one is on page 4 and the other on page 9.
+    expect(names.some((name) => name?.includes('4'))).toBe(true)
+    expect(names.some((name) => name?.includes('9'))).toBe(true)
+  })
+
   it('revokes an approval with the action the contract names', async () => {
     const sent = stubFetch()
     await renderFigures({ figures: [APPROVED] })
@@ -230,7 +258,20 @@ describe('chunk scope', () => {
     const save = screen.getByRole('button', { name: /save scope/i })
     expect(save).toBeEnabled()
     await userEvent.click(save)
-    expect(await screen.findByRole('status')).toHaveTextContent(/choose a project/i)
+    // FIXTURE STRENGTHENING, riding with this RED as 671a1ef's did: the GREEN
+    // puts an Astryx Button on this form, and Astryx's Button renders its OWN
+    // role=status live region for its "Loading" announcement - so a bare
+    // `findByRole('status')` goes ambiguous the moment it lands. Astryx's
+    // EmptyState carries one too, which is a second source on this page.
+    //
+    // THE FULL SENTENCE, not /choose a project/: the project selector's empty
+    // option reads "Choose a project", so the short pattern matches two
+    // elements once the query goes by text instead of by role. The claim ends
+    // up stronger either way - THIS sentence is the announced one.
+    const status = (await screen.findByText(/choose a project for this scope/i)).closest(
+      '[role="status"]',
+    )
+    expect(status).not.toBeNull()
     // The claim the old test made, kept: nothing is saved without a project.
     expect(sent).toHaveLength(0)
 
