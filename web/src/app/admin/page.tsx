@@ -28,7 +28,7 @@ export const dynamic = 'force-dynamic'
 export default async function AdminPage() {
   const cookie = (await headers()).get('cookie')
   if (readAdminSession(cookie) === null) {
-    return <AdminShell signedIn={false} configured={adminCodeConfigured()} />
+    return <AdminShell configured={adminCodeConfigured()} />
   }
 
   const request = new Request('https://admin.local/admin', {

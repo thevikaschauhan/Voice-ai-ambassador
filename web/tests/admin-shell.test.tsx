@@ -39,9 +39,11 @@ async function load(specifier: string): Promise<Record<string, never>> {
 
 async function renderShell() {
   const { AdminShell } = (await load('@/components/admin-shell')) as unknown as {
-    AdminShell: (p: { signedIn: boolean; configured: boolean }) => ReactElement
+    AdminShell: (p: { configured: boolean }) => ReactElement
   }
-  return render(<AdminShell signedIn={false} configured />)
+  // `signedIn` is gone: /admin's only call site always passed false, so the
+  // signed-in half was unreachable code carrying a second site nav.
+  return render(<AdminShell configured />)
 }
 
 function stubFetch(status = 204) {

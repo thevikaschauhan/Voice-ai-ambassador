@@ -1,4 +1,8 @@
 import Link from 'next/link'
+import { Banner } from '@astryxdesign/core/Banner'
+import { Card } from '@astryxdesign/core/Card'
+import { Text } from '@astryxdesign/core/Text'
+import { DocumentStatusBadge } from '@/components/admin/status-badge'
 import { AdminAppShell } from '@/components/admin/app-shell'
 import { ChunkScope } from '@/components/admin/chunk-scope'
 import { FigureReview } from '@/components/admin/figure-review'
@@ -34,77 +38,94 @@ export default async function KnowledgeDocumentPage({
   const projectIds = projects.map((project) => project.id)
 
   return (
-    <AdminAppShell title="Document">
-      <Link className="text-[12px] text-ink-400 hover:text-brass-400" href="/admin/knowledge">
-        All documents
-      </Link>
+    /*
+      `heading` is the document's title and `title` stays "Document", for the
+      reason recorded on the lead detail: the top bar says what kind of page
+      this is, the h1 says which record. This page was the SECOND site shipping
+      two level-one headings - my first grep for `<h1` covered
+      components/admin/ only and missed app/admin/, so the count I had was one.
+    */
+    <AdminAppShell
+      title="Document"
+      heading={read.state === 'ok' ? read.data.title : 'Document'}
+    >
+      <Link href="/admin/knowledge">All documents</Link>
 
       {read.state === 'unauthenticated' ? (
-        <p className="border border-ink-700 px-5 py-3.5 text-[13px] text-ink-300">
-          <Link className="underline hover:text-brass-400" href="/admin">
-            Sign in
-          </Link>{' '}
-          to review this document.
-        </p>
+        <Banner
+          status="info"
+          title={
+            <>
+              <Link href="/admin">Sign in</Link> to review this document.
+            </>
+          }
+        />
       ) : read.state === 'unavailable' ? (
-        <p className="border border-warn-500/40 px-5 py-3.5 text-[13px] text-ink-300">
-          {read.reason}
-        </p>
+        <Banner status="error" title={read.reason} />
       ) : (
         <>
-          <header>
-            <h1 className="text-[15px] tracking-[0.1em] text-ink-100">{read.data.title}</h1>
-            <p className="mt-1.5 text-[12px] text-ink-500">
-              {read.data.source_type.toUpperCase()} · revision {read.data.revision} ·{' '}
-              {read.data.status}
-            </p>
-          </header>
+          {/* No h1: the shell renders the document title as the page h1. */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <Text as="span" type="supporting" color="secondary">
+              {read.data.source_type.toUpperCase()} · revision {read.data.revision}
+            </Text>
+            <DocumentStatusBadge status={read.data.status} />
+          </div>
 
           {read.data.orphanFigures.length > 0 ? (
-            <p className="border border-warn-500/40 px-5 py-3.5 text-[13px] leading-relaxed text-ink-300">
-              {read.data.orphanFigures.length} extracted figure
-              {read.data.orphanFigures.length === 1 ? '' : 's'} could not be matched to a
-              section of this document, so they cannot be reviewed here and stay
-              unapproved. That is safe - an unreviewed figure is never spoken - but it
-              means the document and its figures disagree, which is worth reporting.
-            </p>
+            <Banner
+              status="warning"
+              title={`${read.data.orphanFigures.length} extracted figure${
+                read.data.orphanFigures.length === 1 ? '' : 's'
+              } could not be matched to a section`}
+              description={`${read.data.orphanFigures.length} extracted figure
+${
+                read.data.orphanFigures.length === 1 ? '' : 's'
+              } could not be matched to a section of this document, so they cannot be reviewed here and stay unapproved. That is safe - an unreviewed figure is never spoken - but it means the document and its figures disagree, which is worth reporting.`}
+            />
           ) : null}
 
           {read.data.chunks.length === 0 ? (
-            <p className="text-[13px] text-ink-500">
+            <Text as="p" display="block" color="secondary">
               This revision has no chunks. A failed parse leaves the document without any.
-            </p>
+            </Text>
           ) : (
             <ol className="flex flex-col gap-10">
               {read.data.chunks.map((chunk) => (
-                <li key={chunk.id} className="flex flex-col gap-4 border-t border-ink-800 pt-5">
-                  <div>
-                    <p className="text-[11px] tracking-[0.12em] text-ink-500 uppercase">
+                <li key={chunk.id}>
+                  <Card padding={4}>
+                   <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2">
+                    <Text as="h2" type="large" weight="semibold">
                       Chunk {chunk.ordinal + 1}
                       {chunk.heading === null ? '' : ` · ${chunk.heading}`}
                       {chunk.page_start === null ? '' : ` · page ${chunk.page_start}`}
                       {' · '}
                       {SCOPE_LABELS[chunk.retrieval_scope]}
-                    </p>
+                    </Text>
                     {/* The source text, because scoping a chunk you cannot read
                         is not review either. */}
-                    <p className="mt-2 max-w-[80ch] text-[12px] leading-relaxed text-ink-300">
+                    <Text as="p" display="block">
                       {chunk.body}
-                    </p>
+                    </Text>
                   </div>
 
                   <ChunkScope chunk={chunk} projectIds={projectIds} />
 
                   <div className="flex flex-col gap-2">
-                    <h2 className="text-[11px] tracking-[0.12em] text-ink-500 uppercase">
+                    {/* h3, under the chunk's own h2: the outline is
+                        page title > chunk > figures. */}
+                    <Text as="h3" weight="semibold">
                       Figures in this chunk
-                    </h2>
+                    </Text>
                     <FigureReview
                       documentId={read.data.id}
                       figures={chunk.figures}
                       chunkScope={chunk.retrieval_scope}
                     />
                   </div>
+                   </div>
+                  </Card>
                 </li>
               ))}
             </ol>
