@@ -532,6 +532,49 @@ still answers **200**. The page renders from `../data` and the surface
 honestly reports no audio track. So finish the check at the route that actually
 reads the credentials.
 
+### `web`: reading web requests
+
+`next start` prints **no access log**. That was discovered the expensive way: on
+2026-09-07 the question "did the knowledge intake ever submit anything?" had to
+be answered from admin-api's log instead, because web's own log was its ten
+startup lines and nothing since. The tell that this was a gap rather than
+silence was a proxied `GET` sitting in admin-api's log with no counterpart in
+web's - a request that certainly passed through web and left no trace in it. A
+zero from an instrument never seen writing anything is not evidence of absence.
+
+Web now writes two JSON lines of its own, both scoped to the admin surface, and
+they are told apart by `event`:
+
+- `web_request` - a request ARRIVED. Fields: `ts`, `level`, `event`, `method`,
+  `path`. Written by `src/middleware.ts`, matched on `/admin/:path*` and
+  `/api/admin/:path*`. `path` is a pathname and never carries a query string.
+- `admin_proxy` - a proxied call FINISHED. Fields: `ts`, `level`, `event`,
+  `method`, `route`, `status`, `duration_ms`. Written by
+  `src/lib/admin/proxy.ts`, the single chokepoint every `/api/admin/*` route
+  passes through.
+
+So one `/api/admin/*` call produces **two** lines, an arrival and an outcome;
+count them separately by `event`, not by adding them up. A page request produces
+only the arrival line, because a server component cannot see its own status.
+
+Two properties of the `admin_proxy` line are worth knowing before you read one.
+`route` is a **key of the fixed `UPSTREAM_ROUTES` table** (`leads`, `lead`,
+`documents`, `documentUpload`, ...) and not a pathname, so it is drawn from a
+closed vocabulary and cannot carry a record id - which is a stronger guarantee
+than stripping the query off `/api/admin/leads/<uuid>` and hoping the id is
+uninteresting. And `status` is what the caller was **actually answered with**,
+including web's own 401, 403, 502 and 503 refusals where no upstream call
+happened at all: "nothing reached the server" and "everything was refused at the
+door" are different diagnoses, and a success-only log makes them identical.
+
+Neither line carries a header, a cookie, a session id, a body, a query string or
+a client address. That is enforced structurally rather than by convention - the
+emitters in `src/lib/request-log.ts` take positional primitives, so there is no
+field for a caller to slip a cookie into - and asserted in
+`tests/web-request-log.test.ts`, which plants the marker `NOTAREAL` in the
+cookie, the query string and the body of one request and greps every emitted
+line for it.
+
 ### `web`: on `api/session/room`, the reason is the evidence
 
 ```

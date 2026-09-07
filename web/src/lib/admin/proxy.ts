@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { readAdminSession } from '@/lib/admin/session'
+import { logAdminProxy } from '@/lib/request-log'
 import { UpstreamNotConfigured, forward } from '@/lib/admin/upstream'
 import type { ForwardOptions } from '@/lib/admin/upstream'
 
@@ -59,6 +60,24 @@ function sameOrigin(request: Request): boolean {
 }
 
 export async function proxy(
+  request: Request,
+  options: ForwardOptions & { mutation?: boolean },
+): Promise<Response> {
+  const started = Date.now()
+  const response = await answer(request, options)
+  // EVERY path through `answer` is logged, including the two refusals that
+  // never reach the upstream, because the whole point of this line is that an
+  // absence in web's log should mean no request arrived. A success-only
+  // emitter would make "refused at the door" indistinguishable from "never
+  // called", which is the confusion that made web's log useless in the first
+  // place. `options.route` is a key of the fixed upstream table, so the line
+  // cannot carry an id or a query the caller chose.
+  logAdminProxy(request.method, options.route, response.status, Date.now() - started)
+  return response
+}
+
+/** The decision itself, unchanged; `proxy` above only times and records it. */
+async function answer(
   request: Request,
   options: ForwardOptions & { mutation?: boolean },
 ): Promise<Response> {
