@@ -295,6 +295,44 @@ describe('the document list', () => {
     expect(screen.getByText(/draft/i)).toBeInTheDocument()
   })
 
+  it('names every status in the words a reader uses, not the raw enum', async () => {
+    /*
+     * The same defect as the lead list's status cell and the same cause: the
+     * status is rendered straight from the API, and the difference between a
+     * draft, a published document and a failed one is carried by a colour
+     * class. `DocumentStatus` has FIVE values and the colour logic branches on
+     * two of them, so parsing, draft and archived are all styled alike - a
+     * document still being parsed looks exactly like one ready to publish.
+     *
+     * All five asserted together, because the point is that the vocabulary is
+     * covered rather than that one word was fixed.
+     */
+    const all: DocumentRow[] = (
+      ['parsing', 'draft', 'published', 'failed', 'archived'] as const
+    ).map((status, index) => ({
+      ...rows[0],
+      id: `doc-${status}`,
+      title: `Document ${index}`,
+      status,
+      parse_error_code: null,
+    }))
+    await renderDocuments(all)
+    for (const word of ['Parsing', 'Draft', 'Published', 'Failed', 'Archived']) {
+      expect(screen.getByText(word)).toBeInTheDocument()
+    }
+  })
+
+  it('announces an empty library as a titled region, not as loose prose', async () => {
+    /*
+     * As on the lead list: when there is nothing to show, this sentence is the
+     * whole page, and a bare <p> gives a screen reader user navigating by
+     * heading nothing to land on. The words are unchanged.
+     */
+    await renderDocuments([])
+    expect(screen.getByRole('heading', { name: /no documents yet/i })).toBeInTheDocument()
+    expect(screen.getByText(/paste a paragraph or upload a pdf/i)).toBeInTheDocument()
+  })
+
   it('explains a scanned PDF rather than showing a bare failure', async () => {
     await renderDocuments(rows)
     const row = screen.getByText('Scanned flyer').closest('tr') as HTMLElement
