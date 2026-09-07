@@ -452,6 +452,150 @@ describe('the shell footer', () => {
   })
 })
 
+/**
+ * The overview a reviewer can start work from (finding G3).
+ *
+ * G3: "six bare label+number cards in a 3x2 grid and nothing else; cards do
+ * not link anywhere; no 'needs attention' list; no recent activity; empty page
+ * below the fold." A count nobody can click is a fact with no next step - it
+ * tells a reviewer there are four unreviewed leads and leaves them to find the
+ * list, filter it themselves and work out which four.
+ *
+ * TWO PANELS, NOT THREE, AND THAT IS A RULING RATHER THAN A SHORTCUT. The card
+ * asks Needs attention for unreviewed leads, documents awaiting scope AND
+ * figures awaiting approval, "all from the existing list reads; no new API
+ * route". The first two are derivable - `status === 'unreviewed'` and
+ * `status === 'draft'`. The third is not: `list_documents` selects no figure
+ * or chunk counts and there is NO route that lists figures across documents,
+ * so the only ways to get it are an N+1 of detail reads on this render or a
+ * new aggregate route, and the card forbids the second. god ruled the two
+ * honest panels ship and a `figures_pending` count becomes an API card. The
+ * structural case below pins the count at two on purpose: an empty "figures
+ * awaiting approval" panel, empty because nobody asked the database, reads as
+ * "nothing needs approval" - a false statement on a reviewer's screen, and
+ * worse than no panel.
+ */
+describe('the overview needs-attention panel', () => {
+  async function renderOverview(leads: LeadSummaryRow[], documents: DocumentRow[]) {
+    const { OverviewCards } = (await load(
+      '@/components/admin/overview-cards',
+    )) as unknown as {
+      OverviewCards: (p: {
+        leads: LeadSummaryRow[]
+        documents: DocumentRow[]
+      }) => ReactElement
+    }
+    return render(<OverviewCards leads={leads} documents={documents} />)
+  }
+
+  function leadsNeeding(count: number): LeadSummaryRow[] {
+    return Array.from({ length: count }, (_unused, index) => ({
+      ...LEAD,
+      id: `lead-${index}`,
+      session_id: `sess-${index}`,
+      status: 'unreviewed' as const,
+      project_ids: [`project-${index}`],
+    }))
+  }
+
+  it('links every count card to the list it counts', async () => {
+    /*
+     * The point of the number is the rows behind it. "Unreviewed 4" that a
+     * reviewer cannot click leaves them to open Leads, find the filter and
+     * reconstruct the same four by hand.
+     */
+    await renderOverview(
+      [LEAD, { ...LEAD, id: 'l2', status: 'qualified' }],
+      [DOC],
+    )
+    for (const [label, href] of [
+      ['Leads', '/admin/leads'],
+      ['Unreviewed', '/admin/leads?status=unreviewed'],
+      ['Qualified', '/admin/leads?status=qualified'],
+      ['Rejected', '/admin/leads?status=rejected'],
+      ['Documents', '/admin/knowledge'],
+    ] as const) {
+      const card = screen.getByText(label).closest('[data-count-card]')
+      expect(card, label).not.toBeNull()
+      expect(within(card as HTMLElement).getByRole('link'), label).toHaveAttribute(
+        'href',
+        href,
+      )
+    }
+  })
+
+  it('lists the unreviewed leads themselves, each one openable', async () => {
+    await renderOverview(leadsNeeding(3), [])
+    const panel = screen.getByRole('region', { name: /unreviewed leads/i })
+    const links = within(panel).getAllByRole('link')
+    expect(links).toHaveLength(3)
+    expect(links[0]).toHaveAttribute('href', '/admin/leads/lead-0')
+  })
+
+  it('stops at five and says how many it is not showing', async () => {
+    /*
+     * A panel is a starting point, not a second lead list. Eight unreviewed
+     * leads listed in full would push the rest of the page below the fold -
+     * which is the other half of what G3 complains about.
+     */
+    await renderOverview(leadsNeeding(8), [])
+    const panel = screen.getByRole('region', { name: /unreviewed leads/i })
+    expect(within(panel).getAllByRole('link')).toHaveLength(5)
+    expect(within(panel).getByText(/3 more/i)).toBeInTheDocument()
+  })
+
+  it('does not say "and more" when it is showing all of them', async () => {
+    await renderOverview(leadsNeeding(2), [])
+    const panel = screen.getByRole('region', { name: /unreviewed leads/i })
+    expect(within(panel).getAllByRole('link')).toHaveLength(2)
+    expect(within(panel).queryByText(/more/i)).toBeNull()
+  })
+
+  it('lists the documents waiting to be scoped', async () => {
+    await renderOverview(
+      [],
+      [DOC, { ...DOC, id: 'd2', status: 'published', published_at: '2026-09-07T06:00:00Z' }],
+    )
+    const panel = screen.getByRole('region', { name: /awaiting scope/i })
+    const links = within(panel).getAllByRole('link')
+    // Only the draft: a published document needs nothing from a reviewer.
+    expect(links).toHaveLength(1)
+    expect(links[0]).toHaveAttribute('href', '/admin/knowledge/doc-1')
+  })
+
+  it('says so in words when a panel has nothing in it', async () => {
+    /*
+     * An empty panel with no sentence is indistinguishable from a panel whose
+     * read failed - the same reason the count cards render zeroes rather than
+     * disappearing.
+     */
+    await renderOverview([{ ...LEAD, status: 'qualified' }], [])
+    expect(
+      within(screen.getByRole('region', { name: /unreviewed leads/i })).getByText(
+        /nothing is waiting/i,
+      ),
+    ).toBeInTheDocument()
+    expect(
+      within(screen.getByRole('region', { name: /awaiting scope/i })).getByText(
+        /every document has been scoped/i,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('shows exactly the two panels it can honestly populate', async () => {
+    /*
+     * See the note above this describe block. A third panel for figures
+     * awaiting approval would be empty because no list read carries figure
+     * state, and a reviewer would read that emptiness as "nothing needs
+     * approval". Pinned so the panel cannot be added without the data.
+     */
+    await renderOverview(leadsNeeding(1), [DOC])
+    const panels = screen.getAllByRole('region')
+    expect(panels).toHaveLength(2)
+    expect(screen.queryByText(/figures? awaiting approval/i)).toBeNull()
+  })
+})
+
 describe('the overview counts', () => {
   async function renderCards(leads: LeadSummaryRow[], documents: DocumentRow[]) {
     const { OverviewCards } = (await load(
