@@ -30,6 +30,8 @@ from typing import Any
 
 import asyncpg
 
+from ambassador.schemas import KnowledgePublicationRequest
+
 from .migrations import assert_schema_current
 from .session_mode import assert_session_mode
 
@@ -687,6 +689,138 @@ class Repository:
 
     # -- knowledge --------------------------------------------------------
 
+    async def get_document_review(self, document_id: str) -> dict[str, Any]:
+        from .document_review import read_review
+
+        async with self._pool.acquire() as connection:
+            async with connection.transaction(isolation="repeatable_read"):
+                return await read_review(connection, document_id)
+
+    async def publish_document(
+        self, document_id: str, request: KnowledgePublicationRequest
+    ) -> dict[str, Any]:
+        """Lock, validate, append every decision and publish, or change nothing."""
+        import json
+
+        from ambassador.document_review import publication_scopes
+        from ambassador.inventory import load_inventory
+        from ambassador.knowledge import chunk_text, load_limits
+        from ambassador.schemas import KnowledgeReviewChunk
+        from collections import Counter
+        from decimal import Decimal
+        from .ingestion import figures_in
+        from .document_review import read_review
+
+        payload = request.model_dump(mode="json")
+        async with self._pool.acquire() as connection:
+            async with connection.transaction():
+                # Every review writer takes this parent lock before child writes.
+                await connection.fetch(
+                    "SELECT revision FROM knowledge_documents WHERE id = $1 ORDER BY revision FOR UPDATE",
+                    document_id,
+                )
+                previous = await connection.fetchrow(
+                    "SELECT * FROM knowledge_document_publications WHERE request_id = $1",
+                    request.request_id,
+                )
+                if previous is not None:
+                    if (
+                        str(previous["document_id"]) != document_id
+                        or json.loads(previous["request"]) != payload
+                    ):
+                        raise ValueError("This publication request was already used.")
+                    return json.loads(previous["result"])
+                document = await read_review(connection, document_id)
+                if (
+                    document["revision"] != request.expected_revision
+                    or document["review_token"] != request.expected_review_token
+                ):
+                    raise ConcurrentPublication("document review has changed")
+                if (
+                    document["status"] not in ("draft", "published")
+                    or document["parse_error_code"] is not None
+                ):
+                    raise ValueError(
+                        "Only a successfully extracted draft can be published."
+                    )
+                if not request.confirmed:
+                    raise ValueError("Confirm that you reviewed the included content.")
+                # An interrupted ingestion can leave a draft with only some of
+                # its chunks. Such a partial document cannot be published.
+                expected = chunk_text(document["extracted_text"], load_limits())
+                chunks = [
+                    KnowledgeReviewChunk.model_validate(c) for c in document["chunks"]
+                ]
+                if [(c.ordinal, c.heading, c.body) for c in chunks] != [
+                    (c.ordinal, c.heading, c.body) for c in expected
+                ]:
+                    raise ValueError(
+                        "Extraction is incomplete. Re-upload the document."
+                    )
+                # Parsing writes occurrences after each chunk. Refuse a draft
+                # observed between those writes rather than publishing a number
+                # for which no withholding occurrence has been saved yet.
+                for chunk in chunks:
+                    expected_figures = Counter(
+                        (Decimal(f.value), f.kind, f.surface, f.source_sentence)
+                        for f in figures_in(chunk.body)
+                    )
+                    stored_figures = Counter(
+                        (f["value"], f["kind"], f["surface"], f["source_sentence"])
+                        for f in document["figures"]
+                        if f["chunk_id"] == chunk.id
+                    )
+                    if expected_figures != stored_figures:
+                        raise ValueError(
+                            "Figure extraction is incomplete. Re-upload the document."
+                        )
+                scopes = publication_scopes(
+                    chunks, request.selections, {p.id for p in load_inventory()}
+                )
+                for chunk, scope in zip(document["chunks"], scopes, strict=True):
+                    review_id = await connection.fetchval(
+                        "INSERT INTO knowledge_chunk_reviews (chunk_id, action, project_id, actor_kind) VALUES ($1, $2, $3, 'admin') RETURNING id",
+                        chunk["id"],
+                        scope.retrieval_scope,
+                        scope.project_id,
+                    )
+                    await connection.execute(
+                        "UPDATE knowledge_chunks SET retrieval_scope=$2, project_id=$3, scope_review_id=$4, prompt_body=$5 WHERE id=$1",
+                        chunk["id"],
+                        scope.retrieval_scope,
+                        scope.project_id,
+                        review_id,
+                        chunk["body"]
+                        if scope.retrieval_scope
+                        in ("general_knowledge", "project_knowledge")
+                        else None,
+                    )
+                # Older revisions stop retrieving in the same transaction.
+                await connection.execute(
+                    "UPDATE knowledge_documents SET status='archived', updated_at=now() WHERE id=$1 AND revision<>$2 AND status='published'",
+                    document_id,
+                    request.expected_revision,
+                )
+                await connection.execute(
+                    "UPDATE knowledge_documents SET status='published', published_at=now(), updated_at=now() WHERE id=$1 AND revision=$2",
+                    document_id,
+                    request.expected_revision,
+                )
+                result = {
+                    "status": "published",
+                    "revision": request.expected_revision,
+                    "request_id": str(request.request_id),
+                }
+                await connection.execute(
+                    "INSERT INTO knowledge_document_publications (request_id, document_id, document_revision, request, result, actor_kind) VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,'admin')",
+                    request.request_id,
+                    document_id,
+                    request.expected_revision,
+                    json.dumps(payload),
+                    json.dumps(result),
+                )
+                return result
+
     async def add_document(
         self,
         *,
@@ -813,6 +947,34 @@ class Repository:
         """
         async with self._pool.acquire() as connection:
             async with connection.transaction():
+                await connection.fetch(
+                    "SELECT d.revision FROM knowledge_documents d JOIN knowledge_chunks c ON c.document_id=d.id WHERE c.id=$1 ORDER BY d.revision FOR UPDATE OF d",
+                    chunk_id,
+                )
+                from ambassador.knowledge import review_scope
+                from ambassador.inventory import load_inventory
+
+                current = await connection.fetchrow(
+                    "SELECT * FROM knowledge_chunks WHERE id=$1", chunk_id
+                )
+                if current is None:
+                    raise LookupError("no such chunk")
+                if current["retrieval_scope"] == "inventory_governed" and action in (
+                    "general_knowledge",
+                    "project_knowledge",
+                ):
+                    raise ValueError("inventory content remains excluded")
+                if current["retrieval_scope"] == "inventory_governed":
+                    action = "inventory_governed"
+                settled = review_scope(
+                    action,
+                    project_id=project_id,
+                    inventory_project_ids={p.id for p in load_inventory()},
+                    conflicts_with_inventory=current["conflict_code"] is not None,
+                )
+                if settled.conflict_code == "unknown_project":
+                    raise ValueError("choose an inventory project")
+                action, project_id = settled.retrieval_scope, settled.project_id
                 review_id = await connection.fetchval(
                     """
                     INSERT INTO knowledge_chunk_reviews (
@@ -856,6 +1018,10 @@ class Repository:
         revocation clears it rather than deleting the history."""
         async with self._pool.acquire() as connection:
             async with connection.transaction():
+                await connection.fetch(
+                    "SELECT d.revision FROM knowledge_documents d JOIN knowledge_figures c ON c.document_id=d.id WHERE c.id=$1 ORDER BY d.revision FOR UPDATE OF d",
+                    figure_id,
+                )
                 review_id = await connection.fetchval(
                     """
                     INSERT INTO knowledge_figure_reviews (
@@ -957,3 +1123,7 @@ class NoSuchLead(LookupError):
 
 class ConcurrentDecision(RuntimeError):
     """A second admin decided while this one was in flight."""
+
+
+class ConcurrentPublication(RuntimeError):
+    """The source or its review changed after the page was read."""

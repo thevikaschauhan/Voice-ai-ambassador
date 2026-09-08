@@ -64,13 +64,18 @@ from fastapi import (
 from pydantic import BaseModel, Field
 
 from ambassador.inventory import load_inventory
-from ambassador.schemas import Language
+from ambassador.schemas import Language, KnowledgePublicationRequest
 
 from . import field_paths
 from .crypto import EnvelopeError, Sealer
 from .events import EventLog
 from .ingestion import ParseFailed, parse_document, store_document
-from .repository import ConcurrentDecision, NoSuchLead, Repository
+from .repository import (
+    ConcurrentDecision,
+    ConcurrentPublication,
+    NoSuchLead,
+    Repository,
+)
 
 _TOKEN_ENV: Final = "ADMIN_API_TOKEN"
 _DSN_ENV: Final = "DATABASE_URL"
@@ -650,15 +655,34 @@ async def get_document(document_id: str) -> dict[str, Any]:
     IS the unapproved ones - and docs/10- is explicit that approving a value
     without its sentence and page is not review.
     """
-    repository = repository_of(app)
     try:
-        document = await repository.get_document(document_id)
+        return await repository_of(app).get_document_review(document_id)
     except LookupError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such document") from None
-    revision = document["revision"]
-    document["chunks"] = await repository.get_chunks(document_id, revision=revision)
-    document["figures"] = await repository.get_figures(document_id, revision=revision)
-    return document
+
+
+@app.post(
+    "/v1/knowledge/documents/{document_id}/publish",
+    dependencies=[Depends(require_bearer)],
+)
+async def publish_document(
+    document_id: str, body: KnowledgePublicationRequest
+) -> dict[str, Any]:
+    try:
+        return await repository_of(app).publish_document(document_id, body)
+    except ConcurrentPublication:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "document review has changed"
+        ) from None
+    except LookupError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such document") from None
+    except ValueError:
+        # Keep validation details inside the API vocabulary. Exception text
+        # must not cross this service boundary because future validators or
+        # database drivers can include implementation details.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "publication was refused"
+        ) from None
 
 
 class ChunkReviewRequest(BaseModel):
