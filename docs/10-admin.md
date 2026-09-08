@@ -235,14 +235,22 @@ At the approved scale of 10-15 documents, ingestion is synchronous and bounded:
    The latter requires a project id at publish time. Structured prices, sizes,
    payment plans, handover, status, unit types and the amenities enumeration
    are `inventory_governed`; conflicts are flagged and remain admin-only,
-   while an unknown project is never publishable. Structured facts change only
-   through the existing `data/inventory.json` review and deploy.
+   while an unknown project is never publishable. Scope changes are
+   append-only and attributed. Structured facts change only through the
+   existing `data/inventory.json` review and deploy.
 9. Publishing makes reviewed general/project chunks searchable. The API locks
    and validates the revision, applies all selected passage reviews and marks
    the document published in one transaction. A stable request id makes a
    retry idempotent. When project context is known, project chunks rank first;
    general knowledge is always eligible. Archiving removes chunks from new
    retrievals without erasing the revision used by historic turns.
+   **After publication it is the chunk-review history, not the publication row,
+   that says what a document exposes.** The row is a gate and not a
+   description: retrieval requires the document to be `published` at the
+   chunk's own revision, and then decides chunk by chunk, on the scope and
+   prompt body that the passage reviews wrote. So a published document can
+   expose most of itself, a little of itself or none of itself, and the
+   publication row reads the same in all three cases.
 
 Postgres full-text search uses the `simple` configuration so English stemming
 does not corrupt Arabic, Hindi or mixed-language terms. It searches published
@@ -493,7 +501,7 @@ surface is deliberately small:
 |---|---|
 | `/v1/leads` | List/filter leads; fetch detail with turns, brief, summary and score breakdown; retry failed analysis |
 | `/v1/leads/{id}/decisions` | Append qualify or reject decisions with optimistic revision checking |
-| `/v1/knowledge/documents` | Create from paste/upload; list, each row carrying `figures_pending` (figures awaiting approval on the current revision) so the overview needs no per-document read; fetch parse result, chunks and extracted figures; publish, revise or archive |
+| `/v1/knowledge/documents` | Create from paste/upload; list, each row carrying `figures_pending` (figures awaiting approval on the current revision) so the overview needs no per-document read; fetch parse result, chunks and extracted figures; publish. Publish is the only write here with a route of its own: archiving happens inside the publish transaction, which archives the document's other published revisions before marking the target one published, and a new revision comes from the create/upload route above rather than from a `revise` call |
 | `/v1/knowledge/documents/{id}/publish` | Validate one complete revision manifest, apply its passage reviews atomically, publish the revision and return the same result for a retried request id |
 | `/v1/knowledge/chunks/{id}/reviews` | Append a general-knowledge, bound project-knowledge, inventory-governed or reset-to-admin-only scope review; project scope requires an inventory id |
 | `/v1/knowledge/figures/{id}/reviews` | Append approval or revocation |
