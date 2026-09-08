@@ -9,7 +9,16 @@ a feature.
 **One ask.** The policy owns whether a request is still owed, not the model. A
 model that can ask twice will ask twice, and a buyer who has already said no is
 the last person to ask again. `owes_request()` goes false the moment the ask is
-spoken, whatever comes back.
+spoken, whatever comes back - and it is the SINGLE flag both triggers consult,
+which is what makes "one ask per call whichever path fires first" structural
+rather than a rule two call sites have to remember.
+
+**Two triggers, one ask.** `on_interest` fires after the first high-intent buyer
+turn and `on_farewell` intercepts the first goodbye if nothing has yet. The
+second exists because the first cannot cover every call; the FIRST exists
+because the second could not cover the calls that matter. A buyer who hangs up
+never says goodbye, and the human's 05:12Z call ended `buyer_left` with
+`contact_ask` true and `contact_line_spoken` zero.
 
 **The reply is the only source.** A number may only be captured from the reply
 to the ask. Reaching back into an earlier property discussion for something
@@ -123,6 +132,167 @@ _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 _MIN_PHONE_DIGITS: Final = 9
 
 
+# The high-intent signals, and the closed set the stage names are built from.
+# A signal the detector can return and the stage cannot name is impossible
+# because both read this.
+INTEREST_SIGNALS: Final[frozenset[str]] = frozenset(
+    {"budget", "timeline", "callback", "viewing"}
+)
+
+# ENGLISH ONLY, and unlike `_NOT_A_NAME` this one costs nothing. `enabled()`
+# gates the ask on authored copy and only `en` has any, so there is no call
+# where a signal this detector cannot read would have been followed by an ask.
+# When an Arabic or Hindi ask is native-reviewed, these lists need the same
+# reviewer - not a translation.
+#
+# A BUDGET IS NOT DETECTED HERE. `budget.find_budget` already does it, under
+# ADR-011, with a reviewed currency vocabulary and clause analysis this could
+# not honestly reproduce; the adapter reads the result off the confirmation
+# step it already produced and passes "budget" to `note_interest`. A second
+# list is a second architecture for the same job, and the one that goes stale
+# is the one nobody is looking at.
+
+# Whoever is doing the wanting. A time expression alone is not a timeline: "Is
+# the handover next month?" is a question about the building, and without this
+# half every handover question in the call would spend the one ask.
+_FIRST_PERSON: Final[frozenset[str]] = frozenset(
+    {"i", "im", "id", "ive", "ill", "me", "my", "mine", "we", "us", "our", "ours"}
+)
+
+_MONTHS: Final[tuple[str, ...]] = (
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+)
+
+# When they intend to act. Deliberately concrete: a bare "soon" or "later" is
+# not a timeline anybody could follow up on.
+_TIME_PHRASES: Final[tuple[str, ...]] = (
+    "next week",
+    "next month",
+    "next year",
+    "this week",
+    "this month",
+    "this year",
+    "end of the year",
+    "end of this year",
+    "as soon as possible",
+    "right away",
+    "straight away",
+    "immediately",
+    "asap",
+    "today",
+    "tomorrow",
+    "this weekend",
+    "q1",
+    "q2",
+    "q3",
+    "q4",
+    # "by December" is a deadline. A BARE MONTH IS NOT: "the December handover"
+    # is a fact about the building, and "tell me about the December handover"
+    # would otherwise be a timeline because it contains "me".
+    *(f"by {month}" for month in _MONTHS),
+)
+
+# Asking for one. These are first-person by construction, which is why they
+# need no pronoun test of their own.
+#
+# A REQUEST TO BE TRANSFERRED IS NOT HERE, and the omission is the point. A
+# deterministic line REPLACES the model's turn, so triggering on "put me
+# through to someone" would answer a request for a person with a request for a
+# phone number and leave `escalate_to_human` uncalled for that turn. A missed
+# ask is the status quo; an obstructed hand-over is a new failure (docs/04- on
+# what making a buyer repeat themselves costs). A callback request stays,
+# because the ask is a direct answer to it.
+_CALLBACK_PHRASES: Final[tuple[str, ...]] = (
+    "call me",
+    "call me back",
+    "give me a call",
+    "ring me",
+    "get back to me",
+    "contact me",
+    "reach me on",
+    "follow up with me",
+)
+
+# Wanting something, and the something being a visit. Both halves are required
+# for the same reason the timeline needs a pronoun: "I can see the payment
+# plan" is not a request to visit anything.
+_WANT_PHRASES: Final[tuple[str, ...]] = (
+    "i want",
+    "i would like",
+    "i'd like",
+    "id like",
+    "we want",
+    "we would like",
+    "we'd like",
+    "can i",
+    "could i",
+    "can we",
+    "could we",
+    "let me",
+    "i'd love",
+    "book",
+    "arrange",
+    "schedule",
+)
+
+_VISIT_PHRASES: Final[tuple[str, ...]] = (
+    "viewing",
+    "site visit",
+    "visit",
+    "see the",
+    "see it",
+    "view the",
+    "look around",
+    "tour",
+    "come by",
+    "come and see",
+)
+
+
+def interest_signal(text: str) -> str | None:
+    """Which high-intent signal this buyer turn carries, if any.
+
+    Pure, deterministic and cheap: it runs on every buyer turn, so it does no
+    model call and no I/O. Returns a member of `INTEREST_SIGNALS` or None.
+
+    ORDERED, and the order is a judgement. An explicit request - a callback, a
+    viewing - beats an inferred timeline, because the explicit one says what the
+    buyer wants done and the stage on `contact_line_spoken` is how an operator
+    finds out which trigger is worth keeping. "Can you call me back tomorrow?"
+    is a callback, not a timeline.
+
+    `budget` is never returned here; see the note above `_FIRST_PERSON`.
+    """
+    lowered = text.lower()
+    words = {word for word in _WORD.findall(lowered)}
+
+    if _says_any(lowered, _CALLBACK_PHRASES):
+        return "callback"
+    if _says_any(lowered, _WANT_PHRASES) and _says_any(lowered, _VISIT_PHRASES):
+        return "viewing"
+    if words & _FIRST_PERSON and _says_any(lowered, _TIME_PHRASES):
+        return "timeline"
+    return None
+
+
+def _says_any(lowered: str, phrases: tuple[str, ...]) -> bool:
+    """Whole words only, so "visit" does not match inside another word."""
+    return any(
+        re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", lowered) for phrase in phrases
+    )
+
+
 class _Log(Protocol):
     """Just enough of `adapter.events.EventLog` to emit, without importing it."""
 
@@ -171,9 +341,16 @@ def load_contact_copy(path: Path | None = None) -> ContactCopy:
 
 @dataclass(frozen=True)
 class ContactStep:
-    """What the policy wants said, if anything."""
+    """What the policy wants said, and which trigger asked for it.
+
+    `stage` travels with the line rather than beside it: it reaches the event
+    stream as `contact_line_spoken`'s stage, and a caller that had to choose
+    the label itself is a caller that can label the farewell ask as a budget
+    one.
+    """
 
     speaks: str
+    stage: str
 
 
 @dataclass(frozen=True)
@@ -202,6 +379,7 @@ class ContactPolicy:
         self._language = language
         self._log = log
         self._asked = False
+        self._interest: str | None = None
         self._pending_phone: str | None = None
         self._pending_name: str | None = None
         self._state = ContactCapture(status="not_asked")
@@ -228,18 +406,60 @@ class ContactPolicy:
         """One ask, and only where there is a line to say it in."""
         return not self._asked and self._copy.enabled(self._language)
 
+    def note_interest(self, signal: str, turn_index: int) -> None:
+        """Remember the FIRST high-intent turn. Idempotent, and not an ask.
+
+        Separate from `on_interest` because the two happen at different points
+        in the turn: interest has to be recorded even when a deterministic
+        policy takes the turn - a stated budget ALWAYS opens a currency
+        confirmation - or the signal that matters most would never fire.
+
+        The first signal is the one kept. The stage answers "what made this
+        buyer worth asking", and that is where interest first appeared; a later
+        callback does not rewrite the budget that opened the door.
+        """
+        if signal not in INTEREST_SIGNALS:
+            raise ValueError(
+                f"{signal!r} is not an interest signal. A stage nothing can "
+                f"read is worse than no stage; the set is {sorted(INTEREST_SIGNALS)}."
+            )
+        if self._interest is None and self.owes_request():
+            self._interest = signal
+
+    def on_interest(self, turn_index: int) -> ContactStep | None:
+        """The ask, once a high-intent turn has been seen.
+
+        None until `note_interest` has recorded one, and None forever after the
+        ask is spent - the same `owes_request()` the farewell path consults, so
+        the two cannot both ask.
+        """
+        if self._interest is None:
+            return None
+        return self._ask(turn_index, stage=f"ask_after_{self._interest}")
+
     def on_farewell(self, turn_index: int) -> ContactStep | None:
         """The first goodbye is intercepted for the ask; a second is honoured.
 
         Returning None means "let the farewell happen", which is what a second
-        goodbye, a disabled language and an already-settled contact all get.
+        goodbye, an ask already spent after interest, a disabled language and an
+        already-settled contact all get.
+        """
+        return self._ask(turn_index, stage="ask")
+
+    def _ask(self, turn_index: int, *, stage: str) -> ContactStep | None:
+        """The one ask, whichever trigger reached it.
+
+        Both entry points come through here so the once-only rule, the recorded
+        turn index and the `contact_asked` event are one piece of code rather
+        than two that have to agree. Only the stage differs, which is what
+        `stage` is for.
         """
         if not self.owes_request():
             return None
         self._asked = True
         self._state = self._state.model_copy(update={"asked_turn_index": turn_index})
         self._emit("contact_asked", turn=turn_index)
-        return ContactStep(speaks=self._copy.ask(self._language))
+        return ContactStep(speaks=self._copy.ask(self._language), stage=stage)
 
     def observe_reply(self, text: str, turn_index: int) -> ContactOutcome:
         """The one reply eligible for extraction.

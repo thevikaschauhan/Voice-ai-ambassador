@@ -617,3 +617,71 @@ async def test_a_hang_up_after_the_ask_leaves_it_asked_and_owed_no_more() -> Non
 
     await log.aclose()
     assert '"stage": "ask_after_viewing"' in buffer.getvalue()
+
+
+async def test_settling_an_interest_ask_does_not_end_the_call() -> None:
+    """FOUND IN A REALISTIC RUN, not by the suites, and it is the worst bug here.
+
+    Once the ask is spoken the next utterance is the reply, and a reply with no
+    number in it settles as `declined` - correct, and the point of the one-ask
+    rule. But the settled branch then spoke the thanks AND the authored
+    farewell and armed the close, because until now the only way to reach it
+    was through a goodbye the buyer had already said. Mid-call it read:
+
+        BUYER : Great, what floor plans are available?
+        AGENT : Thank you. Thank you for your time today ... Goodbye.
+
+    The ambassador hung up on a buyer who had just asked a question. Ending a
+    call because somebody declined to leave a number is worse than never
+    asking, which is the whole thing this card is fixing.
+    """
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    agent, log, buffer = _agent(replies=6)
+
+    assert ASK_MARKER in await _say(agent, "Can you call me back tomorrow?")
+
+    carrying_on = await _say(agent, "Great, what floor plans are available?")
+    assert agent._contact.state.status == "declined", (
+        "the ask is spent either way - a reply with nothing in it is an answer"
+    )
+    assert agent._closing_turn is None, "the call must not end on a declined ask"
+    assert agent._farewell_line.strip() not in carrying_on, carrying_on
+
+    # And the goodbye still works afterwards, on the buyer's own timing.
+    closing = await _say(agent, "Thanks, goodbye.")
+    assert agent._closing_turn is not None
+    assert closing.strip().endswith(agent._farewell_line.strip()), closing
+
+    await log.aclose()
+    assert buffer.getvalue().count('"event": "contact_asked"') == 1
+
+
+async def test_a_number_given_mid_call_is_read_back_without_ending_the_call() -> None:
+    """The capture path on the new trigger, all the way through.
+
+    The read-back and the confirmation are unchanged - a misheard digit is
+    still worse than no number - but the call carries on afterwards, because
+    the buyer is still on it.
+    """
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    agent, log, buffer = _agent(replies=6)
+
+    assert ASK_MARKER in await _say(agent, "I would like to see the apartment.")
+
+    read_back = await _say(agent, f"It's {NAME}, my number is {NUMBER}.")
+    assert NUMBER in read_back.replace(" ", ""), read_back
+    assert agent._contact.state.status == "unconfirmed"
+
+    await _say(agent, "Yes, that's right.")
+    state = agent._contact.state
+    assert state.status == "captured"
+    assert state.phone is not None and NUMBER in state.phone.replace(" ", "")
+    assert state.name == NAME
+    assert agent._closing_turn is None, (
+        "handing over a number mid-call is not a reason to end the call"
+    )
+
+    await log.aclose()
+    assert '"status": "captured"' in buffer.getvalue()
