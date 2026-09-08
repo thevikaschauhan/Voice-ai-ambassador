@@ -102,6 +102,22 @@ phrases:
   # VERIFY: native-authored Hindi closing phrases. Same rule, same reason.
   hi: []
 
+  # The seven switch-target languages. Declared and empty for the same reason
+  # as ar and hi, and declared at all because the language can now change
+  # MID-CALL: an absent key and an empty list behave identically to `detects()`
+  # (both read as "no phrases"), but only the declared slot tells a reviewer
+  # that the language exists and is waiting for its author. Without these the
+  # gap was invisible, and a call that switched into one of these codes could
+  # not be ended by the buyer at all.
+  # VERIFY: native-authored closing phrases, one language per line below.
+  ru: []
+  fr: []
+  es: []
+  pt: []
+  zh: []
+  ja: []
+  de: []
+
 courtesies:
   en:
     - "thanks"
@@ -194,6 +210,15 @@ courtesies:
     - "mm"
   ar: []
   hi: []
+  # Declared with `phrases` above and empty for the same reason. A courtesy
+  # list only matters where there are phrases to surround.
+  ru: []
+  fr: []
+  es: []
+  pt: []
+  zh: []
+  ja: []
+  de: []
 
 speech:
   en: >
