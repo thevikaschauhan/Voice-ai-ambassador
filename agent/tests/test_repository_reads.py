@@ -486,9 +486,9 @@ async def test_republishing_stops_the_superseded_revision_retrieving(
         published["document_id"],
         text="# Amenities\n\nThe rooftop terrace is open to residents.",
     )
-    assert (
-        await repository.get_document_review(published["document_id"])
-    )["status"] == "published"
+    assert (await repository.get_document_review(published["document_id"]))[
+        "status"
+    ] == "published"
 
     rows = await repository.search_chunks(["pool"], project_ids=[], limit=4)
     assert rows == [], "a superseded revision must stop retrieving"
