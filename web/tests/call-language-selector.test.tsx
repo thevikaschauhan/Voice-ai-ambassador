@@ -68,7 +68,11 @@ describe('the language selector', () => {
       { language: 'hi', ready: false },
     ])
 
-    expect(scope.getByText(/Arabic and Hindi are unavailable/)).toBeInTheDocument()
+    // Raw textContent, not toHaveTextContent: that normalises whitespace, so it
+    // would pass a caption assembled with a doubled or missing space.
+    expect(scope.getByText(/unavailable/).textContent).toContain(
+      'Arabic and Hindi are unavailable because they have no native-authored disclosure copy',
+    )
   })
 
   it('drops a language from the caption once its disclosure is authored', () => {
@@ -81,7 +85,9 @@ describe('the language selector', () => {
     ])
 
     const caption = scope.getByText(/unavailable/)
-    expect(caption).toHaveTextContent(/Hindi is unavailable/)
+    expect(caption.textContent).toContain(
+      'Hindi is unavailable because it has no native-authored disclosure copy',
+    )
     expect(caption).not.toHaveTextContent(/Arabic/)
     expect(scope.getByRole('button', { name: 'Arabic' })).toBeEnabled()
   })
