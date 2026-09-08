@@ -1,5 +1,7 @@
 """Exercise final-transcript switching through the actual agent and guard."""
 
+import json
+from inspect import signature
 from io import StringIO
 
 import pytest
@@ -11,6 +13,7 @@ from adapter.events import EventLog  # noqa: E402
 from adapter.stt_factory import build_stt  # noqa: E402
 from ambassador.ambassadors import load_ambassadors  # noqa: E402
 from ambassador.contact import ContactPolicy, load_contact_copy  # noqa: E402
+from ambassador.language_switch import choose_language  # noqa: E402
 from ambassador.prompts import LANGUAGE_NAMES  # noqa: E402
 from test_agent import make_settings  # noqa: E402
 
@@ -22,6 +25,18 @@ def make_agent(**settings):
         ),
         log=EventLog("language-test", stream=StringIO()),
     )
+
+
+# One turn can no longer switch: the rule needs a challenger to lead for more
+# than one. Taken from the rule's own default so these tests cannot drift into
+# asserting a switch that never happens.
+REQUIRED_TURNS: int = signature(choose_language).parameters["required_turns"].default
+
+
+async def switch_over(agent, language, text="A sufficiently long recognised utterance"):
+    """Drive the whole streak the rule requires before it will act."""
+    for _ in range(REQUIRED_TURNS):
+        await final_turn(agent, language, text)
 
 
 async def final_turn(agent, language, text="A sufficiently long recognised utterance"):
@@ -58,7 +73,7 @@ async def test_final_speech_changes_prompt_and_guard_without_changing_identity(
             item for item in agent.chat_ctx.items if item.role != "system"
         ]
         brief = agent.brief_extractor
-        await final_turn(agent, "en")
+        await switch_over(agent, "en")
         assert agent._guard.language == "en"
         assert f"Reply in {LANGUAGE_NAMES['en']}" in agent.instructions
         assert f"Your name is {load_ambassadors().name_for(language)}" in (
@@ -81,7 +96,7 @@ async def test_final_speech_changes_prompt_and_guard_without_changing_identity(
         # And it does NOT switch back: the opening language has no authored
         # closing phrases, so going there would leave a call the buyer cannot
         # end. Refused, and the refusal is on the stream.
-        await final_turn(agent, language, "Ein ausreichend langer Satz hier bitte")
+        await switch_over(agent, language, "Ein ausreichend langer Satz hier bitte")
         assert agent._settings.language == "en"
     finally:
         await agent.brief_extractor.aclose()
@@ -99,23 +114,43 @@ async def test_partials_do_not_switch_and_short_final_does_not_inherit_partial_l
         # cannot carry the switch on its own.
         await final_turn(agent, "en", "Yes")
         assert agent._settings.language == "fr"
-        # A final with enough evidence does switch.
-        await final_turn(agent, "en")
+        # A full streak of finals does switch.
+        await switch_over(agent, "en")
         assert agent._settings.language == "en"
     finally:
         await agent.brief_extractor.aclose()
 
 
 async def test_uncertified_switch_refused_without_explicit_demo_override():
+    """And refused for THAT reason, which the outcome alone cannot show.
+
+    Two independent barriers now stand in front of every non-English target -
+    no certified disclosure, and no authored closing phrases - so
+    `settings.language` staying 'en' proves only that one of them held. This
+    test kept passing with the certification check deleted, because the
+    farewell gate caught French as well. The reason on the event is the only
+    thing that distinguishes them, so that is what it asserts. The full streak
+    is driven for the same reason: one turn would not reach a gate at all.
+    """
+    buf = StringIO()
+    log = EventLog("test", stream=buf)
     agent = AmbassadorAgent(
         settings=make_settings(auto_language_switch=True),
-        log=EventLog("test", stream=StringIO()),
+        log=log,
     )
     try:
-        await final_turn(agent, "fr")
+        await switch_over(agent, "fr")
         assert agent._settings.language == "en"
     finally:
         await agent.brief_extractor.aclose()
+    await log.aclose()
+    skipped = [
+        json.loads(line)
+        for line in buf.getvalue().splitlines()
+        if line.strip()
+        and json.loads(line)["event"] == "response_language_switch_skipped"
+    ]
+    assert [record["reason"] for record in skipped] == ["uncertified_language"]
 
 
 async def test_contact_permission_is_not_inferred_by_switching_language():
@@ -127,7 +162,7 @@ async def test_contact_permission_is_not_inferred_by_switching_language():
         contact.on_farewell(1)
         agent._contact = contact
         agent._contact_awaiting_reply = True
-        await final_turn(agent, "en")
+        await switch_over(agent, "en")
         assert contact.state.status == "unconfirmed"
         assert not contact.state.confirmed
         assert not contact.state.contact_permission

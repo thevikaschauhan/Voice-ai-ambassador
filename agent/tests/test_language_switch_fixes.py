@@ -10,6 +10,7 @@ path would have passed for the broken code too.
 """
 
 import json
+from inspect import signature
 from io import StringIO
 from typing import get_args
 
@@ -21,6 +22,7 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID  # noqa: E40
 
 from adapter.agent import AmbassadorAgent  # noqa: E402
 from adapter.events import EventLog  # noqa: E402
+from ambassador.language_switch import choose_language  # noqa: E402
 from ambassador.prompts import LANGUAGE_NAMES  # noqa: E402
 from ambassador.schemas import Language  # noqa: E402
 from test_agent import make_settings  # noqa: E402
@@ -30,6 +32,12 @@ from test_agent import make_settings  # noqa: E402
 ENGLISH_UTTERANCE = "Tell me about the payment plan for this apartment please"
 
 NON_ENGLISH = tuple(language for language in get_args(Language) if language != "en")
+
+# A challenger has to lead for more than one turn before it takes over, so one
+# turn can no longer switch anything. Read off the rule's own default rather
+# than written as 2, so raising it fails these tests loudly instead of leaving
+# them quietly asserting a switch that no longer happens.
+REQUIRED_TURNS: int = signature(choose_language).parameters["required_turns"].default
 
 
 def make_agent(**settings):
@@ -61,7 +69,7 @@ async def emitted(log, buf, name):
     return [record for record in records if record["event"] == name]
 
 
-async def switching_turn(agent, language, text=ENGLISH_UTTERANCE):
+async def one_turn(agent, language, text=ENGLISH_UTTERANCE):
     """One buyer turn whose FINAL transcript the recogniser reports as `language`.
 
     Returns the turn context the framework would generate from, which is the
@@ -73,6 +81,19 @@ async def switching_turn(agent, language, text=ENGLISH_UTTERANCE):
     turn_ctx = llm.ChatContext()
     message = turn_ctx.add_message(role="user", content=text)
     await agent.on_user_turn_completed(turn_ctx, message)
+    return turn_ctx
+
+
+async def switching_turn(agent, language, text=ENGLISH_UTTERANCE, extra_turns=0):
+    """As many turns as the rule needs before it will act, plus any extra.
+
+    Returns the LAST turn context, which is the turn the switch actually lands
+    on - the earlier ones only build the streak. `extra_turns` drives further
+    turns after the decision, for asserting what a REPEATED refusal does.
+    """
+    turn_ctx = None
+    for _ in range(REQUIRED_TURNS + extra_turns):
+        turn_ctx = await one_turn(agent, language, text)
     return turn_ctx
 
 
@@ -198,8 +219,11 @@ async def test_a_refused_switch_neither_re_reads_the_yaml_nor_repeats_itself(
             raise AssertionError("disclosures re-read inside the turn path")
 
         monkeypatch.setattr(agent_module, "load_disclosures", refuse_to_read)
-        await switching_turn(agent, "de", text="Ein ausreichend langer Satz hier")
-        await switching_turn(agent, "de", text="Noch ein ausreichend langer Satz")
+        # Two decisions, not two turns: the extra turn is what makes a repeated
+        # refusal happen at all, and so what the once-per-reason rule is for.
+        await switching_turn(
+            agent, "de", text="Ein ausreichend langer Satz hier", extra_turns=1
+        )
         assert agent._settings.language == "en"
         assert [
             record["reason"]

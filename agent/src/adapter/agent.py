@@ -106,7 +106,7 @@ from ambassador.projects import (
 from ambassador.ambassadors import load_ambassadors
 from ambassador.recognition import RecognitionMonitor, load_noise_words
 from ambassador.schemas import Language
-from ambassador.language_switch import choose_language
+from ambassador.language_switch import SwitchProgress, choose_language
 from ambassador.verbalise import load_spoken_forms
 from evals.runner import Harness
 
@@ -142,7 +142,7 @@ from .analysis import Ask, analysis_ask, finalise_analysis
 from .persist import LeadWriter, _failure_code, build_lead_writer
 from .lexicon import load_lexicon, respell_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
-from .stt_factory import build_stt, describe
+from .stt_factory import build_stt, switch_excluded_terms, describe
 from .tts_factory import build_tts
 from .tts_factory import describe as describe_tts
 from .tts_pool import connection_state, reprewarm
@@ -203,13 +203,23 @@ class AmbassadorAgent(Agent):
         self._project_ids = [p.id for p in projects]
         self._settings = settings
         self._initial_language = settings.language
+        self._switch_excluded_terms = switch_excluded_terms(projects)
         # (language, reason) pairs already said once. A buyer simply speaking
         # another language trips the same refusal on every turn for the rest of
         # the call, and the durable stream is not the place to say one thing
         # forty times.
         self._switch_skips: set[tuple[str, str]] = set()
         self._session_voice_id = settings.voice_id(settings.language)
-        self._language_segments: list[tuple[str, int]] = []
+        # The TRANSCRIPT, not a letter count: excluding a project name from the
+        # evidence needs the text, and the whole weighting rule then lives in
+        # one pure, covered place. This list therefore holds raw buyer speech
+        # for the length of a turn and must never reach an event emitter.
+        self._language_segments: list[tuple[str, str]] = []
+        # Carried across turns, because the rule needs a challenger to lead for
+        # more than one turn before it takes over. Held here rather than inside
+        # the pure module so the whole decision stays replayable from a list of
+        # turns in a test.
+        self._switch_progress = SwitchProgress()
         self._guard_factory = guard_factory
         self._update_tts_voice = update_tts_voice
         self._log = log
@@ -602,7 +612,12 @@ class AmbassadorAgent(Agent):
         transcript is adopted onto it instead.
         """
         if self._settings.auto_language_switch:
-            language = choose_language(self._settings.language, self._language_segments)
+            language, self._switch_progress = choose_language(
+                self._settings.language,
+                self._language_segments,
+                progress=self._switch_progress,
+                excluded_terms=self._switch_excluded_terms,
+            )
             self._language_segments.clear()
             try:
                 await self._set_response_language(language, turn_ctx)
@@ -631,10 +646,13 @@ class AmbassadorAgent(Agent):
     def note_transcribed_language(self, event: UserInputTranscribedEvent) -> None:
         """Collect final recogniser evidence; partials never change speech state."""
         if self._settings.auto_language_switch and event.is_final:
+            # `.language` is the framework's own base-code normalisation (ISO
+            # 639-3 to 639-1, cmn to zh included). The adapter may use it; the
+            # pure module may not, and keeps its own for the eval harness.
             self._language_segments.append(
                 (
-                    str(event.language or "unknown"),
-                    sum(c.isalpha() for c in event.transcript),
+                    event.language.language if event.language else "unknown",
+                    event.transcript,
                 )
             )
 
