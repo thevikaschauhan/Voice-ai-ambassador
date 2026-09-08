@@ -208,7 +208,7 @@ describe('the demo path, ambassador prompt with the guardrail enforcing', () => 
     expect(screen.getByRole('button', { name: 'Arabic' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Hindi' })).toBeDisabled()
     expect(
-      screen.getByText(/neither has native-authored\s+disclosure copy/),
+      screen.getByText(/Arabic and Hindi are unavailable because they have no/),
     ).toBeInTheDocument()
   })
 })

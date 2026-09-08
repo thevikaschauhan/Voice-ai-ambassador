@@ -30,7 +30,7 @@ function panel(languages: readonly LanguageReadiness[]) {
     <CallPanel
       state={initialState()}
       running={false}
-      provenance="fixture"
+      provenance="replay"
       languages={languages}
       onStart={() => {}}
       onEnd={() => {}}
