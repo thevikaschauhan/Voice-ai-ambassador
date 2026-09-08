@@ -10,7 +10,9 @@ from ambassador.language_switch import choose_language
 
 @pytest.mark.parametrize("language", get_args(Language))
 def test_requested_languages_are_supported(language):
-    assert language in get_args(Language)
+    # The `language in get_args(Language)` assertion that used to be here was
+    # a tautology - the parameter comes from get_args(Language), so it could
+    # not fail, and it added ten cases to the count without asking anything.
     assert choose_language("en", [(language, 20)]) == language
 
 
