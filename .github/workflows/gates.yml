@@ -169,6 +169,14 @@ jobs:
       #                           number nobody approved, so a branch nobody
       #                           tested is a hole nobody has looked at
       #                           (ADR-019)
+      #   ambassador.language_switch  which language the reply is spoken in,
+      #                           derived from recogniser evidence. It is
+      #                           derivation code by this list's own
+      #                           definition, and it decides which language's
+      #                           guardrail patterns, farewell phrases and
+      #                           disclosure copy apply for the rest of the
+      #                           call - so an untested branch here silently
+      #                           re-points every other gate on this list
       # docs/06-'s Phase 2 gates require the first two by name.
       # Widening it (budget.py, confirmation.py, verbalise.py) is a deliberate
       # decision, not an oversight: those are deterministic policy rather than
@@ -196,6 +204,7 @@ jobs:
             --cov=ambassador.leads \
             --cov=ambassador.knowledge \
             --cov=ambassador.schemas \
+            --cov=ambassador.language_switch \
             --cov-branch \
             --cov-report=term-missing \
             --cov-fail-under=100 \
