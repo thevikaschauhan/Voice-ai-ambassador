@@ -4,6 +4,7 @@ docs/02-data-contracts.md is the human-readable mirror of this file; if the two
 diverge, fix the divergence in the same change.
 """
 
+from uuid import UUID
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
@@ -535,3 +536,37 @@ class AdminDecision(BaseModel):
                 f"{self.new_status!r}"
             )
         return self
+
+
+# --- Document-level knowledge publication (docs/02-) ----------------------
+
+
+KnowledgeScope = Literal[
+    "admin_only", "general_knowledge", "project_knowledge", "inventory_governed"
+]
+
+
+class KnowledgeReviewChunk(BaseModel):
+    id: UUID
+    ordinal: int
+    heading: str | None = None
+    body: str
+    retrieval_scope: KnowledgeScope = "admin_only"
+    project_id: str | None = None
+    conflict_code: Literal["conflicts_with_inventory", "unknown_project"] | None = None
+
+
+class KnowledgeScopeSelection(BaseModel):
+    model_config = {"extra": "forbid"}
+    chunk_id: UUID
+    action: KnowledgeScope
+    project_id: str | None = None
+
+
+class KnowledgePublicationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: UUID
+    expected_revision: int = Field(ge=1)
+    expected_review_token: str = Field(min_length=1, max_length=64)
+    confirmed: bool
+    selections: list[KnowledgeScopeSelection] = Field(min_length=1, max_length=10000)

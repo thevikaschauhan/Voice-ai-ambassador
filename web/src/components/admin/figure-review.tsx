@@ -53,10 +53,12 @@ export function FigureReview({
   documentId,
   figures,
   chunkScope,
+  onReviewed,
 }: {
   documentId: string
   figures: readonly KnowledgeFigureView[]
   chunkScope: RetrievalScope
+  onReviewed?: () => void
 }) {
   const [pending, setPending] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
@@ -78,13 +80,14 @@ export function FigureReview({
           return
         }
         setDecided((current) => ({ ...current, [figureId]: action }))
+        onReviewed?.()
       } catch {
         setProblem('Could not reach the server.')
       } finally {
         setPending(null)
       }
     },
-    [documentId],
+    [documentId, onReviewed],
   )
 
   if (figures.length === 0) {

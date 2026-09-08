@@ -333,6 +333,15 @@ KnowledgeChunkReview
   actor_kind            "admin" | "user"
   actor_id              UUID | null
   created_at            datetime
+
+KnowledgeDocumentPublication
+  request_id            UUID          idempotency key for one publish action
+  document_id           UUID
+  document_revision     int
+  request               JSON          complete reviewed passage manifest
+  result                JSON          stable response returned on retry
+  actor_kind            "admin" | "user"
+  created_at            datetime
 ```
 
 As with `LeadRecord` above, the shapes in this section are the DURABLE rows and
@@ -358,12 +367,18 @@ plans, handover, status, unit types and the amenities enumeration, whose
 canonical values continue to come from `data/inventory.json`. A sentence that
 conflicts with those structured fields carries `conflicts_with_inventory` and
 stays admin-only. A project not present in inventory carries `unknown_project`
-and cannot publish. Publishing controls retrieval of reviewed general/project
-chunks; the current `scope_review_id` is a projection of an append-only review
-history. Figure approval controls only whether an occurrence remains in their
-`prompt_body` and can join a turn's allowed set, and cannot override chunk
-scope. Archiving a document or revoking a figure affects new turns without
-erasing the revision cited by historic turns.
+and cannot publish. The reviewer submits one complete passage manifest for the
+document revision. Publishing records that manifest once, applies its
+underlying chunk reviews and changes the document status in one transaction.
+`request_id` makes a retry return the same result without duplicating reviews.
+The server rejects a stale revision or review token, an incomplete manifest,
+and a manifest that would publish no eligible content. Publishing controls
+retrieval of reviewed general/project chunks; the current `scope_review_id` is
+a projection of an append-only review history. Figure approval controls only
+whether an occurrence remains in their `prompt_body` and can join a turn's
+allowed set, and cannot override chunk scope. Archiving a document or revoking
+a figure affects new turns without erasing the revision cited by historic
+turns.
 
 For `general_knowledge`, `project_id` is null. For either project scope,
 `project_id` is a logical foreign key to an inventory record and is required at

@@ -31,6 +31,7 @@ export const UPSTREAM_ROUTES = {
   // multipart form on one handler (measured while building the route).
   documentUpload: '/v1/knowledge/documents/upload',
   document: '/v1/knowledge/documents/:id',
+  documentPublish: '/v1/knowledge/documents/:id/publish',
   chunkReviews: '/v1/knowledge/chunks/:id/reviews',
   figureReviews: '/v1/knowledge/figures/:id/reviews',
   ready: '/ready',

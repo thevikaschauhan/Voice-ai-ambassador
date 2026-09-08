@@ -81,6 +81,8 @@ export interface KnowledgeChunkView {
   ordinal: number
   heading: string | null
   body: string
+  /** Preview from the Python withholding function; absent on an older API. */
+  review_body?: string
   retrieval_scope: RetrievalScope
   project_id: string | null
   conflict_code: ConflictCode | null
@@ -90,6 +92,8 @@ export interface KnowledgeChunkView {
 }
 
 export interface DocumentDetail extends Omit<DocumentRow, 'figures_pending'> {
+  review_token?: string
+  extracted_text?: string
   chunks: KnowledgeChunkView[]
 }
 
@@ -216,4 +220,13 @@ export const SOURCE_LABELS: Record<DocumentRow['source_type'], string> = {
  */
 export function sourceLabel(value: string): string {
   return SOURCE_LABELS[value as DocumentRow['source_type']] ?? value
+}
+
+/** Mirrors KnowledgePublicationRequest in ambassador/schemas.py and docs/02-. */
+export interface KnowledgePublicationRequest {
+  request_id: string
+  expected_revision: number
+  expected_review_token: string
+  confirmed: boolean
+  selections: { chunk_id: string; action: RetrievalScope; project_id: string | null }[]
 }

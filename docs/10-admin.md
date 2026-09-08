@@ -218,24 +218,31 @@ At the approved scale of 10-15 documents, ingestion is synchronous and bounded:
    `KnowledgeFigure`: normalized value and kind, currency/unit when present,
    source sentence, page, chunk and document revision. Parsing does not approve
    it.
-6. The admin reviews that extracted list. Each checked occurrence gets an
-   append-only approval record; unchecking records revocation. Only checked,
-   currently active figures in eligible chunks can extend a turn's allowed set,
-   and approving a figure never changes an `inventory_governed` chunk into
-   prompt material.
-7. Every chunk defaults to `admin_only`. The reviewer may mark non-project
-   process and FAQ material `general_knowledge`, or bind descriptive prose to
-   an existing inventory project as `project_knowledge`. The latter requires a
-   project id at publish time. Structured prices, sizes, payment plans,
-   handover, status, unit types and the amenities enumeration are
-   `inventory_governed`; conflicts are flagged and remain admin-only, while an
-   unknown project is never publishable. Scope changes are append-only and
-   attributed. Structured facts change only through the existing
-   `data/inventory.json` review and deploy.
-8. Publishing makes reviewed general/project chunks searchable. When project
-   context is known, project chunks rank first; general knowledge is always
-   eligible. Archiving removes chunks from new retrievals without erasing the
-   revision used by historic turns.
+6. The admin reviews the readable document revision under its headings. One
+   document-level publish action carries the complete passage manifest: each
+   passage is included as general/project knowledge or explicitly excluded.
+   Adjacent retrieval chunks are grouped in the UI, so paragraph overlap does
+   not create duplicate human decisions. Inventory-governed, conflicting and
+   unknown-project passages remain closed and are shown as exclusions.
+7. The extracted figure list remains an optional detailed review. Each checked
+   occurrence gets an append-only approval record; unchecking records
+   revocation. Only checked, currently active figures in eligible chunks can
+   extend a turn's allowed set, and approving a figure never changes an
+   `inventory_governed` chunk into prompt material.
+8. Every chunk defaults to `admin_only`. The document-level manifest may mark
+   non-project process and FAQ material `general_knowledge`, or bind
+   descriptive prose to an existing inventory project as `project_knowledge`.
+   The latter requires a project id at publish time. Structured prices, sizes,
+   payment plans, handover, status, unit types and the amenities enumeration
+   are `inventory_governed`; conflicts are flagged and remain admin-only,
+   while an unknown project is never publishable. Structured facts change only
+   through the existing `data/inventory.json` review and deploy.
+9. Publishing makes reviewed general/project chunks searchable. The API locks
+   and validates the revision, applies all selected passage reviews and marks
+   the document published in one transaction. A stable request id makes a
+   retry idempotent. When project context is known, project chunks rank first;
+   general knowledge is always eligible. Archiving removes chunks from new
+   retrievals without erasing the revision used by historic turns.
 
 Postgres full-text search uses the `simple` configuration so English stemming
 does not corrupt Arabic, Hindi or mixed-language terms. It searches published
@@ -487,6 +494,7 @@ surface is deliberately small:
 | `/v1/leads` | List/filter leads; fetch detail with turns, brief, summary and score breakdown; retry failed analysis |
 | `/v1/leads/{id}/decisions` | Append qualify or reject decisions with optimistic revision checking |
 | `/v1/knowledge/documents` | Create from paste/upload; list, each row carrying `figures_pending` (figures awaiting approval on the current revision) so the overview needs no per-document read; fetch parse result, chunks and extracted figures; publish, revise or archive |
+| `/v1/knowledge/documents/{id}/publish` | Validate one complete revision manifest, apply its passage reviews atomically, publish the revision and return the same result for a retried request id |
 | `/v1/knowledge/chunks/{id}/reviews` | Append a general-knowledge, bound project-knowledge, inventory-governed or reset-to-admin-only scope review; project scope requires an inventory id |
 | `/v1/knowledge/figures/{id}/reviews` | Append approval or revocation |
 | `/health` | Unauthenticated process liveness only; remains 200 during a database pause so Railway does not restart-loop |
