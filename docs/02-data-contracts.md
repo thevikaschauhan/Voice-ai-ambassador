@@ -427,6 +427,8 @@ Every turn emits one `TurnRecord`. Full fidelity (utterance text, agent sentence
 
 On the voice path the model starts work BEFORE the final transcript exists: LiveKit's `preemptive_generation` is on by default, so `llm_node` runs on a partial and the final transcript is adopted onto that same turn (`turn_complete.preemptive: true`). One buyer turn is still exactly one `TurnRecord` - opening a second one there split the LLM and guardrail work away from the endpointing and audio marks, which the first live audio run measured. `buyer_utterance` is the final text; the timings start from when the model began, which is earlier than the final transcript and is the honest answer to "how long did the buyer wait".
 
+A mid-call language switch does not turn this off, and it does not need a flag to coexist with it. The switch writes the new instructions into the same per-turn context the generation reads, so a generation already started on the partial no longer matches the context the turn now has, the framework cancels it and regenerates under the new language. A turn that does not switch leaves that context untouched, matches, and keeps the preemptive path. The cost is therefore paid only on the turn that actually switches, rather than by disabling preemptive generation for the whole call.
+
 Turns seal when their speech handle resolves, not at the agent's "listening" transition (the framework pauses and goes to "listening" before an interruption is confirmed). `turn_complete` carries `audit_incomplete: bool` - true only when teardown stranded an unresolved handle; consumers should flag or exclude those rows.
 
 ```
