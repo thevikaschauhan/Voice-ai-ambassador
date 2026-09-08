@@ -10,24 +10,31 @@ import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { ToggleButton } from '@astryxdesign/core/ToggleButton'
 import { LeadStatusBadge } from './status-badge'
-import {
-  endReasonLabel,
-  REASON_LABELS,
-  SIGNAL_LABELS,
-} from '@/lib/admin/leads'
+import { CategoryScore, ScoreTotal } from './score'
+import { endReasonLabel, REASON_LABELS } from '@/lib/admin/leads'
 import type { LeadDetailRecord, ReasonCode } from '@/lib/admin/leads'
 
 /**
  * One lead, and the decision a human makes about it.
  *
- * docs/10-: the detail makes model provenance visible. Three things follow from
- * that and none is decoration. The summary is LABELLED generated, because an
- * unlabelled model sentence reads as a fact somebody checked. The score shows
- * its evidence turns, because a number without them is an assertion rather than
- * a finding - and it shows signals that scored NOTHING too, or the total cannot
- * be reconciled with what is on screen. The decision history is shown and never
- * edited, because it is append-only in the database (ADR-020) and a UI that
- * looked editable would be lying about that.
+ * docs/10-: the detail makes model provenance visible. The summary is LABELLED
+ * generated, because an unlabelled model sentence reads as a fact somebody
+ * checked. The score shows every signal, including the ones that scored
+ * NOTHING, so the breakdown is the whole rubric rather than its highlights. The
+ * decision history is shown and never edited, because it is append-only in the
+ * database (ADR-020) and a UI that looked editable would be lying about that.
+ *
+ * THE SCORE'S EVIDENCE TURNS AND THE TRANSCRIPT ARE NOT SHOWN, by the human's
+ * decision on 2026-09-08: "Remove turn mention in lead section it doesn't
+ * provide any value. Remove Buyer turns cited by the score". This reverses the
+ * "showing score evidence" half of docs/10-'s provenance principle and nothing
+ * else - the generated label and the immutable history stay. `lead.turns` is
+ * still in the record and still comes down the wire; no part of this page reads
+ * it, and `admin-leads.test.tsx` asserts the word "turn" appears nowhere in the
+ * rendered detail.
+ *
+ * Each category is a 0-100 figure in a colour band; see `./score` for why the
+ * rows no longer add up to the total and where the rubric's weights went.
  *
  * The score is guidance. The decision is the human's, which is why the buttons
  * are neutral and the note is free text.
@@ -99,10 +106,11 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
    *
    * TURNS ARE DELIBERATELY NOT PART OF THIS, and including them was a defect
    * the browser caught: a failed analysis on a real call still HAS a
-   * transcript, so `turns.length > 0` made this true and rendered all three
-   * cards again - "Analysis failed" in one, "No score" in the next - which is
-   * the pile of empty cards the collapse exists to remove. The transcript is
-   * not analysis output; it stands on its own below.
+   * transcript, so `turns.length > 0` made this true and rendered both cards
+   * again - "Analysis failed" in one, "No score" in the next - which is the
+   * pile of empty cards the collapse exists to remove. Since 2026-09-08 the
+   * transcript is not rendered at all, so counting it here would make this
+   * predicate true on the strength of something nobody can see.
    */
   const analysed = lead.summary !== null || lead.score !== null
 
@@ -239,35 +247,22 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
               </Text>
             ) : (
               <>
-                <Text as="p" display="block" type="display-2">
-                  {lead.score.total}
-                </Text>
-                <ol className="flex flex-col gap-2">
+                <ScoreTotal total={lead.score.total} />
+                {/*
+                  Every signal the rubric ran, including the ones that scored
+                  nothing: a breakdown that drops its zeros reads as a shorter
+                  rubric than the one that produced the total.
+
+                  THE RULE ABOVE THE LIST IS NOT DECORATION. Found in the
+                  browser: the total's own meter sat 36px under the figure and
+                  28px over the first category's label, so the eye paired it
+                  with "Budget stated" instead. Eight bars in a column need one
+                  break to say which of them is the total.
+                */}
+                <ol className="flex flex-col gap-3 border-t border-[var(--color-border)] pt-4">
                   {lead.score.breakdown.map((item) => (
-                    <li
-                      key={item.signal}
-                      className="flex flex-wrap items-baseline gap-x-4 border-b border-current/10 pb-2"
-                    >
-                      <span className="inline-block min-w-[16rem]">
-                        <Text as="span">{SIGNAL_LABELS[item.signal]}</Text>
-                      </span>
-                      <Text as="span">{item.points_awarded}</Text>
-                      <Text as="span" color="secondary">
-                        of {item.max_points}
-                      </Text>
-                      {item.observed ? (
-                        <Text as="span" color="secondary">
-                          {item.evidence_turn_indexes.length === 0
-                            ? 'no cited turn'
-                            : item.evidence_turn_indexes.map((index) => `turn ${index}`).join(', ')}
-                        </Text>
-                      ) : (
-                        // Shown rather than omitted: a total that cannot be
-                        // reconciled with the rows above it is not evidence.
-                        <Text as="span" color="secondary">
-                          not observed
-                        </Text>
-                      )}
+                    <li key={item.signal}>
+                      <CategoryScore item={item} />
                     </li>
                   ))}
                 </ol>
@@ -290,38 +285,12 @@ export function LeadDetail({ lead }: { lead: LeadDetailRecord }) {
             <Section heading="Awaiting analysis">
               <Text as="p" display="block" color="secondary">
                 {lead.analysis_status === 'failed'
-                  ? 'The analysis failed, so there is no summary, score or cited turn for this call. The transcript was still recorded.'
-                  : 'The analysis has not completed, so there is no summary, score or cited turn yet. It runs after the call ends.'}
+                  ? 'The analysis failed, so there is no summary or score for this call. The call itself was still recorded.'
+                  : 'The analysis has not completed, so there is no summary or score yet. It runs after the call ends.'}
               </Text>
             </Section>
           )}
 
-          {/*
-            The transcript, on its own guard. It is what the CALL produced,
-            not what the ANALYSIS produced, so it survives a failed analysis
-            and disappears only when there are no turns at all.
-          */}
-          {lead.turns.length === 0 ? null : (
-            <Section heading="Buyer turns cited by the score">
-              <ol className="flex flex-col gap-2">
-                {lead.turns.map((turn) => (
-                  <li key={turn.turn_index} className="flex flex-wrap items-baseline gap-2">
-                    <Text as="span" type="supporting" color="secondary">
-                      turn {turn.turn_index}
-                    </Text>
-                    <Text as="span">{turn.text}</Text>
-                    {/*
-                      NEUTRAL, not warning. PR E collapsed the list's badges to
-                      three weights and left this one yellow, so the admin ran two
-                      badge vocabularies, one per surface. An incomplete recording
-                      is a fact about the call, not an action a reviewer must take.
-                    */}
-                    {turn.audit_incomplete ? <Badge variant="neutral" label="incomplete" /> : null}
-                  </li>
-                ))}
-              </ol>
-            </Section>
-          )}
         </div>
 
         <div data-testid="detail-aside" className="flex flex-col gap-6">

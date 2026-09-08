@@ -9,6 +9,7 @@ import { endReasonLabel } from '@/lib/admin/leads'
 import type { LeadSummaryRow } from '@/lib/admin/leads'
 import { useMemo, useState } from 'react'
 import { LeadStatusBadge } from './status-badge'
+import { ListScore } from './score'
 import { relativeAge } from './age'
 
 /**
@@ -337,13 +338,9 @@ export function LeadList({ rows }: { rows: readonly LeadSummaryRow[] }) {
               ) : row.score_total === null ? (
                 <Badge variant="neutral" label="pending" />
               ) : (
-                // A compact numeral, not a display heading. `display-3` made
-                // the score the largest thing on the row (G4: "a huge 61");
-                // it is data in a column, and the theme's tabular figures are
-                // what make a column of them line up.
-                <span data-score className="text-[15px] font-medium">
-                  {row.score_total}
-                </span>
+                // Shared with the detail's total, so one number never carries
+                // two colour vocabularies; see `./score`.
+                <ListScore total={row.score_total} />
               ),
           },
           {

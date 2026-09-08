@@ -327,6 +327,26 @@ read. The status vocabularies live in one module
 and three copies of a label map is how one status came to be spelled three
 ways.
 
+**Every score figure is out of 100 and colour coded**, on the list and on the
+detail (human request, 2026-09-08). The rubric weights its signals differently
+- 15, 15, 10, 20, 25, 10 and 5 points - so a breakdown row read "15 of 15"
+beside "0 of 10" and comparing two of them meant dividing first. Each category
+now renders `round(points_awarded / max_points * 100)`, a signal that was not
+observed renders 0 rather than disappearing, and the figure sits in a band:
+0-39 error, 40-69 warning, 70-100 success, taken from the theme's status tokens
+rather than from hexes in a component. The total takes the same bands in both
+places, so one number never carries two colour vocabularies. The bands and the
+components live in one module, `web/src/components/admin/score.tsx`.
+
+Two consequences, stated rather than discovered later. Normalised categories
+**do not add up to the total**: the total is the weighted sum of points and the
+rows are percentages of each signal's own weight. Both are 0-100 (the rubric's
+maximum is 100) but they are not the same arithmetic, and the weights now live
+only in the rubric table above. And the colour is **redundant, never
+load-bearing** - each category is an Astryx `ProgressBar` carrying
+`aria-valuenow`, and every band sits on a figure that already states the value,
+so nothing here is encoded in hue alone.
+
 Two elements stay native inside Astryx's `Field`, and both are measured rather
 than lazy. The scope, project and reason **selects** stay `<select>` because
 Astryx's `Selector` is a combobox exposing `role=listbox` through its own
@@ -484,10 +504,19 @@ nullable beside the current `actor_kind=admin`, so adding identity does not
 change the meaning of historic shared-code decisions.
 
 The lead list shows only operational fields: status, score, language, project
-ids, call time, completeness and contact-present. Buyer words and contact
-values appear on the detail page only. The detail makes model provenance
-visible by labelling the summary as generated, showing score evidence and
-showing the immutable decision history. Knowledge review shows source text and
+ids, call time, completeness and contact-present. Contact values appear on the
+detail page only, and buyer words appear on no page at all. The detail makes
+model provenance visible by labelling the summary as generated, showing every
+signal the rubric ran including the ones that scored nothing, and showing the
+immutable decision history.
+
+It does **not** show the score's evidence turns or the call transcript, by the
+human's decision on 2026-09-08 ("Remove turn mention in lead section it doesn't
+provide any value. Remove Buyer turns cited by the score"). That reverses the
+"showing score evidence" half of this principle and nothing else. `lead.turns`
+and `evidence_turn_indexes` are unchanged in the API payload and in Postgres -
+the analysis still validates every evidence index against the saved turns, and
+the admin UI simply does not render them. Knowledge review shows source text and
 figure context, because approving a value without its sentence and page is not
 review.
 
@@ -556,7 +585,7 @@ costs a reader more than no name, because they assume the test is missing.
 | toby/adapter | FastAPI admin API and bearer boundary | `test_every_non_health_admin_route_refuses_a_missing_or_wrong_bearer` fails before the API exists |
 | dwight/adapter | Authenticated PII envelopes and classified durable audit | `test_buyer_payloads_encrypt_while_phase_2_events_contain_no_buyer_words` fails before the encryption and event projections exist |
 | jim/web | Admin access session and fixed proxy routes | `admin routes stay closed when ADMIN_ACCESS_CODE is absent and never expose ADMIN_API_TOKEN` fails before the gate exists |
-| jim/web | Lead list, detail and manual decisions | `an admin can inspect score evidence and append, but not overwrite, a decision` fails before the UI exists |
+| jim/web | Lead list, detail and manual decisions | `an admin can inspect the score breakdown and append, but not overwrite, a decision` fails before the UI exists |
 | jim/web | Knowledge upload, chunk-scope and per-figure review | `a scanned PDF reports no text, chunks default closed, and an approved figure can be revoked` fails before the review UI exists |
 | ryan/ops | Supabase database variables and private Railway admin-api topology | `the IaC plan adds admin-api, preserves pooler variables only on Python services and gives web no DATABASE_URL` fails against the two-service graph |
 | ryan/ops | Phase 2 live smoke and recovery runbook | `a persisted disconnect, upload, retrieval, revocation and manual decision survive service restarts` fails on the undeployed topology |
