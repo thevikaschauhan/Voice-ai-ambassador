@@ -168,12 +168,19 @@ knowledge of any of them.
 
 And two that are not variables, and matter more than the four that are.
 
-A switch target needs a native-authored disclosure in `data/disclosures.yaml`,
-and `en` is the only entry that has one: `ar`, `hi` and every additional target
-are empty. With `ALLOW_UNCERTIFIED_LANGUAGE` at its default the certification
-gate skips every switch away from English and logs the skip, so the feature
-turned on against today's copy can only switch BACK to English. That is a
-repository change and a deploy, not a dashboard edit.
+A switch target has to clear two independent gates, and today English is the
+only language that clears both. It needs a native-authored disclosure in
+`data/disclosures.yaml`, and it needs authored closing phrases in
+`data/farewells.yaml` so the buyer can end the call in the language they are now
+being answered in. `en` is the only entry in either file with anything in it:
+`ar`, `hi` and every additional target are empty in both.
+
+`ALLOW_UNCERTIFIED_LANGUAGE=true` overrides the first gate and **not** the
+second, which is deliberate - a call the buyer cannot end is worse than a call
+that stays in English. So enabling the feature against today's copy can only
+switch BACK to English, and no combination of variables changes that. What
+changes it is authoring copy in those two files, which is a repository change
+and a deploy rather than a dashboard edit.
 
 Second, `STT_PROVIDER=soniox` moves production off the only recogniser anyone
 has measured. `docs/04-` carries the Deepgram figure, 258-327 ms after audio
