@@ -263,3 +263,179 @@ def test_a_plain_name_and_number_is_unchanged() -> None:
 
     assert policy.state.name == "Ahmed"
     assert policy.state.phone == "0501234567"
+
+
+# --- the after-interest ask (task-p2-contact-ask-after-interest) -------------
+#
+# The human's 05:12Z call is the reason these exist: contact_ask was TRUE,
+# contact_line_spoken was 0, and the call ended `buyer_left` after 13 turns. The
+# ask only ever fired on a goodbye, and a buyer who hangs up never says one - so
+# the one moment the ambassador asks for a way to follow up was unreachable for
+# exactly the buyers most worth following up.
+#
+# WHY THE SIGNAL IS A PAIR OF WORD LISTS AND NOT A MODEL CALL: god's boundary is
+# that detection must be deterministic from what the turn pipeline already has.
+# A budget is already detected deterministically (`budget.find_budget`, ADR-011),
+# so that signal is READ off the confirmation step rather than re-parsed here. A
+# timeline and a viewing request had no detector at all, and the two below are
+# the smallest honest ones: a time expression only counts as a timeline when the
+# buyer put themselves in the sentence, and a viewing only counts when they
+# asked for one.
+#
+# ENGLISH ONLY, and it costs nothing. `ContactCopy.enabled` gates the ask on
+# authored copy and only `en` has any, so a trigger that reads English alone can
+# never miss an ask that could have been spoken - the same reasoning as
+# `_NOT_A_NAME`, without its trade-off.
+
+
+def test_a_time_expression_is_a_timeline_only_with_the_buyer_in_the_sentence() -> None:
+    """ "Is the handover next month?" is a question about the project.
+
+    Both sentences carry the same time expression, and only one of them is the
+    buyer saying when they intend to act. Without the first-person half, every
+    handover question in the call would spend the one ask.
+    """
+    from ambassador.contact import interest_signal
+
+    assert interest_signal("I want to buy next month.") == "timeline"
+    assert interest_signal("We are looking to move in by December.") == "timeline"
+    assert interest_signal("Is the handover next month?") is None
+    assert interest_signal("Tell me about the payment plan.") is None
+
+
+def test_a_callback_request_is_a_signal_and_a_price_question_is_not() -> None:
+    from ambassador.contact import interest_signal
+
+    assert interest_signal("Can you call me back tomorrow?") == "callback"
+    assert interest_signal("Please get back to me on that.") == "callback"
+    assert interest_signal("What is the price of a studio?") is None
+
+
+def test_a_viewing_needs_both_the_asking_and_the_visiting() -> None:
+    """ "I can see the payment plan" is not a request to visit anything."""
+    from ambassador.contact import interest_signal
+
+    assert interest_signal("I would like to see the apartment.") == "viewing"
+    assert interest_signal("Can I book a viewing this week?") == "viewing"
+    assert interest_signal("I can see the payment plan now.") is None
+
+
+def test_asking_for_a_person_is_not_an_interest_signal() -> None:
+    """The one deviation from the card's wording, and it is deliberate.
+
+    The card names "a viewing/callback/human request". A deterministic line
+    REPLACES the model's turn, so triggering on "put me through to someone"
+    would answer a request to be transferred with a request for a phone number
+    and leave `escalate_to_human` uncalled for that turn. A missed ask is the
+    status quo; an obstructed hand-over is a new failure, and docs/04- is
+    explicit about what making a buyer repeat themselves costs.
+
+    A callback request is still a signal: the ask is a direct answer to it.
+    """
+    from ambassador.contact import interest_signal
+
+    assert interest_signal("Can I speak to someone about this?") is None
+    assert interest_signal("Put me through to a person, please.") is None
+
+
+def test_the_ask_fires_once_whichever_path_reaches_it_first() -> None:
+    """One ask per call, and the two paths share one flag rather than two.
+
+    `owes_request()` is the whole once-only rule, so a goodbye after an
+    after-interest ask is honoured immediately - the same answer the second
+    goodbye already gets.
+    """
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    policy.note_interest("budget", turn_index=3)
+    assert policy.owes_request(), "noting interest is not asking"
+
+    asked = policy.on_interest(turn_index=4)
+    assert asked is not None and asked.speaks
+    assert policy.state.asked_turn_index == 4
+    assert not policy.owes_request()
+
+    assert policy.on_interest(turn_index=5) is None, "one ask means one ask"
+    assert policy.on_farewell(turn_index=9) is None, (
+        "a goodbye after an earlier ask is honoured, not intercepted for a second"
+    )
+
+
+def test_nothing_is_asked_until_interest_is_noted() -> None:
+    """The inverse, so the trigger is a trigger rather than an unconditional ask.
+
+    A call with no high-intent turn and no goodbye ends unasked, which is the
+    behaviour this change must leave alone.
+    """
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    assert policy.on_interest(turn_index=2) is None
+    assert policy.owes_request(), "an unasked call still owes the ask at a goodbye"
+
+
+def test_a_language_with_no_authored_ask_is_never_asked_after_interest() -> None:
+    """AGENTS.md:52 on the farewell path, held on the new one too.
+
+    An Arabic call with a stated budget must not be handed the English
+    sentence: this is the one moment the buyer is asked to hand something
+    over, and a disabled language means disabled on every path.
+    """
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    for language in ("ar", "hi"):
+        policy = ContactPolicy(load_contact_copy(), language=language)
+        policy.note_interest("budget", turn_index=2)
+        assert policy.on_interest(turn_index=3) is None
+        assert policy.state.status == "not_asked"
+        assert policy.state.asked_turn_index is None
+
+
+def test_the_ask_names_which_trigger_fired_and_the_signals_are_a_closed_set() -> None:
+    """`contact_line_spoken`'s stage is how an operator sees which path fires.
+
+    The stage is derived from the signal rather than passed alongside it, so a
+    signal the detector can return and the stage cannot name is impossible.
+    """
+    from ambassador.contact import INTEREST_SIGNALS, ContactPolicy, load_contact_copy
+
+    assert INTEREST_SIGNALS == frozenset({"budget", "timeline", "callback", "viewing"})
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    policy.note_interest("timeline", turn_index=1)
+    step = policy.on_interest(turn_index=2)
+    assert step is not None
+    assert step.stage == "ask_after_timeline"
+
+    farewell = ContactPolicy(load_contact_copy(), language="en").on_farewell(
+        turn_index=2
+    )
+    assert farewell is not None and farewell.stage == "ask"
+
+
+def test_an_unknown_signal_is_refused_rather_than_emitted() -> None:
+    """A typo would otherwise ship a stage value no dashboard can read."""
+    import pytest
+
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    with pytest.raises(ValueError, match="interest signal"):
+        policy.note_interest("vibes", turn_index=1)
+
+
+def test_the_first_noted_interest_is_the_one_that_is_reported() -> None:
+    """Two triggers in one call are one ask, named after the first.
+
+    The stage answers "what made this buyer worth asking", and that is the
+    turn interest FIRST appeared - a later callback request does not rewrite
+    the budget that opened the door.
+    """
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    policy.note_interest("budget", turn_index=2)
+    policy.note_interest("callback", turn_index=6)
+    step = policy.on_interest(turn_index=7)
+    assert step is not None and step.stage == "ask_after_budget"

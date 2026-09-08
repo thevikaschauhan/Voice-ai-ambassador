@@ -430,3 +430,258 @@ async def test_a_declined_contact_persists_as_declined_with_nothing_sealed(
     assert lead["contact_phone_fingerprint"] is None
     assert lead["contact_permission"] is False
     assert lead["contact_confirmed"] is False
+
+
+# --- the after-interest ask, through the real turn path -----------------------
+#
+# THE CALL THAT CAUSED THIS. 05:12Z: `contact_ask` TRUE, `contact_line_spoken`
+# 0, 13 turns, 210 s, ended `buyer_left`. The ask only ever fired on a goodbye
+# and the human hung up, so the one moment the ambassador asks for a way to
+# follow up was unreachable for exactly the buyers worth following up. These
+# cases are about WHICH TURN the ask lands on, which is the whole of the fix -
+# a correct ask on a turn that never arrives is the defect, not a near miss.
+
+
+async def test_a_callback_request_is_asked_on_the_very_same_turn() -> None:
+    """The hang-up case, and the reason the ask cannot wait for the next turn.
+
+    "Can you call me back tomorrow?" is answered with the ask itself, which is
+    also the honest answer to it: a callback needs a number. Deferring by one
+    turn would reproduce the defect, because the buyer who asks this is often
+    the buyer about to hang up.
+    """
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    agent, log, buffer = _agent()
+
+    spoken = await _say(agent, "Can you call me back tomorrow?")
+    assert ASK_MARKER in spoken, spoken
+    # The ask is not a goodbye. The call stays open for the answer, exactly as
+    # it does on the farewell path.
+    assert agent._closing_turn is None, "the ask must not close the call"
+
+    await log.aclose()
+    stream = buffer.getvalue()
+    assert '"event": "contact_asked"' in stream
+    # The stage is how an operator sees WHICH trigger fires in the wild, which
+    # is the only way to find out whether the three are worth keeping.
+    assert '"stage": "ask_after_callback"' in stream
+
+
+async def test_a_stated_budget_waits_for_the_turn_the_guardrail_leaves_free() -> None:
+    """The currency confirmation always wins, and the ask takes the next turn.
+
+    Measured rather than assumed: a fresh budget mention ALWAYS opens a
+    confirmation (`BudgetPolicy._confirm` speaks on every path), and a
+    deterministic line replaces the whole turn - so an ask that insisted on
+    firing the moment interest appeared would cancel the read-back that stops a
+    misheard "two" for "ten" recommending a property twenty times off.
+
+    The first assertion is the load-bearing one: it is the guardrail keeping
+    its turn, not the ask being late.
+    """
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    agent, log, buffer = _agent()
+
+    first = await _say(agent, "My budget is 2 million dirhams.")
+    assert "have I got that right" in first, first
+    assert ASK_MARKER not in first, "the currency read-back owns this turn"
+
+    # The budget settles silently on the agreement, so nothing deterministic is
+    # owed and the ask takes the turn the model would otherwise have had.
+    second = await _say(agent, "Yes, that's right.")
+    assert ASK_MARKER in second, second
+
+    await log.aclose()
+    assert '"stage": "ask_after_budget"' in buffer.getvalue(), (
+        "the stage names the trigger that opened the door, not the turn it landed on"
+    )
+
+
+async def test_a_second_trigger_does_not_ask_again() -> None:
+    """One ask per call, across triggers as well as within one."""
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    agent, log, buffer = _agent(replies=6)
+
+    assert ASK_MARKER in await _say(agent, "Can you call me back tomorrow?")
+    # The reply to the ask settles it - declined is an answer.
+    await _say(agent, "I would rather not, thanks.")
+    assert agent._contact.state.status == "declined"
+
+    again = await _say(agent, "I want to buy next month.")
+    assert ASK_MARKER not in again, "a second trigger must not spend a second ask"
+
+    await log.aclose()
+    assert buffer.getvalue().count('"event": "contact_asked"') == 1
+
+
+async def test_a_goodbye_after_an_interest_ask_is_not_intercepted() -> None:
+    """The two paths share one flag, so the goodbye is honoured immediately.
+
+    This is the case god named when he gave me the card: the final-transcript
+    closing and the after-interest ask must not fight. They cannot, because
+    `owes_request()` is the single piece of state both consult.
+    """
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    agent, log, buffer = _agent(replies=6)
+
+    assert ASK_MARKER in await _say(agent, "Please get back to me on that.")
+    await _say(agent, "No thank you.")
+
+    closing = await _say(agent, "Thanks, goodbye.")
+    assert ASK_MARKER not in closing, (
+        "a goodbye after an earlier ask is not intercepted"
+    )
+    assert agent._closing_turn is not None, "the first goodbye now closes immediately"
+    assert closing.strip().endswith(agent._farewell_line.strip()), closing
+
+    await log.aclose()
+    assert buffer.getvalue().count('"event": "contact_asked"') == 1
+
+
+async def test_a_call_with_no_trigger_and_no_goodbye_is_never_asked() -> None:
+    """The behaviour this change must leave exactly alone.
+
+    Every utterance here is a question about the property, which is most of
+    every call. If the trigger were loose enough to fire on one of them, the
+    one ask would be spent on a buyer who has shown nothing.
+    """
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    agent, log, buffer = _agent(replies=6)
+
+    for question in (
+        "What is the price of a studio?",
+        "Is the handover next month?",
+        "Tell me about the payment plan.",
+    ):
+        assert ASK_MARKER not in await _say(agent, question), question
+
+    assert agent._contact.state.status == "not_asked"
+    assert agent._contact.owes_request(), "the goodbye path still owes the ask"
+
+    await log.aclose()
+    assert '"event": "contact_asked"' not in buffer.getvalue()
+
+
+def test_the_production_policy_for_a_disabled_language_refuses_the_ask() -> None:
+    """AGENTS.md:52 on the new path, tested at the seam that can exist.
+
+    NOT driven through `llm_node`, and the reason is worth recording: an
+    Arabic call cannot be OPENED in this harness at all - `adapter.disclosure`
+    refuses a language with no certified disclosure copy before a turn is ever
+    taken, which is the outer guard on the same rule. So the reachable claim
+    here is about the production factory: `build_contact_policy` reads the same
+    `data/contact.yaml`, and the policy it returns for ar and hi must refuse the
+    after-interest ask exactly as it refuses the farewell one.
+
+    This is also why an English-only trigger costs nothing. There is no call
+    where a signal this detector cannot read would have been followed by an
+    ask.
+    """
+    from test_agent import make_settings
+
+    from adapter.agent import build_contact_policy
+    from adapter.events import EventLog
+
+    for language in ("ar", "hi"):
+        log = EventLog(f"sess_{language}", stream=StringIO(), verbose=False)
+        policy = build_contact_policy(make_settings(language=language), log)
+        assert not policy.owes_request(), f"{language} has no authored ask"
+        policy.note_interest("callback", turn_index=2)
+        assert policy.on_interest(turn_index=2) is None
+        assert policy.state.asked_turn_index is None
+
+
+async def test_a_hang_up_after_the_ask_leaves_it_asked_and_owed_no_more() -> None:
+    """The buyer never answers. The ask still happened, and it is spent.
+
+    `not_asked` with an `asked_turn_index` is not a contradiction: the STATUS
+    is about what the buyer handed over, and they handed over nothing. What
+    matters for the lead is that the turn index is recorded, so the admin can
+    see the ask was made rather than reading it as another call nobody asked.
+    """
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    agent, log, buffer = _agent()
+
+    assert ASK_MARKER in await _say(agent, "I would like to see the apartment.")
+    # ... and the line drops here, which is what `buyer_left` is.
+    state = agent._contact.state
+    assert state.asked_turn_index is not None, "the ask is on the record"
+    assert state.status == "not_asked", "nothing was captured, because nothing was said"
+    assert not agent._contact.owes_request()
+
+    await log.aclose()
+    assert '"stage": "ask_after_viewing"' in buffer.getvalue()
+
+
+async def test_settling_an_interest_ask_does_not_end_the_call() -> None:
+    """FOUND IN A REALISTIC RUN, not by the suites, and it is the worst bug here.
+
+    Once the ask is spoken the next utterance is the reply, and a reply with no
+    number in it settles as `declined` - correct, and the point of the one-ask
+    rule. But the settled branch then spoke the thanks AND the authored
+    farewell and armed the close, because until now the only way to reach it
+    was through a goodbye the buyer had already said. Mid-call it read:
+
+        BUYER : Great, what floor plans are available?
+        AGENT : Thank you. Thank you for your time today ... Goodbye.
+
+    The ambassador hung up on a buyer who had just asked a question. Ending a
+    call because somebody declined to leave a number is worse than never
+    asking, which is the whole thing this card is fixing.
+    """
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    agent, log, buffer = _agent(replies=6)
+
+    assert ASK_MARKER in await _say(agent, "Can you call me back tomorrow?")
+
+    carrying_on = await _say(agent, "Great, what floor plans are available?")
+    assert agent._contact.state.status == "declined", (
+        "the ask is spent either way - a reply with nothing in it is an answer"
+    )
+    assert agent._closing_turn is None, "the call must not end on a declined ask"
+    assert agent._farewell_line.strip() not in carrying_on, carrying_on
+
+    # And the goodbye still works afterwards, on the buyer's own timing.
+    closing = await _say(agent, "Thanks, goodbye.")
+    assert agent._closing_turn is not None
+    assert closing.strip().endswith(agent._farewell_line.strip()), closing
+
+    await log.aclose()
+    assert buffer.getvalue().count('"event": "contact_asked"') == 1
+
+
+async def test_a_number_given_mid_call_is_read_back_without_ending_the_call() -> None:
+    """The capture path on the new trigger, all the way through.
+
+    The read-back and the confirmation are unchanged - a misheard digit is
+    still worse than no number - but the call carries on afterwards, because
+    the buyer is still on it.
+    """
+    pytest.importorskip("livekit.agents", reason="voice dependency group not installed")
+
+    agent, log, buffer = _agent(replies=6)
+
+    assert ASK_MARKER in await _say(agent, "I would like to see the apartment.")
+
+    read_back = await _say(agent, f"It's {NAME}, my number is {NUMBER}.")
+    assert NUMBER in read_back.replace(" ", ""), read_back
+    assert agent._contact.state.status == "unconfirmed"
+
+    await _say(agent, "Yes, that's right.")
+    state = agent._contact.state
+    assert state.status == "captured"
+    assert state.phone is not None and NUMBER in state.phone.replace(" ", "")
+    assert state.name == NAME
+    assert agent._closing_turn is None, (
+        "handing over a number mid-call is not a reason to end the call"
+    )
+
+    await log.aclose()
+    assert '"status": "captured"' in buffer.getvalue()

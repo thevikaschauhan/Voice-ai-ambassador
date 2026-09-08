@@ -65,7 +65,7 @@ from livekit.plugins import silero
 
 from ambassador.budget import BudgetPolicy, Decision, load_currency_vocabulary
 from ambassador.confirmation import ConfirmationCoordinator, Step
-from ambassador.contact import ContactPolicy, load_contact_copy
+from ambassador.contact import ContactPolicy, interest_signal, load_contact_copy
 from ambassador.farewell import (
     FarewellReading,
     contains_closing_phrase,
@@ -282,6 +282,16 @@ class AmbassadorAgent(Agent):
         # So the decision is made once per turn index and replayed.
         self._contact_turn_index: int | None = None
         self._contact_owed: _OwedTurn | None = None
+        # The after-interest ask decided at the tail of a fresh policy read,
+        # kept so the SECOND `llm_node` call for one buyer turn replays it
+        # instead of handing the turn to the model. Keyed by the same
+        # `_policy_observed_turn` that gates the read, so the two cannot drift.
+        self._interest_owed: _OwedTurn | None = None
+        # Whether the ask that is awaiting a reply was made ON a goodbye. It
+        # decides what SETTLING that ask does: after a goodbye the call is
+        # already ending and the farewell takes the settling turn, and after a
+        # high-intent turn the buyer is still here and it must not.
+        self._contact_ask_closes = False
 
         # Who this ambassador is, by language. Empty is "unnamed" and is a
         # working state, not a gap: the prompt and the disclosure both fall
@@ -1192,11 +1202,30 @@ class AmbassadorAgent(Agent):
 
             self._contact_awaiting_reply = False
             self._contact_awaiting_confirmation = False
+
+            # AN ASK MADE MID-CALL DOES NOT END THE CALL WHEN IT SETTLES, and
+            # getting this wrong was the worst defect in this change - found by
+            # reading a realistic run, not by the suites. The buyer said
+            # "Great, what floor plans are available?", which carries no number
+            # and therefore settles as `declined`, and the branch below said
+            # thank you and hung up on them. Ending a call because somebody
+            # declined to leave a number is worse than never asking.
+            #
+            # The authored line still speaks - the thanks, or the "I will leave
+            # it there rather than risk the wrong number" after a contradicted
+            # read-back, which the buyer is owed either way. It is just not a
+            # goodbye.
+            if not self._contact_ask_closes:
+                if not outcome.speaks:
+                    return None
+                return _OwedTurn(outcome.speaks, "contact", "settled")
+
             # Settled - captured, declined or unconfirmed - so the authored
             # farewell takes THIS turn with the thanks in front of it. Spoken
             # as one line rather than two turns because the alternative is
             # waiting for another buyer utterance to say goodbye, and a buyer
-            # who has just declined is already leaving.
+            # who has just declined is already leaving. That reasoning is the
+            # farewell path's alone, which is what the branch above says.
             #
             # Returned as the `farewell` policy on purpose: that branch records
             # the farewell and arms the close on this turn's seal, so contact
@@ -1215,7 +1244,8 @@ class AmbassadorAgent(Agent):
             # the caller does exactly that.
             return None
         self._contact_awaiting_reply = True
-        return _OwedTurn(step.speaks, "contact", "ask")
+        self._contact_ask_closes = True
+        return _OwedTurn(step.speaks, "contact", step.stage)
 
     def _deterministic_turn(self, tracker: TurnTracker) -> _OwedTurn | None:
         """Copy to speak instead of running this turn, or None to carry on."""
@@ -1265,13 +1295,26 @@ class AmbassadorAgent(Agent):
             # The second half of a tool-using turn. The policies already read
             # this utterance; reading it again would burn a second attempt on
             # one reply.
-            return None
+            #
+            # The after-interest ask this turn decided on IS replayed. It is a
+            # line the turn already committed to and already armed a reply for,
+            # so dropping it here would let the model answer a question the
+            # ambassador had asked - the same shape as the cancelled farewell
+            # the comment above describes.
+            return self._interest_owed
         self._policy_observed_turn = tracker.turn_index
+        self._interest_owed = None
         try:
             steps = self._policies.observe(tracker.buyer_utterance)
         except Exception:
             logger.error("confirmation policies failed; handing over", exc_info=True)
             return self._handover(tracker, "budget", "confirmation policy failure")
+
+        # NOTED BEFORE ANY POLICY SPEAKS, and the ordering is the point. A
+        # stated budget ALWAYS opens a currency confirmation, so a trigger only
+        # recorded on turns nobody else wanted would never fire for the signal
+        # that matters most.
+        self._note_interest(tracker, steps)
 
         for step in steps:
             self._record_step(tracker, step)
@@ -1286,7 +1329,52 @@ class AmbassadorAgent(Agent):
                 return self._handover(
                     tracker, step.policy, f"{step.policy} confirmation failure"
                 )
-        return None
+
+        # FIRED LAST, so every deterministic policy keeps its turn. The currency
+        # read-back that stops a misheard "two" for "ten" recommending a
+        # property twenty times off is worth more than asking a turn earlier,
+        # and the ask lands on the first turn nothing else wanted.
+        self._interest_owed = self._contact_interest(tracker)
+        return self._interest_owed
+
+    def _note_interest(self, tracker: TurnTracker, steps: tuple[Step, ...]) -> None:
+        """Record the first high-intent buyer turn, whoever takes this one.
+
+        The budget half is READ off the step the coordinator already produced
+        rather than re-parsed: `budget.find_budget` did the work under ADR-011
+        with a reviewed currency vocabulary, and a second detector in
+        `contact.py` would be a second architecture for one job. A mention is
+        present exactly when the buyer stated a budget this turn.
+        """
+        if self._contact is None or not self._contact.owes_request():
+            return
+        stated_budget = any(
+            step.budget is not None and step.budget.mention is not None
+            for step in steps
+        )
+        signal = "budget" if stated_budget else interest_signal(tracker.buyer_utterance)
+        if signal is not None:
+            self._contact.note_interest(signal, tracker.turn_index)
+
+    def _contact_interest(self, tracker: TurnTracker) -> _OwedTurn | None:
+        """The after-interest ask, when one is owed and nothing else was.
+
+        NO TURN FLOOR, and that is a decision rather than an omission: the
+        human asked for the ask "right after a high-intent moment", and the
+        trigger is the buyer's own words - somebody who opens the call with a
+        timeline has asked to be followed up. Do not add one by reflex.
+        """
+        if self._contact is None:
+            return None
+        step = self._contact.on_interest(tracker.turn_index)
+        if step is None:
+            return None
+        # The reply to this ask belongs to the policy, exactly as it does after
+        # a farewell ask: `_contact_turn` reads the next utterance before the
+        # confirmation policies see it.
+        self._contact_awaiting_reply = True
+        self._contact_ask_closes = False
+        return _OwedTurn(step.speaks, "contact", step.stage)
 
     def _record_step(self, tracker: TurnTracker, step: Step) -> None:
         """The audit line for one policy reading, spoken or not."""

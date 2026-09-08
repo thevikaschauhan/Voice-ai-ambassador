@@ -13,7 +13,7 @@ implementation card cannot silently reopen or expand it.
 | Decision | Status | Design assumption | If the answer changes |
 |---|---|---|---|
 | Durable store | **Approved** | Supabase managed Postgres on the free tier, used as portable Postgres through its connection pooler | No alternative remains open. Railway still hosts the three application services |
-| Contact capture | **Approved** | Ask once after a high-intent turn or at the first farewell for name plus phone or email; declining is valid | No alternative remains open. Arabic and Hindi remain gated on native-reviewed copy |
+| Contact capture | **Approved** | Ask once after a high-intent turn - a stated budget, a time expression with the buyer in the sentence, or a viewing/callback request - or at the first farewell, for name plus phone or email; declining is valid | No alternative remains open. A request to be transferred is deliberately NOT a trigger: the ask replaces the turn, so it would leave `escalate_to_human` uncalled. Arabic and Hindi remain gated on native-reviewed copy |
 | Admin access | **Approved** | One shared access code for the POC | Per-user login adds users, roles, sessions and a real actor id to `AdminDecision`; this is deferred |
 | Document figures and formats | **Approved** | PDF, DOCX, TXT, Markdown and pasted text; roughly 10-15 documents; approve extracted figures individually | No alternative remains open. Scans/OCR, legacy DOC, XLSX, images and URLs are deferred |
 | Interest score | **Approved** | A 0-100 explainable score; the model extracts structured signals and code does the arithmetic; manual qualify/reject | Weights remain data so later Binghatti criteria do not require a code change |

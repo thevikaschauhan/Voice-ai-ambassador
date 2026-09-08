@@ -220,8 +220,14 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "contact_asked": "one turn index",
     "contact_read_back": "one turn index; the digits stay in the sealed record",
     "contact_settled": "one turn index and an enum status",
-    # Which fixed line was spoken, out of ask/read_back. Shaped like
-    # `farewell_spoken`: the fact and the stage, not the sentence.
+    # Which fixed line was spoken. Shaped like `farewell_spoken`: the fact and
+    # the stage, not the sentence. The stages are `read_back`, `ask` for the
+    # goodbye interception, and `ask_after_<signal>` for the after-interest ask
+    # - budget, timeline, callback or viewing, the closed set in
+    # `ambassador.contact.INTEREST_SIGNALS`; plus `settled`, the thanks or the
+    # correction line closing an after-interest ask on a call that continues. The stage is the only difference
+    # between the two ask paths on this stream, which is what makes it possible
+    # to measure which trigger actually fires on real calls.
     "contact_line_spoken": "one turn index and an enum stage",
     # `config` has already masked credentials; `model` is the configured LLM
     # slug; `language`, `prompt_mode` and `guardrail_mode` are closed enums;
@@ -976,8 +982,11 @@ class TurnTracker:
         digits belong only in the in-process record the audit and the
         ambassador view read (docs/10- data handling).
 
-        The line that SETTLES the contact is not recorded here - it is the
-        farewell turn, thanks included, and `record_farewell` owns it.
+        The line that settles a contact asked ON A GOODBYE is not recorded
+        here - it is the farewell turn, thanks included, and `record_farewell`
+        owns it. One asked mid-call after a high-intent turn settles WITHOUT a
+        farewell, because the buyer is still on the call, and that line arrives
+        here under the `settled` stage.
         """
         self.spoken_chunks.append(SpokenChunk(text=text, completed=True))
         self._log.emit("contact_line_spoken", turn=self.turn_index, stage=stage)
