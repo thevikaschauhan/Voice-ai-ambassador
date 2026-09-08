@@ -11,6 +11,13 @@ const LANGUAGE_NAMES: Record<Language, string> = {
   en: 'English',
   ar: 'Arabic',
   hi: 'Hindi',
+  ru: 'Russian',
+  fr: 'French',
+  es: 'Spanish',
+  pt: 'Portuguese',
+  zh: 'Chinese',
+  ja: 'Japanese',
+  de: 'German',
 }
 
 interface CallPanelProps {

@@ -18,7 +18,7 @@
 
 // --- enums, straight off schemas.py --------------------------------------
 
-export type Language = 'en' | 'ar' | 'hi'
+export type Language = 'en' | 'ar' | 'hi' | 'ru' | 'fr' | 'es' | 'pt' | 'zh' | 'ja' | 'de'
 export type ProjectStatus = 'selling' | 'branded_enquiry' | 'sold_out'
 export type FigureKind = 'amount' | 'percent' | 'year' | 'count'
 export type ValidatorName = 'numeric_claims' | 'prohibited_language'
@@ -176,6 +176,8 @@ export const KNOWN_EVENT_NAMES = [
   'session_end',
   'session_error',
   'disclosure',
+  'response_language_changed',
+  'response_language_switch_skipped',
   'user_turn',
   'endpointing',
   'guardrail',

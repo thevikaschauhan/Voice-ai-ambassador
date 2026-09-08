@@ -3387,7 +3387,7 @@ def test_unknown_keys_are_ignored_so_the_writer_can_add_a_field():
         ("null", "not_an_object"),
         ('{"v":1}', "no_language_key"),
         ('{"v":1,"language":null}', "no_language_key"),
-        ('{"v":1,"language":"fr"}', "unsupported_language"),
+        ('{"v":1,"language":"xx"}', "unsupported_language"),
         ('{"v":1,"language":"EN"}', "unsupported_language"),
         ('{"v":1,"language":""}', "unsupported_language"),
         ('{"v":1,"language":"en-GB"}', "unsupported_language"),

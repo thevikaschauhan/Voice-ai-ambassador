@@ -506,6 +506,11 @@ class ProjectNamePolicy:
     def handed_over(self) -> bool:
         return self._handed_over
 
+    def set_language(self, language: str) -> None:
+        """Keep confirmed projects without accepting an old pending read-back."""
+        self._language = language
+        self._asked = None
+
     @property
     def confirmed(self) -> frozenset[str]:
         return frozenset(self._confirmed)

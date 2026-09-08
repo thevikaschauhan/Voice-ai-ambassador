@@ -10,7 +10,18 @@ export interface LanguageReadiness {
   ready: boolean
 }
 
-const LANGUAGES: readonly Language[] = ['en', 'ar', 'hi']
+const LANGUAGES: readonly Language[] = [
+  'en',
+  'ar',
+  'hi',
+  'ru',
+  'fr',
+  'es',
+  'pt',
+  'zh',
+  'ja',
+  'de',
+]
 
 /**
  * Which languages can open a call, read from the file that decides it.
@@ -21,8 +32,8 @@ const LANGUAGES: readonly Language[] = ['en', 'ar', 'hi']
  * selector therefore reads that file instead of carrying its own list, so it
  * cannot offer a language the agent would refuse to start in.
  *
- * A deliberately small reader rather than a YAML dependency: it needs three
- * keys and whether each is empty. If this file ever grows structure, take the
+ * A deliberately small reader rather than a YAML dependency: it needs one
+ * key per supported language and whether each is empty. If this file ever grows structure, take the
  * dependency instead of growing the parser.
  */
 export async function loadLanguageReadiness(): Promise<LanguageReadiness[]> {

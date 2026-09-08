@@ -91,3 +91,32 @@ hi:
   currency_tokens: []
   forms: []
   # VERIFY: native-authored, day 3. Empty list = digit fallback until then.
+
+ru:
+  # VERIFY: native-authored currency forms and tokens.
+  currency_tokens: []
+  forms: []
+fr:
+  # VERIFY: native-authored currency forms and tokens.
+  currency_tokens: []
+  forms: []
+es:
+  # VERIFY: native-authored currency forms and tokens.
+  currency_tokens: []
+  forms: []
+pt:
+  # VERIFY: native-authored currency forms and tokens.
+  currency_tokens: []
+  forms: []
+zh:
+  # VERIFY: native-authored currency forms and tokens.
+  currency_tokens: []
+  forms: []
+ja:
+  # VERIFY: native-authored currency forms and tokens.
+  currency_tokens: []
+  forms: []
+de:
+  # VERIFY: native-authored currency forms and tokens.
+  currency_tokens: []
+  forms: []

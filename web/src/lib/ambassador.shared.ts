@@ -17,4 +17,4 @@ import type { Language } from '@/lib/types'
  */
 export const AMBASSADOR_FALLBACK = "Binghatti's AI ambassador"
 
-export type AmbassadorNames = Record<Language, string>
+export type AmbassadorNames = Partial<Record<Language, string>>

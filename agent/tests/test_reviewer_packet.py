@@ -202,13 +202,21 @@ def test_the_hindi_packet_carries_the_lakh_crore_warning_and_arabic_does_not():
 
 def test_an_unknown_language_is_refused(tmp_path):
     result = subprocess.run(
-        [sys.executable, str(TOOL), "fr"],
+        [sys.executable, str(TOOL), "xx"],
         capture_output=True,
         text=True,
         cwd=AGENT_DIR,
         check=False,
     )
     assert result.returncode != 0
+
+
+@pytest.mark.parametrize("language", ["ru", "fr", "es", "pt", "zh", "ja", "de"])
+def test_new_switch_languages_have_a_reviewer_packet(language):
+    packet = generate(language)
+    assert f"in {LANGUAGE_NAMES[language]}" in packet
+    assert "Nothing recorded yet for this language" in packet
+    assert "native reviewer" in packet
 
 
 # --- section 5b: the agent's own words ------------------------------------

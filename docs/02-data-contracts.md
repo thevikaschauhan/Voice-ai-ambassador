@@ -81,7 +81,7 @@ ExtractedFigure
 
 ValidatedSentence      produced only by run_guardrails
   text        str
-  language    "en" | "ar" | "hi"
+  language    "en" | "ar" | "hi" | "ru" | "fr" | "es" | "pt" | "zh" | "ja" | "de"
 
 SpeakableText          produced only by verbalise; the only type TTS accepts
   text        str
@@ -423,7 +423,7 @@ rewrite what the agent had been allowed to see.
 
 ## Events and audit
 
-Every turn emits one `TurnRecord`. Full fidelity (utterance text, agent sentences, brief PII) is retained in the POC's in-memory records only; the emitted JSON event stream carries enumerated/numeric telemetry with all free-text fields redacted (validator 4 in `docs/03-`). `PHASE-2:` hashing before durable storage. Event types on the emitted stream include: `user_turn`, `guardrail`, `bridge`, `fallback`, `regeneration`, `tool_call`, `escalation`, `booking_offered`, `brief`, `brief_invalid`, `brief_stale_dropped`, `llm_request`, `llm_usage`, `llm_failure`, `event_log_backpressure`, `turn_complete` - the latency meter and any consumer must tolerate new types.
+Every turn emits one `TurnRecord`. Full fidelity (utterance text, agent sentences, brief PII) is retained in the POC's in-memory records only; the emitted JSON event stream carries enumerated/numeric telemetry with all free-text fields redacted (validator 4 in `docs/03-`). `PHASE-2:` hashing before durable storage. Event types on the emitted stream include: `user_turn`, `guardrail`, `bridge`, `fallback`, `regeneration`, `tool_call`, `escalation`, `booking_offered`, `brief`, `brief_invalid`, `brief_stale_dropped`, `response_language_changed`, `response_language_switch_skipped`, `llm_request`, `llm_usage`, `llm_failure`, `event_log_backpressure`, `turn_complete` - the latency meter and any consumer must tolerate new types.
 
 On the voice path the model starts work BEFORE the final transcript exists: LiveKit's `preemptive_generation` is on by default, so `llm_node` runs on a partial and the final transcript is adopted onto that same turn (`turn_complete.preemptive: true`). One buyer turn is still exactly one `TurnRecord` - opening a second one there split the LLM and guardrail work away from the endpointing and audio marks, which the first live audio run measured. `buyer_utterance` is the final text; the timings start from when the model began, which is earlier than the final transcript and is the honest answer to "how long did the buyer wait".
 

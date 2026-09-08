@@ -64,6 +64,13 @@ describe('the ambassador name', () => {
       en: AMBASSADOR_FALLBACK,
       ar: AMBASSADOR_FALLBACK,
       hi: AMBASSADOR_FALLBACK,
+      ru: AMBASSADOR_FALLBACK,
+      fr: AMBASSADOR_FALLBACK,
+      es: AMBASSADOR_FALLBACK,
+      pt: AMBASSADOR_FALLBACK,
+      zh: AMBASSADOR_FALLBACK,
+      ja: AMBASSADOR_FALLBACK,
+      de: AMBASSADOR_FALLBACK,
     })
   })
 

@@ -10,7 +10,7 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, model_validator
 
-Language = Literal["en", "ar", "hi"]
+Language = Literal["en", "ar", "hi", "ru", "fr", "es", "pt", "zh", "ja", "de"]
 
 ProjectStatus = Literal["selling", "branded_enquiry", "sold_out"]
 

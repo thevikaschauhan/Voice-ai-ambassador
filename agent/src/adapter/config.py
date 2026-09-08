@@ -328,6 +328,9 @@ class Settings:
     # no per-visitor quota, both of which docs/09- rules out. Zero by default
     # so the laptop demo and the console are unaffected.
     demo_max_call_seconds: int
+    auto_language_switch: bool = False
+    soniox_api_key: str = ""
+    soniox_model: str = "stt-rt-v5"
 
     @property
     def thinking_disabled(self) -> bool:
@@ -337,11 +340,14 @@ class Settings:
         return self.llm_thinking.lower() != "on"
 
     def voice_id(self, language: Language) -> str:
+        # The client-selected voices exist for the opening three languages.
+        # Additional switch targets deliberately reuse the English Fish voice
+        # until their voice references are selected and checked by ear.
         return {
             "en": self.tts_voice_id_en,
             "ar": self.tts_voice_id_ar,
             "hi": self.tts_voice_id_hi,
-        }[language]
+        }.get(language, self.tts_voice_id_en)
 
     def stt_model(self, language: Language) -> str:
         """Per-language STT routing (ADR-015). The Arabic slot is decided by the
@@ -358,7 +364,7 @@ class Settings:
         highest risk (A6) and is settled by listening to real recordings, not
         by guessing a locale string here.
         """
-        return {"en": "en-US", "ar": "ar", "hi": "hi"}[language]
+        return {"en": "en-US"}.get(language, language)
 
     def redacted(self) -> dict[str, object]:
         """Loggable view: secrets collapse to a presence flag, never a value."""
@@ -394,6 +400,8 @@ class Settings:
         }
         if self.stt_enabled and self.stt_provider.lower() == "deepgram":
             required["DEEPGRAM_API_KEY"] = self.deepgram_api_key
+        if self.stt_enabled and self.stt_provider.lower() == "soniox":
+            required["SONIOX_API_KEY"] = self.soniox_api_key
         return [name for name, value in required.items() if not value]
 
     def missing_for_transport(self) -> list[str]:
@@ -487,6 +495,11 @@ _LEAD_STORE_REMEDY = (
 )
 
 _REMEDIES: Final[dict[str, str]] = {
+    "SONIOX_API_KEY": (
+        "Soniox is the multilingual recogniser used by AUTO_LANGUAGE_SWITCH. "
+        "Add a key from console.soniox.com, or set AUTO_LANGUAGE_SWITCH=false "
+        "and choose STT_PROVIDER=deepgram for the fixed-language path."
+    ),
     "PII_ENCRYPTION_KEY": _LEAD_STORE_REMEDY,
     "PII_HASH_KEY": _LEAD_STORE_REMEDY,
     "DEEPGRAM_API_KEY": (
@@ -611,6 +624,11 @@ def load_settings(env_path: Path | None = None) -> Settings:
         stt_model_ar=_resolve(file_values, "STT_MODEL_AR"),
         deepgram_api_key=_resolve(file_values, "DEEPGRAM_API_KEY"),
         deepgram_model=_resolve(file_values, "DEEPGRAM_MODEL", "nova-3"),
+        auto_language_switch=_resolve_bool(
+            file_values, "AUTO_LANGUAGE_SWITCH", default=False
+        ),
+        soniox_api_key=_resolve(file_values, "SONIOX_API_KEY"),
+        soniox_model=_resolve(file_values, "SONIOX_MODEL", "stt-rt-v5"),
         # Off by default: OpenRouter rejects audio requests under a $0.50
         # balance (AGENTS.md project learnings, 2026-08-27), and the agent must
         # stay runnable in text mode without it.

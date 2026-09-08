@@ -241,6 +241,8 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
         "ambassador's given name"
     ),
     "session_end": "a turn count",
+    "response_language_changed": "closed language codes, turn index and certification boolean",
+    "response_language_switch_skipped": "closed language code and fixed reason",
     # ADR-018's keep-alive, from the admin API. One boolean and nothing
     # else: deliberately NOT the exception, because a driver error can
     # quote a DSN and this event is on the durable stream. The service log

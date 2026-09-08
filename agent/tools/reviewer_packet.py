@@ -1,7 +1,8 @@
 """Generate the native-reviewer packet from the data files themselves.
 
 Three issues (#4, #14, #15) are blocked on the same thing: a person who speaks
-Arabic or Hindi authoring the copy nobody on this team may write (AGENTS.md).
+one of the supported non-English languages authoring the copy nobody on this
+team may write (AGENTS.md).
 That person's time is the long-lead dependency in the whole build, so the job
 is to make their session filled-in rather than exploratory.
 
@@ -51,7 +52,17 @@ from ambassador.verbalise import (  # noqa: E402
     spoken_form_gaps,
 )
 
-LANGUAGE_NAMES = {"ar": "Arabic", "hi": "Hindi"}
+LANGUAGE_NAMES = {
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "ru": "Russian",
+    "fr": "French",
+    "es": "Spanish",
+    "pt": "Portuguese",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "de": "German",
+}
 
 # Every data file that needs native-authored ar/hi copy, mapped to the heading
 # of the section that asks for it.
@@ -119,6 +130,12 @@ SPEECH_NOTE = {
     ),
 }
 
+GENERIC_SPEECH_NOTE = (
+    "No native reviewer has signed off the recorded replies for this language. "
+    "Check the register, word choice, project names, numbers, dates and any "
+    "code-switching a Dubai buyer would naturally hear."
+)
+
 # The English glosses for the magnitude ask, per language.
 #
 # Deliberately NOT the same list twice. Hindi is asked about the Indian
@@ -133,6 +150,7 @@ MAGNITUDE_GLOSS = {
     "ar": "thousand, million, billion",
     "hi": "thousand, lakh, crore",
 }
+GENERIC_MAGNITUDE_GLOSS = "the language's words for large amounts"
 
 DIALECT_NOTE = {
     "ar": (
@@ -150,6 +168,12 @@ DIALECT_NOTE = {
         "most need to test, so please do not clean it up."
     ),
 }
+
+GENERIC_DIALECT_NOTE = (
+    "Say each line as a native speaker would to a property buyer in Dubai. "
+    "Please include the register and code-switching you would use in a real "
+    "conversation, rather than translating the English prompts word for word."
+)
 
 CATEGORY_BRIEFS = {
     "return_guarantees": (
@@ -205,7 +229,7 @@ def mag_example(language: str) -> str:
     return {
         "ar": "\u0645\u0644\u064a\u0648\u0646",
         "hi": "\u0915\u0930\u094b\u0921\u093c",
-    }[language]
+    }.get(language, "the native word for a large amount")
 
 
 def article(word: str) -> str:
@@ -611,7 +635,12 @@ def main(language: str) -> None:
         known += f" What is missing is the words written in {name}.)"
     w(known)
     w("")
-    w(bullet(f"magnitude words in {name} ({MAGNITUDE_GLOSS[language]}):"))
+    w(
+        bullet(
+            f"magnitude words in {name} "
+            f"({MAGNITUDE_GLOSS.get(language, GENERIC_MAGNITUDE_GLOSS)}):"
+        )
+    )
     w(bullet(f'the word for "percent" spelled out in {name}:'))
     w(bullet(f"currency words written in {name} (dirhams, rupees):"))
     w("")
@@ -925,7 +954,7 @@ def main(language: str) -> None:
         "end to end. Nobody on our team can read it."
     )
     w("")
-    w(SPEECH_NOTE[language])
+    w(SPEECH_NOTE.get(language, GENERIC_SPEECH_NOTE))
     w("")
     recorded = _recorded_replies(language)
     if not recorded:
@@ -1005,7 +1034,7 @@ def main(language: str) -> None:
     w("")
     w("## 6. Recordings (20 minutes, at the end)")
     w("")
-    w(DIALECT_NOTE[language])
+    w(DIALECT_NOTE.get(language, GENERIC_DIALECT_NOTE))
     w("")
     for prompt in RECORDING_PROMPTS:
         w(bullet(prompt))

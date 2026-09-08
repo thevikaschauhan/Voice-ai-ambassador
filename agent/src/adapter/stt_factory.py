@@ -36,7 +36,9 @@ from livekit.agents import stt
 # in this adapter is already imported this way (fishaudio, openai, silero); this
 # one was the exception. tests/test_plugin_registration.py holds the rule for the
 # whole adapter, not just for this line.
-from livekit.plugins import deepgram
+from livekit.plugins import deepgram, soniox
+from typing import get_args
+from ambassador.schemas import Language
 
 from .config import Settings
 from .stt_openrouter import OpenRouterSTT
@@ -74,6 +76,24 @@ def build_stt(settings: Settings, *, keyterms: tuple[str, ...] = BRAND_KEYTERMS)
 
     provider = settings.stt_provider.lower()
 
+    if settings.auto_language_switch and provider != "soniox":
+        raise ValueError(
+            "AUTO_LANGUAGE_SWITCH requires STT_PROVIDER=soniox for the supported language set"
+        )
+
+    if provider == "soniox":
+        return soniox.STT(
+            api_key=settings.soniox_api_key,
+            params=soniox.STTOptions(
+                model=settings.soniox_model,
+                language_hints=list(get_args(Language))
+                if settings.auto_language_switch
+                else [settings.language],
+                enable_language_identification=True,
+                context=soniox.ContextObject(terms=list(keyterms)),
+            ),
+        )
+
     if provider == "deepgram":
         return deepgram.STT(
             model=settings.deepgram_model,
@@ -96,7 +116,7 @@ def build_stt(settings: Settings, *, keyterms: tuple[str, ...] = BRAND_KEYTERMS)
         )
 
     raise ValueError(
-        f"unknown STT_PROVIDER {settings.stt_provider!r}; expected 'deepgram' or 'openrouter'"
+        f"unknown STT_PROVIDER {settings.stt_provider!r}; expected 'deepgram', 'soniox' or 'openrouter'"
     )
 
 
@@ -105,7 +125,7 @@ def describe(node: stt.STT | None) -> dict[str, object]:
     if node is None:
         return {"provider": None}
     provider = type(node).__module__.split(".")[-2]
-    streaming = provider == "deepgram"
+    streaming = provider in ("deepgram", "soniox")
     return {
         "provider": provider,
         "model": getattr(node, "model", None)

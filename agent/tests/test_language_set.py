@@ -49,7 +49,7 @@ def test_config_accepts_every_language(tmp_path, monkeypatch):
 
 def test_config_rejects_a_language_the_system_does_not_support(tmp_path):
     env = tmp_path / ".env"
-    env.write_text("LANGUAGE=fr\n", encoding="utf-8")
+    env.write_text("LANGUAGE=xx\n", encoding="utf-8")
     with pytest.raises(ValueError, match="LANGUAGE must be one of"):
         config.load_settings(env)
 

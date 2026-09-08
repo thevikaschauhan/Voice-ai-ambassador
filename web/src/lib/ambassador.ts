@@ -18,11 +18,22 @@ import type { Language } from '@/lib/types'
  * the agent's prompt.
  */
 
-const LANGUAGES: readonly Language[] = ['en', 'ar', 'hi']
+const LANGUAGES: readonly Language[] = [
+  'en',
+  'ar',
+  'hi',
+  'ru',
+  'fr',
+  'es',
+  'pt',
+  'zh',
+  'ja',
+  'de',
+]
 
 /**
  * A deliberately small reader rather than a YAML dependency, matching
- * `readiness.ts`: this file is three keys and their values. If it ever grows
+ * `readiness.ts`: this file is one key per supported language and its value. If it ever grows
  * structure, take the dependency instead of growing the parser.
  */
 export async function loadAmbassadorNames(): Promise<AmbassadorNames> {
@@ -38,6 +49,13 @@ export async function loadAmbassadorNames(): Promise<AmbassadorNames> {
     en: nameFor(text, 'en'),
     ar: nameFor(text, 'ar'),
     hi: nameFor(text, 'hi'),
+    ru: nameFor(text, 'ru'),
+    fr: nameFor(text, 'fr'),
+    es: nameFor(text, 'es'),
+    pt: nameFor(text, 'pt'),
+    zh: nameFor(text, 'zh'),
+    ja: nameFor(text, 'ja'),
+    de: nameFor(text, 'de'),
   }
 }
 

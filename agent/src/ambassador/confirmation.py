@@ -185,6 +185,25 @@ class ConfirmationCoordinator:
         self._last_asked: Policy | None = None
         self._quiesced = False
 
+    def set_language(
+        self,
+        language: str,
+        *,
+        budget_runs: bool,
+        project_runs: bool,
+        recognition_runs: bool,
+    ) -> None:
+        """Keep settled state and handovers, refresh which authored policies run."""
+        self._budget.set_language(language)
+        self._project.set_language(language)
+        self._recognition.set_language(language)
+        self._last_asked = None
+        self._runs = {
+            "budget": budget_runs,
+            "project": project_runs,
+            "recognition": recognition_runs,
+        }
+
     @property
     def quiesced(self) -> bool:
         return self._quiesced

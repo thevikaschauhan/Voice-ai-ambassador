@@ -47,6 +47,18 @@ export type AgentEvent = Base &
         /** In-process only: the fixed copy from data/disclosures.yaml. */
         text?: string
       }
+    | {
+        event: 'response_language_changed'
+        previous_language: Language
+        language: Language
+        turn: number
+        uncertified: boolean
+      }
+    | {
+        event: 'response_language_switch_skipped'
+        language: Language
+        reason: string
+      }
     | { event: 'user_turn'; turn: number; text: string }
     /**
      * The framework's own end-of-utterance measurement (#21). `stt_ms` is a

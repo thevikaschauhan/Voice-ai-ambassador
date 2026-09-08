@@ -1169,6 +1169,11 @@ class BudgetPolicy:
         self._attempts = 0
         self._settled = False
 
+    def set_language(self, language: str) -> None:
+        """Retain confirmed values; an old unanswered question grants nothing."""
+        self._language = language
+        self._asked = None
+
     @property
     def settled(self) -> bool:
         """True once the budget needs nothing further - confirmed, or given up

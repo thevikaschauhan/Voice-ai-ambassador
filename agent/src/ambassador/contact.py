@@ -384,6 +384,18 @@ class ContactPolicy:
         self._pending_name: str | None = None
         self._state = ContactCapture(status="not_asked")
 
+    def set_language(
+        self, language: str, *, cancel_pending: bool, turn_index: int
+    ) -> None:
+        """A language switch cannot turn an unanswered contact ask into consent."""
+        self._language = language
+        if cancel_pending:
+            self._pending_phone = self._pending_name = None
+            self._state = self._state.model_copy(
+                update={"status": "unconfirmed", "phone": None, "confirmed": False}
+            )
+            self._emit("contact_settled", turn=turn_index, status="unconfirmed")
+
     @property
     def state(self) -> ContactCapture:
         return self._state

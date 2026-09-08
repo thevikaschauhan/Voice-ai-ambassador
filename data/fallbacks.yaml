@@ -22,6 +22,20 @@
 
 bridge:
   en: "Let me be precise about that figure rather than guess."
+  # VERIFY: ru uses English failure copy until native review.
+  ru: "Let me be precise about that figure rather than guess."
+  # VERIFY: fr uses English failure copy until native review.
+  fr: "Let me be precise about that figure rather than guess."
+  # VERIFY: es uses English failure copy until native review.
+  es: "Let me be precise about that figure rather than guess."
+  # VERIFY: pt uses English failure copy until native review.
+  pt: "Let me be precise about that figure rather than guess."
+  # VERIFY: zh uses English failure copy until native review.
+  zh: "Let me be precise about that figure rather than guess."
+  # VERIFY: ja uses English failure copy until native review.
+  ja: "Let me be precise about that figure rather than guess."
+  # VERIFY: de uses English failure copy until native review.
+  de: "Let me be precise about that figure rather than guess."
 
   ar: "Let me be precise about that figure rather than guess."
   # VERIFY: native-authored Arabic bridge copy, day 3.
@@ -30,6 +44,20 @@ bridge:
   # VERIFY: native-authored Hindi bridge copy, day 3.
 
 fallback:
+  # VERIFY: ru uses English failure copy until native review.
+  ru: "I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors."
+  # VERIFY: fr uses English failure copy until native review.
+  fr: "I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors."
+  # VERIFY: es uses English failure copy until native review.
+  es: "I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors."
+  # VERIFY: pt uses English failure copy until native review.
+  pt: "I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors."
+  # VERIFY: zh uses English failure copy until native review.
+  zh: "I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors."
+  # VERIFY: ja uses English failure copy until native review.
+  ja: "I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors."
+  # VERIFY: de uses English failure copy until native review.
+  de: "I do not want to quote you anything I cannot confirm. Let me put you through to one of our ambassadors."
   en: >-
     I do not want to quote you anything I cannot confirm.
     Let me put you through to one of our ambassadors.

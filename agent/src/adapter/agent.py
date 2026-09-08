@@ -48,6 +48,7 @@ from livekit.agents import (
     ModelSettings,
     RunContext,
     SpeechCreatedEvent,
+    UserInputTranscribedEvent,
     WorkerOptions,
     cli,
     function_tool,
@@ -95,6 +96,7 @@ from ambassador.projects import (
 from ambassador.ambassadors import load_ambassadors
 from ambassador.recognition import RecognitionMonitor, load_noise_words
 from ambassador.schemas import Language
+from ambassador.language_switch import choose_language
 from ambassador.verbalise import load_spoken_forms
 from evals.runner import Harness
 
@@ -184,11 +186,17 @@ class AmbassadorAgent(Agent):
         close_call: Callable[[str], Awaitable[None]] | None = None,
         knowledge: KnowledgeRetriever | None = None,
         contact: ContactPolicy | None = None,
+        update_tts_voice: Callable[[str], None] | None = None,
     ) -> None:
         projects = load_inventory()
         self._projects = projects
         self._project_ids = [p.id for p in projects]
         self._settings = settings
+        self._initial_language = settings.language
+        self._session_voice_id = settings.voice_id(settings.language)
+        self._language_segments: list[tuple[str, int]] = []
+        self._guard_factory = guard_factory
+        self._update_tts_voice = update_tts_voice
         self._log = log
         # ADR-019. None until the pool is wired, and None is a working
         # configuration: a call with no knowledge base speaks the
@@ -502,6 +510,10 @@ class AmbassadorAgent(Agent):
     def tracker(self) -> TurnTracker | None:
         return self._tracker
 
+    def set_tts_voice_updater(self, updater: Callable[[str], None]) -> None:
+        """Attach the framework-owned TTS option update after session setup."""
+        self._update_tts_voice = updater
+
     # -- the opening disclosure -------------------------------------------
 
     async def on_enter(self) -> None:
@@ -570,6 +582,10 @@ class AmbassadorAgent(Agent):
         measured (#51). When a turn is already open on a partial, the final
         transcript is adopted onto it instead.
         """
+        if self._settings.auto_language_switch:
+            language = choose_language(self._settings.language, self._language_segments)
+            self._language_segments.clear()
+            await self._set_response_language(language)
         text = new_message.text_content or ""
         tracker = self._tracker
         if tracker is not None and tracker.opened_on_partial and not tracker.adopted:
@@ -577,6 +593,98 @@ class AmbassadorAgent(Agent):
             self._note_closing_from_final(text, tracker)
             return
         self._start_tracker(text)
+
+    def note_transcribed_language(self, event: UserInputTranscribedEvent) -> None:
+        """Collect final recogniser evidence; partials never change speech state."""
+        if self._settings.auto_language_switch and event.is_final:
+            self._language_segments.append(
+                (
+                    str(event.language or "unknown"),
+                    sum(c.isalpha() for c in event.transcript),
+                )
+            )
+
+    async def _set_response_language(self, language: Language) -> None:
+        previous = self._settings.language
+        if previous == language:
+            return
+        certified = load_disclosures().is_certified(language)
+        if not certified and not self._settings.allow_uncertified_language:
+            self._log.emit(
+                "response_language_switch_skipped",
+                language=language,
+                reason="uncertified_language",
+            )
+            return
+        # Prepare a complete speech profile before changing the current one.
+        guard = self._guard_factory(
+            language=language,
+            allowed=self._guard.allowed,
+            patterns=self._guard.patterns,
+            forms=self._guard.forms,
+            mode=self._settings.guardrail_mode,
+            vocatives=self._buyer_vocatives,
+        )
+        budget_runs = self._confirmations.covers(language)
+        project_runs = self._confirmations.covers(language, PROJECT_KEYS)
+        recognition_runs = self._confirmations.covers(language, RECOGNITION_KEYS)
+        fixed_lines = {
+            key: guard.compose(self._confirmations.line(language, key))
+            for key, enabled in (
+                ("give_up", budget_runs),
+                ("project_give_up", project_runs),
+                ("recognition_escalation", recognition_runs),
+            )
+            if enabled
+        }
+        farewell = guard.compose(self._farewells.farewell_speech(language))
+        instructions = build_ambassador_prompt(
+            serialise_for_prompt(self._projects),
+            language,
+            system_confirms_budget=budget_runs,
+            system_confirms_project=project_runs,
+            ambassador_name=self._ambassador_name,
+        )
+        # update_instructions is LiveKit's public hook and keeps chat history.
+        await self.update_instructions(instructions)
+        voice_id = self._settings.voice_id(language)
+        if self._update_tts_voice is not None:
+            self._update_tts_voice(voice_id)
+        self._settings = replace(self._settings, language=language)
+        self._session_voice_id = voice_id
+        self._guard = guard
+        self._budget_policy_runs = budget_runs
+        self._project_policy_runs = project_runs
+        self._recognition_policy_runs = recognition_runs
+        self._policies.set_language(
+            language,
+            budget_runs=budget_runs,
+            project_runs=project_runs,
+            recognition_runs=recognition_runs,
+        )
+        self._fixed_lines = fixed_lines
+        self._farewell_line = farewell
+        self._farewell_detects = self._farewells.detects(language)
+        self._signed_off_turn = None
+        if self._contact is not None:
+            self._contact.set_language(
+                language,
+                cancel_pending=self._contact_awaiting_reply,
+                turn_index=self._turn_index + 1,
+            )
+        self._contact_awaiting_reply = False
+        self._contact_awaiting_confirmation = False
+        self._contact_ask_closes = False
+        if self._knowledge is not None:
+            self._knowledge.set_language(language)
+        self._brief.set_language(language)
+        self._log.emit(
+            "response_language_changed",
+            previous_language=previous,
+            language=language,
+            turn=self._turn_index + 1,
+            uncertified=not certified,
+        )
 
     def _note_closing_from_final(self, text: str, tracker: TurnTracker) -> None:
         """Read the FINAL transcript for a closing, after the model has the turn.
@@ -896,8 +1004,8 @@ class AmbassadorAgent(Agent):
             call_end_reason=self._call_end_reason,
             ended_cleanly=not any(turn.audit_incomplete for turn in turns),
             language=self._settings.language,
-            requested_language=self._settings.language,
-            uncertified_fallback=(self._opening_language != self._settings.language),
+            requested_language=self._initial_language,
+            uncertified_fallback=(self._opening_language != self._initial_language),
             inventory_version=f"{len(self._projects)}-records",
             ambassador_name=self._ambassador_name,
             turns=turns,
@@ -1761,7 +1869,7 @@ class AmbassadorAgent(Agent):
         # turn rather than per frame, and unity for the quietest voice - which
         # every other voice is matched down to - so the common path is the
         # identical object it was before.
-        gain = gain_for(self._settings.voice_id(self._settings.language))
+        gain = gain_for(self._session_voice_id)
         async for frame in Agent.default.tts_node(self, spoken, model_settings):
             if first:
                 first = False
@@ -2566,7 +2674,20 @@ async def entrypoint(ctx: JobContext) -> None:
         vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
         llm=llm.llm,
         tts=tts,
+        # Language must be settled from the final transcript before generation.
+        # Fixed-language calls retain the existing framework default.
+        preemptive_generation=False if settings.auto_language_switch else NOT_GIVEN,
     )
+
+    def update_tts_voice(voice_id: str) -> None:
+        if session.tts is not None:
+            session.tts.update_options(voice_id=voice_id)
+
+    agent.set_tts_voice_updater(update_tts_voice)
+
+    @session.on("user_input_transcribed")
+    def _on_transcribed(event: UserInputTranscribedEvent) -> None:
+        agent.note_transcribed_language(event)
 
     @session.on("speech_created")
     def _on_speech_created(ev: SpeechCreatedEvent) -> None:
