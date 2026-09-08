@@ -206,6 +206,91 @@ describe('middleware writes one line per admin request that arrives', () => {
   })
 })
 
+describe('an arrival says whether it is a prefetch, because an arrival is not a render', () => {
+  /**
+   * WHY THIS FIELD EXISTS, from a measurement (task-web-request-log-prefetch-flag).
+   *
+   * On 2026-09-07 a visit produced SIXTEEN arrivals at /admin/knowledge/<id>
+   * and not one document read, on either side of the wire. That looked like a
+   * defect in the detail page until the leads route answered it: three arrivals
+   * at /admin/leads/<id>, of which the first two also read nothing and the
+   * third read normally and reached admin-api. So an arrival at a dynamic route
+   * does not imply a render, and the page was never run rather than running
+   * without fetching.
+   *
+   * `web_request` records method and pathname only, which makes a prefetch and
+   * a navigation IDENTICAL in the log - the sixteen and the one look the same.
+   * Without this flag every count of "page views" is wrong by the prefetch
+   * factor, which that day was 16 to 0.
+   *
+   * THE HEADER EXCEPTION, written beside the rule it narrows. `request-log.ts`
+   * says no header is ever recorded. This narrows that rule and nothing else:
+   * two header NAMES are tested for presence, the boolean that results is
+   * logged, and the VALUE is never read into the line. Recording a derived
+   * boolean is not recording the header. Case (e) plants the marker in the
+   * header's own value to hold that line.
+   *
+   * Names are Next's own (16.3.4, client/components/app-router-headers.js):
+   * `next-router-prefetch` and `next-router-segment-prefetch`. `rsc` marks ANY
+   * RSC request, navigations included, so it is NOT the discriminator - case
+   * (d) is the control that fails if someone reaches for it.
+   */
+  async function arrive(headers: Record<string, string>): Promise<Record<string, unknown>[]> {
+    const lines = captureLines()
+    const { middleware } = await import('@/middleware')
+    const { NextRequest } = await import('next/server')
+    middleware(new NextRequest('https://demo.example/admin/knowledge/some-id', { headers }))
+    return lines.map((l) => JSON.parse(l) as Record<string, unknown>)
+  }
+
+  it('flags an arrival carrying next-router-prefetch', async () => {
+    const [line] = await arrive({ 'next-router-prefetch': '1' })
+    expect(line.event).toBe('web_request')
+    expect(line.prefetch).toBe(true)
+  })
+
+  it('flags an arrival carrying next-router-segment-prefetch', async () => {
+    const [line] = await arrive({ 'next-router-segment-prefetch': '/_tree' })
+    expect(line.prefetch).toBe(true)
+  })
+
+  it('records false, not absent, when neither header is present', async () => {
+    // `false` and "the field is missing" are different claims: a missing field
+    // is how a line written before this shipped looks, and a count that treats
+    // the two alike silently folds old lines into "navigation".
+    const [line] = await arrive({})
+    expect(line.prefetch).toBe(false)
+    expect('prefetch' in line).toBe(true)
+  })
+
+  it('does NOT flag an rsc request, which is any RSC fetch including a navigation', async () => {
+    const [line] = await arrive({ rsc: '1' })
+    expect(line.prefetch).toBe(false)
+  })
+
+  it('carries no header value, with the marker planted in the header itself', async () => {
+    const lines = await arrive({
+      'next-router-prefetch': `${MARKER}-header`,
+      cookie: `admin_session=${MARKER}-cookie`,
+    })
+    // Assert the line EXISTS before asserting what it lacks: `not.toContain`
+    // over an empty array passes for the wrong reason, and this is the case
+    // that would be silently vacuous if the emitter ever went quiet.
+    expect(lines).toHaveLength(1)
+    expect(lines[0].prefetch).toBe(true)
+    expect(JSON.stringify(lines)).not.toContain(MARKER)
+  })
+
+  it('carries no key beyond the ones it is specified to carry', async () => {
+    // A future header cannot ride in unnoticed: the shape is pinned, not
+    // merely checked for the fields we happen to want today.
+    const [line] = await arrive({ 'next-router-prefetch': '1' })
+    expect(Object.keys(line).sort()).toEqual(
+      ['event', 'level', 'method', 'path', 'prefetch', 'ts'].sort(),
+    )
+  })
+})
+
 describe('a page read writes its own line, and not the proxy\'s', () => {
   /**
    * WHY A THIRD EVENT RATHER THAN A WIDER `admin_proxy` (task-web-request-log-page-reads).
