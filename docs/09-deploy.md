@@ -459,6 +459,22 @@ Both kinds of problem are reported together, on purpose: a cycle here costs a
 rebuild and a deploy, so learning about the second after fixing the first costs
 a round trip for nothing.
 
+**That header undersells what the list can hold, so read the names and not the
+header.** The sample above is an empty environment, where `DATABASE_URL` is
+unset and the lead store therefore asks for nothing. Set `DATABASE_URL` and the
+same `missing credentials for the voice path:` line can name
+`PII_ENCRYPTION_KEY` and `PII_HASH_KEY`, which are not voice-path credentials
+at all - they encrypt and hash buyer contact details. `preflight()` hands
+`worker_refusal` the output of `missing_for_worker()`, which concatenates
+transport, voice and lead-store into one list, and a single header is then
+written over the whole thing. Only the header is wrong: each
+name still gets its own remedy line underneath, and the two PII keys get the
+lead-store remedy rather than a voice one, so the message contradicts itself in
+a way that is obvious once you have seen it and invisible if you skim the first
+line. This is a dated observation of the current build and not the intended
+wording. If the header is ever reworded, this sample has to be reworded in the
+same change: it is one string and this is the only quotation of it.
+
 A non-zero exit is what the restart policy is for, so the deploy crash-loops
 through its ten retries and ends up **failed** on the dashboard, with the
 variable names in the log. That policy is on-failure with ten restarts, and it
@@ -1171,9 +1187,14 @@ The first step is the one that cannot be undone, so it goes first deliberately.
      and the only one safe to assert in code.
 
    So a correct URI passes three shape checks: user starts with `postgres.`,
-   host contains `pooler.supabase.com`, port is 5432. `VERIFY:` these shapes
-   are from Supabase's connection guide, read 2026-09-03; the dashboard is the
-   authority if it disagrees.
+   host contains `pooler.supabase.com`, port is 5432. The host and port halves
+   are no longer only a reading of the guide: the worker's own
+   `lead_store_connected target=aws-<region>.pooler.supabase.com:5432`, quoted
+   in step 3, is a live process reporting the endpoint it actually connected
+   to. `VERIFY:` still stands on the **user** shape, which no log line prints,
+   because the events here name a host and a port and deliberately never a
+   user; that half is from Supabase's connection guide, read 2026-09-03, and
+   the dashboard is the authority if it disagrees.
 
    Which makes the rule not "use 5432" but **take the pooler URI you already
    have and change only its port**. Asking for "the port on 5432" produced the
@@ -1231,8 +1252,8 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    the pooler.
 
    **The first line is now observed rather than expected.** From `admin-api`'s
-   pre-deploy on 2026-09-03 at 19:21:14Z, with the migration line that follows
-   it in the same container:
+   pre-deploy on 2026-09-03 at 19:21:14Z, with the migration line from the same
+   container:
 
    ```
    database port 5432 (session mode)
@@ -1245,6 +1266,16 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    and says nothing about which port it used. The pre-deploy container then
    exits and the start command runs, so `Application startup complete` from
    `uvicorn` is a third fact and not a restatement of either.
+
+   **Read them as a pair and never by position.** The runner prints the port
+   line first - `migrations.py` calls `session_mode_line(dsn)` before it runs
+   anything - but the order they appear in is not dependable. On 2026-09-08 the
+   same pre-deploy logged `applied 1 migration(s): 0006` and then the port
+   line, reversed against the source, with 248 microseconds between their
+   ingest timestamps. Two lines that leave the process together arrive together,
+   and at that resolution the log's ordering is not evidence of anything. A
+   check that greps for "the line after the port line" will pass and fail on
+   the same code; grep for each line on its own.
 
    The very next deploy, thirteen minutes later at 19:34:17Z, carried no new
    migration and printed the other branch:
@@ -1261,11 +1292,23 @@ The first step is the one that cannot be undone, so it goes first deliberately.
    them has lost nothing - and a deploy that prints NEITHER has not "kept the
    old schema", it has failed before the runner spoke.
 
-   **The second line is still expected and not yet observed.** It arrives
-   **once per call**, not once per process and not on the first write: the
-   worker starts the connect as a task at `session_start` and emits
+   **The second line is now observed as well.** It arrives **once per call**,
+   not once per process and not on the first write: the worker starts the
+   connect as a task at `session_start` and emits
    `lead_store_connected target=<host>:<port>` when it completes, so every
-   call that reaches a database prints it exactly once.
+   call that reaches a database prints it exactly once. Read from the worker's
+   log on 2026-09-08, on the single call that container took:
+
+   ```
+   lead_store_connected target=aws-<region>.pooler.supabase.com:5432
+   ```
+
+   One line on a container that took one call, which is the once-per-call rule
+   holding rather than being restated. It is also the reading the paragraph
+   above was waiting for. The pre-deploy port line proves the DSN the
+   **migration runner** used; this proves the one the **worker** used. They are
+   two services with two variables, so they can disagree, and until this line
+   appeared nothing in the logs could tell you that they did not.
 
    Its absence therefore means one of three things, and the worker names which:
 
@@ -1384,10 +1427,11 @@ the tree rather than from here: this document deliberately quotes no version
 number, because a line that names today's version goes stale the next time
 somebody adds a `.sql` file and no diff to this file will show it.
 
-Step 3 does quote `applied 1 migration(s): 0003`, and that is not an exception
-to this rule. It is a **dated observation** of one deployment, which stays true
-for ever because it names when it was read; the shape above is an
-**expectation**, which is what goes stale. Keep the distinction when you edit
+Step 3 does quote `applied 1 migration(s): 0003`, and `0006` from a later
+deployment, and neither is an exception to this rule. Both are **dated
+observations** of one deployment each, which stay true for ever because they
+name when they were read; the shape above is an **expectation**, which is what
+goes stale. Keep the distinction when you edit
 either: an expectation with a version number in it is the bug this paragraph
 exists to prevent, and it has already been fixed once.
 
@@ -1491,6 +1535,32 @@ self-heal would look identical from the platform: a green deployment, a live
 container, and a log whose newest interesting line is hours old. That is why
 this reads the ordering of the last two shapes and not the presence of the
 first.
+
+**And read it from the CURRENT container.** A merge that touches `agent/**`,
+`data/**`, the `Dockerfile` or `.dockerignore` replaces the worker container,
+so the newest `registered worker` line in the service's history can belong to a
+container that is already draining. Pass the deployment id of the running
+deployment rather than letting `railway logs` pick, and check that the line you
+found came from it. The check above is about *now*, and a line from the
+previous container answers it about the wrong process.
+
+**Do not deploy the worker in the window before a demo or a scheduled test
+call.** Which in practice means not merging anything that touches `agent/**`,
+`data/**`, the `Dockerfile` or `.dockerignore`, since those are the patterns
+that replace the container. The handoff is near-simultaneous, and which way it
+falls is not guaranteed. Measured three times: a 0.48 s overlap on #157, a
+0.61 s gap on #159, and a 0.55 s gap on #166, taking the new container's
+`registered worker` minus the old container's `draining worker`, with positive
+meaning a window in which nobody was registered. The magnitude is the stable
+part; the sign is not, and should not be trusted even as a sign, because the
+two readings come from two containers on two hosts and half a second is inside
+the clock skew you would expect between them. So the honest statement is that
+the changeover takes under a second and may leave a brief hole, not that it
+leaves one. A call dispatched into that hole finds no worker. The old
+container also lingers well past the swap - its `CMD` carries
+`--drain-timeout 600`, so it stays up finishing whatever it already had - which
+is why the swap is safe for a call already in progress and unsafe only for one
+that starts during it.
 
 ## Not deployed
 
