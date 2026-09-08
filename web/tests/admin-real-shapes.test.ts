@@ -405,10 +405,8 @@ describe('the document detail against the real response', () => {
  * is that a fixture of the VIEW type says nothing about the wire, and
  * `source_type: 'md'` is a wire value that did not exist a day ago.
  *
- * `figures_pending` is here because the response carries it (#157). The web
- * tier does not read it yet - the third "Needs attention" panel is a separate
- * card - and pinning it now means the day that panel is built, the field is
- * already known to be real rather than hoped for.
+ * `figures_pending` came from this real capture (#157). The overview and list
+ * now read it, and the assertion below keeps the wire-to-view count intact.
  */
 const REAL_MARKDOWN_DOCUMENT_ROW = {
   id: '6c6f6bf6-3543-4ccf-ac03-240ce7936420',
@@ -453,6 +451,7 @@ describe('a Markdown document against the real response', () => {
     expect(read.state).toBe('ok')
     if (read.state !== 'ok') return
     expect(read.data[0].source_type).toBe('md')
+    expect(read.data[0].figures_pending).toBe(REAL_MARKDOWN_DOCUMENT_ROW.figures_pending)
   })
 
   it('has an English label for it, so the list never prints the enum', async () => {

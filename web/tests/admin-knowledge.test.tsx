@@ -483,6 +483,7 @@ describe('the document list', () => {
       parse_error_code: null,
       created_at: '2026-09-03T09:00:00Z',
       published_at: null,
+      figures_pending: 0,
     },
     {
       id: 'doc-2',
@@ -493,6 +494,7 @@ describe('the document list', () => {
       parse_error_code: 'no_extractable_text',
       created_at: '2026-09-03T08:00:00Z',
       published_at: null,
+      figures_pending: 0,
     },
   ]
 
@@ -777,6 +779,7 @@ describe('the knowledge list a reviewer reads', () => {
       parse_error_code: null,
       created_at: '2026-09-03T09:00:00Z',
       published_at: null,
+      figures_pending: 0,
     },
     {
       id: 'doc-docx',
@@ -787,6 +790,7 @@ describe('the knowledge list a reviewer reads', () => {
       parse_error_code: null,
       created_at: '2026-09-02T09:00:00Z',
       published_at: '2026-09-02T10:00:00Z',
+      figures_pending: 0,
     },
     {
       id: 'doc-txt',
@@ -797,6 +801,7 @@ describe('the knowledge list a reviewer reads', () => {
       parse_error_code: null,
       created_at: '2026-09-01T09:00:00Z',
       published_at: null,
+      figures_pending: 0,
     },
     {
       id: 'doc-pdf',
@@ -807,6 +812,7 @@ describe('the knowledge list a reviewer reads', () => {
       parse_error_code: null,
       created_at: '2026-08-31T09:00:00Z',
       published_at: null,
+      figures_pending: 0,
     },
   ]
 
