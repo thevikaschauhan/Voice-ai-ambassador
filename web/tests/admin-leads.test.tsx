@@ -140,6 +140,16 @@ const DETAIL: LeadDetailRecord = {
         max_points: 10,
         evidence_turn_indexes: [],
       },
+      // Half of its weight, which is the only row that lands in the middle
+      // band - without it the fixture could not tell amber from green.
+      {
+        signal: 'questions_asked',
+        observed: true,
+        raw_value: 1,
+        points_awarded: 5,
+        max_points: 10,
+        evidence_turn_indexes: [7],
+      },
     ],
   },
   contact: { status: 'captured', name: 'A buyer', phone: '+971500000000', email: null },
@@ -413,6 +423,29 @@ describe('the lead list a reviewer works from', () => {
     // so an empty string is the correct reading of "not a display heading".
     expect(score.dataset.type ?? '').not.toMatch(/display/)
   })
+
+  it('colour codes the list score on the same bands as the detail', async () => {
+    // One band system across both surfaces, for the same reason the status
+    // badges live in one module: two colour vocabularies for one number is
+    // how a reviewer learns to distrust the colour.
+    await renderList(ROWS)
+    const score = screen.getByText('61')
+    expect(score).toHaveAttribute('data-score-band', 'medium')
+    expect(score.className).toMatch(/var\(--color-warning\)/)
+  })
+})
+
+describe('the score bands', () => {
+  it('puts every boundary value in the band the contract names', async () => {
+    const { scoreBand } = (await load('@/components/admin/score')) as unknown as {
+      scoreBand: (value: number) => string
+    }
+    // 0-39 red, 40-69 amber, 70-100 green. The boundaries are asserted
+    // because an off-by-one here recolours a whole screen quietly.
+    expect([0, 39].map(scoreBand)).toEqual(['low', 'low'])
+    expect([40, 69].map(scoreBand)).toEqual(['medium', 'medium'])
+    expect([70, 100].map(scoreBand)).toEqual(['high', 'high'])
+  })
 })
 
 describe('the lead detail', () => {
@@ -423,19 +456,78 @@ describe('the lead detail', () => {
     expect(screen.getByText(/generated/i)).toBeInTheDocument()
   })
 
-  it('shows the score with its evidence, not just the number', async () => {
+  it('scores every category out of 100 and colour codes its band', async () => {
+    /*
+     * The human's ask, 2026-09-08: "the score should be out of 100 for every
+     * category and make them color coded". The rubric weights the signals
+     * differently - 15, 20, 10 and 10 points in this fixture - so a row read
+     * "15 of 15" beside "0 of 10" and a reviewer had to divide before they
+     * could compare two of them. Every row is now the same 0-100 scale.
+     *
+     * The BAND is read off the progress bar's variant rather than a class
+     * name: error/warning/success are the theme's own status tokens, so a
+     * palette change moves the colour and this case still holds.
+     */
     await renderDetail(DETAIL)
-    expect(screen.getByText('61')).toBeInTheDocument()
-    const budget = screen.getByText(/budget stated/i).closest('li') as HTMLElement
-    expect(within(budget).getByText('15')).toBeInTheDocument()
-    // The evidence turn is what makes a score reviewable rather than asserted.
-    expect(within(budget).getByText(/turn 4/i)).toBeInTheDocument()
+
+    const budget = screen.getByRole('progressbar', { name: /budget stated/i })
+    expect(budget).toHaveAttribute('aria-valuenow', '100')
+    expect(budget).toHaveAttribute('aria-valuemax', '100')
+    expect(budget.closest('[data-variant]')).toHaveAttribute('data-variant', 'success')
+
+    // 5 of 10 points is 50 out of 100, which is the middle band.
+    const questions = screen.getByRole('progressbar', { name: /questions asked/i })
+    expect(questions).toHaveAttribute('aria-valuenow', '50')
+    expect(questions.closest('[data-variant]')).toHaveAttribute('data-variant', 'warning')
   })
 
-  it('shows a signal that scored nothing, so the total is legible', async () => {
+  it('shows a category that scored nothing as 0, so no signal goes missing', async () => {
+    // Kept from the design this replaces: a signal that scored nothing stays
+    // on screen, because a breakdown that silently drops its zeros reads as a
+    // shorter rubric than the one that actually ran.
     await renderDetail(DETAIL)
-    const timeline = screen.getByText(/timeline stated/i).closest('li') as HTMLElement
-    expect(within(timeline).getByText(/not observed/i)).toBeInTheDocument()
+    const timeline = screen.getByRole('progressbar', { name: /timeline stated/i })
+    expect(timeline).toHaveAttribute('aria-valuenow', '0')
+    expect(timeline.closest('[data-variant]')).toHaveAttribute('data-variant', 'error')
+  })
+
+  it('colour codes the total on the same bands', async () => {
+    const { container } = await renderDetail(DETAIL)
+    const total = container.querySelector('[data-score-total]') as HTMLElement
+    expect(total).not.toBeNull()
+    expect(total.textContent).toBe('61')
+    expect(total).toHaveAttribute('data-score-band', 'medium')
+    // The class as well as the band: `data-score-band` alone would pass on a
+    // component that named the band and painted nothing.
+    expect(total.className).toMatch(/var\(--color-warning\)/)
+  })
+
+  it('says nothing about turns anywhere in the detail', async () => {
+    /*
+     * The human's ask, 2026-09-08: "Remove turn mention in lead section it
+     * doesn't provide any value. Remove Buyer turns cited by the score".
+     *
+     * A NEGATIVE ASSERTION NEEDS A POSITIVE PRECONDITION. This fixture cites
+     * turn indexes AND carries a transcript, one row of it incomplete, so the
+     * rendering this replaces had four separate places to write "turn". The
+     * first two expectations prove the detail rendered at all before the
+     * third one claims the word is absent from it.
+     */
+    const { container } = await renderDetail({
+      ...DETAIL,
+      turns: [
+        ...DETAIL.turns,
+        { turn_index: 12, speaker: 'buyer', text: 'A partial sentence.', audit_incomplete: true },
+      ],
+    })
+    expect(screen.getByRole('heading', { name: /interest score/i })).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: /budget stated/i })).toBeInTheDocument()
+    expect(container.textContent ?? '').not.toMatch(/turn/i)
+    // The transcript card goes with the word, and so does the badge that only
+    // ever appeared on one of its rows.
+    expect(screen.queryByRole('heading', { name: /buyer turns/i })).toBeNull()
+    expect(screen.queryByText('My budget is two million.')).toBeNull()
+    expect(screen.queryByText('incomplete')).toBeNull()
   })
 
   it('shows the immutable decision history', async () => {
@@ -527,11 +619,13 @@ describe('the lead detail', () => {
  * "Awaiting analysis" card, and the inverse case below proves the collapse is
  * conditional rather than a deletion.
  *
- * ONE CASE HERE IS NOT IN THE CARD and is a miss from PR E: the cited-turn
- * badge is still `variant="warning"`. E collapsed the LIST's badges to three
- * weights and left this one yellow, so the admin still runs two badge
- * vocabularies - one per surface. An incomplete turn is a fact about the
- * recording, not a warning a reviewer must act on, exactly as on the list.
+ * THE TRANSCRIPT CARD IS GONE (human request, 2026-09-08: "Remove Buyer turns
+ * cited by the score"), and with it the incomplete-recording badge that only
+ * ever appeared on one of its rows - the case that policed that badge's
+ * variant was deleted rather than left asserting against a section no reader
+ * can reach. The turns are still in `LeadDetailRecord` and still come down the
+ * wire; nothing renders them. "says nothing about turns anywhere in the
+ * detail" above is what keeps them unrendered.
  *
  * WHY THE DECISION CONTROL IS NOT ASTRYX'S SegmentedControl, measured rather
  * than preferred: that component is a RADIOGROUP - role=radio, aria-checked,
@@ -599,7 +693,7 @@ describe('the lead detail a reviewer decides from', () => {
     expect(screen.queryByText(/no score: the analysis has not completed/i)).toBeNull()
   })
 
-  it('collapses a failed analysis even when the call has turns', async () => {
+  it('collapses a failed analysis even when the call has a transcript', async () => {
     /*
      * FOUND IN THE BROWSER, and it is the case my RED fixture could not
      * reach: `AWAITING` has `turns: []`, so the predicate was never asked
@@ -608,11 +702,14 @@ describe('the lead detail a reviewer decides from', () => {
      * are not - and it rendered all three cards again, with "Analysis failed"
      * in one and "No score" in the next.
      *
-     * TURNS ARE TRANSCRIPT, NOT ANALYSIS OUTPUT. Whether the analysis produced
-     * anything is a question about the summary and the score; the turns
-     * section stands on its own and stays whenever there are turns to show.
+     * TURNS ARE TRANSCRIPT, NOT ANALYSIS OUTPUT, and the predicate must still
+     * ignore them - a lead with a transcript and no analysis is exactly the
+     * lead this collapse exists for. What changed on 2026-09-08 is that the
+     * transcript is no longer rendered either, so this case also holds the
+     * copy honest: the "awaiting" card must not promise a cited turn that no
+     * part of the page will ever show.
      */
-    await renderDetail({
+    const { container } = await renderDetail({
       ...AWAITING,
       analysis_status: 'failed',
       turns: [{ turn_index: 1, speaker: 'buyer', text: 'Not now.', audit_incomplete: false }],
@@ -620,9 +717,9 @@ describe('the lead detail a reviewer decides from', () => {
     expect(screen.getByRole('heading', { name: /awaiting analysis/i })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: /^summary$/i })).toBeNull()
     expect(screen.queryByRole('heading', { name: /interest score/i })).toBeNull()
-    // The transcript is still worth showing: it is what the call produced.
-    expect(screen.getByRole('heading', { name: /buyer turns/i })).toBeInTheDocument()
-    expect(screen.getByText('Not now.')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /buyer turns/i })).toBeNull()
+    expect(screen.queryByText('Not now.')).toBeNull()
+    expect(container.textContent ?? '').not.toMatch(/turn/i)
   })
 
   it('still offers the decision on a lead with nothing analysed', async () => {
@@ -656,19 +753,6 @@ describe('the lead detail a reviewer decides from', () => {
     expect(qualify).toHaveAttribute('aria-pressed')
   })
 
-  it('stops using warning yellow for an incomplete turn, as the list already does', async () => {
-    /*
-     * PR E's miss. The list's "incomplete" badge went neutral and this one
-     * stayed yellow, so the admin ran two badge vocabularies, one per
-     * surface. An incomplete recording is a fact, not an action.
-     */
-    await renderDetail({
-      ...DETAIL,
-      turns: [{ turn_index: 4, speaker: 'buyer', text: 'A partial turn.', audit_incomplete: true }],
-    })
-    const badge = screen.getByText('incomplete')
-    expect(badge.closest('[data-variant]')).toHaveAttribute('data-variant', 'neutral')
-  })
 })
 
 describe('qualifying and rejecting', () => {
