@@ -102,9 +102,7 @@ def test_a_genuine_two_turn_german_buyer_switches():
 
 
 def test_one_turn_is_never_enough_however_strong_the_evidence():
-    assert (
-        settle("en", [("de", "Guten Tag ich suche eine Wohnung in Dubai")]) == "en"
-    )
+    assert settle("en", [("de", "Guten Tag ich suche eine Wohnung in Dubai")]) == "en"
 
 
 def test_two_finals_in_one_turn_are_still_only_one_turn():
@@ -218,13 +216,30 @@ def test_regional_codes_are_normalised_and_chinese_needs_fewer_letters():
     code (`LanguageCode.language`): the eval harness and these tests feed raw
     codes, and two lines here is a better place for that coverage than a live
     call."""
-    assert settle("en", [("pt-BR", "quanto custa este apartamento")] * 1, [("pt-BR", "quando e a entrega")]) == "pt"
-    assert settle("en", [("cmn", "多少 钱")], [("cmn", "何时 交房")]) == "zh"
-    assert settle("en", [("zh-CN", "多少 钱")], [("zh-CN", "何时 交房")]) == "zh"
+    assert (
+        settle(
+            "en",
+            [("pt-BR", "quanto custa este apartamento")],
+            [("pt-BR", "quando e a entrega das chaves")],
+        )
+        == "pt"
+    )
+    # Four CJK characters is the floor for these two, so the fixtures carry
+    # more than that: a three-character question is genuinely too little
+    # evidence and must NOT switch, which the last assertion pins.
+    chinese = [("cmn", "这个 公寓 多少 钱")]
+    assert settle("en", chinese, [("cmn", "何时 交房")]) == "zh"
+    assert (
+        settle("en", [("zh-CN", "这个 公寓 多少 钱")], [("zh-CN", "何时 交房")]) == "zh"
+    )
+    assert settle("en", [("cmn", "多少 钱")], [("cmn", "多少 钱")]) == "en"
 
 
 def test_unsupported_speech_does_not_make_a_small_supported_fragment_win():
-    italian = [("it", "vorrei sapere il prezzo di questo appartamento"), ("en", "how much")]
+    italian = [
+        ("it", "vorrei sapere il prezzo di questo appartamento"),
+        ("en", "how much"),
+    ]
     assert settle("fr", italian, italian) == "fr"
 
 
