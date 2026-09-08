@@ -42,3 +42,18 @@ ar: "Nora"
 hi: "Maya"
   # Same: the client chose "Maya"; VERIFY: with a native reviewer is only how
   # it is written in Devanagari and how it should be said.
+
+ru: ""
+  # VERIFY: client-selected ambassador name for Russian.
+fr: ""
+  # VERIFY: client-selected ambassador name for French.
+es: ""
+  # VERIFY: client-selected ambassador name for Spanish.
+pt: ""
+  # VERIFY: client-selected ambassador name for Portuguese.
+zh: ""
+  # VERIFY: client-selected ambassador name for Chinese.
+ja: ""
+  # VERIFY: client-selected ambassador name for Japanese.
+de: ""
+  # VERIFY: client-selected ambassador name for German.

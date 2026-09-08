@@ -357,7 +357,7 @@ def test_a_language_the_product_does_not_offer_is_rejected(tmp_path):
     switches the group off in silence: not English, so never always-applied,
     and matching no call language either. Fail-open on the compliance
     validator, so it fails at start-up instead."""
-    for code in ("eng", "EN", "fr", "en-GB"):
+    for code in ("eng", "EN", "xx", "en-GB"):
         with pytest.raises(ValueError, match="not one of"):
             load_patterns(
                 write_patterns(

@@ -38,4 +38,20 @@ describe('the session-start event contract', () => {
     expect(() => reduce(initialState(), nested)).not.toThrow()
     expect(reduce(initialState(), nested).connection).toBe('live')
   })
+
+  it('moves the displayed language when the agent switches after a turn', () => {
+    const event: AgentEvent = {
+      event: 'response_language_changed',
+      previous_language: 'en',
+      language: 'fr',
+      turn: 3,
+      uncertified: false,
+    }
+
+    expect(reduce(initialState(), event)).toMatchObject({
+      language: 'fr',
+      spokenLanguage: 'fr',
+      uncertifiedFallback: false,
+    })
+  })
 })

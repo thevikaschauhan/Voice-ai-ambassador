@@ -222,6 +222,10 @@ class KnowledgeRetriever:
         self._context: KnowledgeContext | None = None
         self._buffered: list[KnowledgeUse] = []
 
+    def set_language(self, language: str) -> None:
+        """Use the current speech language for subsequent query tokenisation."""
+        self._language = language
+
     def buffered(self) -> list[KnowledgeUse]:
         """The rows persist will write, in turn order."""
         return list(self._buffered)

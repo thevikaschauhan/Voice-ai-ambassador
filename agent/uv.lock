@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-29T19:02:00.737161Z"
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P5D"
 
 [[package]]
@@ -171,6 +171,7 @@ voice = [
     { name = "livekit-plugins-fishaudio" },
     { name = "livekit-plugins-openai" },
     { name = "livekit-plugins-silero" },
+    { name = "livekit-plugins-soniox" },
 ]
 
 [package.metadata]
@@ -199,6 +200,7 @@ voice = [
     { name = "livekit-plugins-fishaudio", specifier = ">=1.7,<2" },
     { name = "livekit-plugins-openai", specifier = ">=1.7,<2" },
     { name = "livekit-plugins-silero", specifier = ">=1.7,<2" },
+    { name = "livekit-plugins-soniox", specifier = ">=1.7,<2" },
 ]
 
 [[package]]
@@ -1113,6 +1115,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/87/34/388ba8cb1db86839228e88b799776d74db2286dbd2289ded744ec6b7d8dc/livekit_plugins_silero-1.7.0.tar.gz", hash = "sha256:f18aa1e980bc6892613a906ebfacd058160db3fb6db1dcd2a7b9d809dc9c0492", size = 1955425, upload-time = "2026-08-20T18:18:10.686Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2d/e1/5db37c5ca78bd011938f8d60ed6af984e61cd076a4535c56287cfb0d256b/livekit_plugins_silero-1.7.0-py3-none-any.whl", hash = "sha256:ce29626179d6a474b6b7fd6eb4dddb81e23a3a6a512e0013e8e3d07fda798e54", size = 3903143, upload-time = "2026-08-20T18:18:08.947Z" },
+]
+
+[[package]]
+name = "livekit-plugins-soniox"
+version = "1.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/97/04/9dd8cf092b188cc06331dbf920ad6b494e14085f4e15788b7683936cfbd7/livekit_plugins_soniox-1.7.0.tar.gz", hash = "sha256:65c2ace9b0d930507a359da885c1f5f94ee0b8f4f125f7db41188428161eb5db", size = 19815, upload-time = "2026-08-20T18:18:31.078Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e9/dc/40f01f55ecf5e962b935c368fb4c7dc64f3fef0e5bae49f4b51cc40dcfeb/livekit_plugins_soniox-1.7.0-py3-none-any.whl", hash = "sha256:c8c3222a439dd3194687f4aa377f69982ffcf2b467a6f288e8d615c3bc537252", size = 20909, upload-time = "2026-08-20T18:18:29.938Z" },
 ]
 
 [[package]]

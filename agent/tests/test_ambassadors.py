@@ -52,7 +52,19 @@ def test_every_shipped_language_has_the_name_the_client_chose():
     assert ambassadors.name_for("en") == "Jane"
     assert ambassadors.name_for("ar") == "Nora"
     assert ambassadors.name_for("hi") == "Maya"
-    assert ambassadors.named == frozenset(get_args(Language))
+    # DERIVED from the file, not a hand-written set. This assertion was
+    # `frozenset(get_args(Language))` until `Language` grew to ten codes, and
+    # was then replaced with a literal `{"en", "ar", "hi"}` - which is exactly
+    # the hand-copied language set that `test_no_module_restates_the_language_
+    # set` exists to prevent, and which that tripwire cannot see because it
+    # only fires on a copy of the FULL current set. `named` is defined as the
+    # languages whose name is non-empty, so saying that is both the invariant
+    # and drift-proof: a client naming the Russian ambassador tomorrow makes
+    # this pass, not fail.
+    assert ambassadors.named == frozenset(
+        language for language, name in ambassadors.names.items() if name
+    )
+    assert {"en", "ar", "hi"} <= ambassadors.named
 
 
 def test_the_names_are_distinct_per_language():
@@ -60,7 +72,8 @@ def test_the_names_are_distinct_per_language():
     from three named ambassadors, and the file supports the second. Pinned so a
     future edit collapsing them is a deliberate act rather than a typo."""
     names = load_ambassadors().names
-    assert len(set(names.values())) == len(names)
+    values = [name for name in names.values() if name]
+    assert len(set(values)) == len(values)
 
 
 def test_every_name_can_be_respelled_for_the_synthesiser():
@@ -72,7 +85,9 @@ def test_every_name_can_be_respelled_for_the_synthesiser():
         entry["term"]
         for entry in yaml.safe_load((DATA / "lexicon.yaml").read_text(encoding="utf-8"))
     }
-    missing = [name for name in load_ambassadors().names.values() if name not in terms]
+    missing = [
+        name for name in load_ambassadors().names.values() if name and name not in terms
+    ]
     assert not missing, (
         f"these ambassador names have no lexicon term, so the reviewer packet "
         f"never asks how to say them: {missing}"

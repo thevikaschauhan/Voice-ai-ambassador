@@ -709,7 +709,27 @@ PARITY_SENTENCES = {
     "en": "How much are the Aquarise studios and when is handover?",
     "ar": "ما هي أسعار الاستوديو في أكوارايز ومتى التسليم؟",
     "hi": "अक्वाराइज़ में स्टूडियो की कीमत क्या है और हैंडओवर कब है?",
+    "ru": "Сколько стоят студии в Акварайз и когда сдача?",
+    "fr": "Combien coûtent les studios Aquarise et quand est la livraison ?",
+    "es": "¿Cuánto cuestan los estudios de Aquarise y cuándo es la entrega?",
+    "pt": "Quanto custam os estúdios Aquarise e quando é a entrega?",
+    "zh": "Aquarise 的 studio 多少 钱 何时 交房",
+    "ja": "Aquarise の studio は いくら 引き渡し は いつ",
+    "de": "Was kosten die Aquarise Studios und wann ist die Übergabe?",
 }
+
+# zh and ja are SPACED here, and that is a finding rather than a fixture
+# convenience. `to_tsvector('simple', ...)` splits on whitespace and neither
+# language writes any, so an unspaced Chinese or Japanese sentence becomes ONE
+# lexeme in the index and one token from `tokenise` - the two agree, and the
+# agreement is worthless: a buyer's question can then only match a chunk whose
+# whole passage is the identical run of characters. Parity is therefore NOT
+# the property that makes retrieval work in these two languages, and a spaced
+# sentence is the only shape in which this test asks a real question of them.
+# Segmentation for zh/ja is unsolved here and is out of scope for this card
+# (reported to god); ADR-019's reasoning for keeping `simple` on the index
+# side is the same reasoning that leaves this open.
+UNSEGMENTED_LANGUAGES = frozenset({"zh", "ja"})
 
 
 def test_every_language_has_a_parity_sentence():

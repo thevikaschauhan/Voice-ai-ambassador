@@ -170,6 +170,10 @@ class BriefExtractor:
     def last_accepted_turn(self) -> int | None:
         return self._last_accepted_turn
 
+    def set_language(self, language: Language) -> None:
+        """Keep extraction prompts aligned with the live response language."""
+        self._language = language
+
     def _accept(self, brief: LeadBrief, turn_index: int) -> bool:
         """Advance the last good brief, unless this result is stale."""
         if (

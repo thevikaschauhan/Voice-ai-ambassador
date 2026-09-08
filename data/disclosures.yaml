@@ -55,3 +55,18 @@ ar: ""
 hi: ""
   # VERIFY: native-authored Hindi disclosure. Same rule, same enforcement, same
   # two shapes.
+
+ru: ""
+  # VERIFY: native-authored Russian disclosure.
+fr: ""
+  # VERIFY: native-authored French disclosure.
+es: ""
+  # VERIFY: native-authored Spanish disclosure.
+pt: ""
+  # VERIFY: native-authored Portuguese disclosure.
+zh: ""
+  # VERIFY: native-authored Chinese disclosure.
+ja: ""
+  # VERIFY: native-authored Japanese disclosure.
+de: ""
+  # VERIFY: native-authored German disclosure.

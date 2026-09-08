@@ -33,6 +33,7 @@ from adapter.config import (
     load_settings,
     missing_credentials_error,
     parse_env_file,
+    contradictory_settings_error,
     undeclared_settings_error,
     worker_refusal,
 )
@@ -520,7 +521,7 @@ def test_every_shipped_language_has_a_provisional_voice_without_any_env():
     settings = load_settings(Path("/nonexistent/.env"))
     ids = {language: settings.voice_id(language) for language in get_args(Language)}
     assert all(ids.values()), ids
-    assert len(set(ids.values())) == len(ids), ids
+    assert len({ids[language] for language in ("en", "ar", "hi")}) == 3
 
 
 def test_the_shipped_example_and_the_code_default_agree():
@@ -777,6 +778,154 @@ def test_one_cause_reads_exactly_like_the_single_message():
     assert worker_refusal([], ["STT_ENABLED"]) == undeclared_settings_error(
         ["STT_ENABLED"]
     )
+
+
+# --- two settings that contradict each other -------------------------------
+#
+# Closes the P1 on task-review-3ab4928-language-switch. `AUTO_LANGUAGE_SWITCH`
+# only works on the Soniox recogniser, and `.env.example` says so in prose - but
+# prose is not a check. The implication lived in `build_stt`, which runs inside
+# `entrypoint`, so a worker with the flag on and the provider left at `deepgram`
+# passed preflight, registered, looked healthy on the dashboard and raised on the
+# FIRST buyer call. That is the exact shape `preflight` was built to end.
+#
+# It is a third kind of refusal, not a missing credential and not an unmade
+# choice: both settings are present and they disagree.
+
+
+# A fully credentialled worker, so "nothing is missing" below is a real claim
+# about this configuration rather than an artefact of a thin fixture.
+_VOICE_CREDENTIALS = (
+    f"OPENROUTER_API_KEY={REAL_LOOKING_KEY}",
+    "FISH_API_KEY=fish-secret-value",
+    "DEEPGRAM_API_KEY=dg-secret-value",
+)
+
+
+def _switch_env(tmp_path, name, extra=()):
+    path = tmp_path / name
+    path.write_text(
+        "\n".join(
+            [
+                *_VOICE_CREDENTIALS,
+                "STT_ENABLED=true",
+                "AUTO_LANGUAGE_SWITCH=true",
+                "STT_PROVIDER=deepgram",
+                *extra,
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return load_settings(path)
+
+
+def test_the_flag_without_soniox_is_refused_at_startup(tmp_path):
+    """The failing scenario from the review, at the layer that can stop it."""
+    settings = _switch_env(tmp_path, ".env-flag-on")
+    assert settings.contradictions_for_worker() == [
+        "AUTO_LANGUAGE_SWITCH",
+        "STT_PROVIDER",
+    ]
+
+
+def test_supplying_the_key_does_not_make_the_pair_agree(tmp_path):
+    """The case that separates a real fix from a convincing one.
+
+    Requiring `SONIOX_API_KEY` whenever the flag is on would close the common
+    mistake and leave this one: the key is set, the provider is still Deepgram,
+    nothing is missing, and the call still dies in `entrypoint`. The refusal has
+    to be about the CONTRADICTION, not about a name that happens to be absent.
+    """
+    settings = _switch_env(
+        tmp_path, ".env-flag-on-key-set", ["SONIOX_API_KEY=soniox-secret-value"]
+    )
+    assert settings.missing_for_voice() == []
+    assert settings.contradictions_for_worker() == [
+        "AUTO_LANGUAGE_SWITCH",
+        "STT_PROVIDER",
+    ]
+
+
+def test_the_agreeing_pair_is_not_refused(tmp_path):
+    """Flag on with Soniox selected is the configuration this feature is for."""
+    path = tmp_path / ".env-agree"
+    path.write_text(
+        "STT_ENABLED=true\nAUTO_LANGUAGE_SWITCH=true\nSTT_PROVIDER=soniox\n"
+        "SONIOX_API_KEY=soniox-secret-value\n",
+        encoding="utf-8",
+    )
+    settings = load_settings(path)
+    assert settings.contradictions_for_worker() == []
+
+
+def test_the_flag_off_contradicts_nothing(tmp_path):
+    """The dormant default. Soniox is not required to be configured, or even
+    thought about, by a worker that never turns the feature on."""
+    for provider in ("deepgram", "openrouter", "soniox"):
+        path = tmp_path / f".env-off-{provider}"
+        path.write_text(
+            f"STT_ENABLED=true\nAUTO_LANGUAGE_SWITCH=false\nSTT_PROVIDER={provider}\n",
+            encoding="utf-8",
+        )
+        assert load_settings(path).contradictions_for_worker() == [], provider
+
+
+def test_a_deaf_worker_is_not_contradicting_itself(tmp_path):
+    """`build_stt` returns None before it reaches the guard when `STT_ENABLED`
+    is false, so the flag is inert rather than wrong there. Refusing that
+    configuration would stop a worker that runs perfectly well - text mode is a
+    real configuration, and a false refusal is its own bug."""
+    path = tmp_path / ".env-deaf"
+    path.write_text(
+        "STT_ENABLED=false\nAUTO_LANGUAGE_SWITCH=true\nSTT_PROVIDER=deepgram\n",
+        encoding="utf-8",
+    )
+    assert load_settings(path).contradictions_for_worker() == []
+
+
+def test_the_shipped_example_contradicts_nothing(tmp_path):
+    """`.env.example` ships the flag off against Deepgram, so the file the
+    contract is written in must itself pass the check it documents."""
+    assert load_settings(EXAMPLE_ENV).contradictions_for_worker() == []
+
+
+def test_the_refusal_names_both_settings_and_both_ways_out():
+    message = contradictory_settings_error(["AUTO_LANGUAGE_SWITCH", "STT_PROVIDER"])
+    assert "AUTO_LANGUAGE_SWITCH" in message
+    assert "STT_PROVIDER" in message
+    # Both remedies, because either is a legitimate answer.
+    assert "STT_PROVIDER=soniox" in message
+    assert "AUTO_LANGUAGE_SWITCH=false" in message
+    assert "agent/.env.example" in message
+
+
+def test_the_contradiction_is_neither_of_the_other_two_failures():
+    """Three different faults with three different first lines. Calling this a
+    missing credential sends an operator hunting for a key that is not the
+    problem; calling it an unmade choice is false, because both were chosen."""
+    message = contradictory_settings_error(["AUTO_LANGUAGE_SWITCH", "STT_PROVIDER"])
+    assert "missing credentials" not in message
+    assert "must choose explicitly" not in message
+
+
+def test_a_contradiction_alone_still_refuses(tmp_path):
+    """Nothing missing, nothing unchosen, and the worker must still not start."""
+    message = worker_refusal([], [], ["AUTO_LANGUAGE_SWITCH", "STT_PROVIDER"])
+    assert message == contradictory_settings_error(
+        ["AUTO_LANGUAGE_SWITCH", "STT_PROVIDER"]
+    )
+
+
+def test_all_three_causes_are_one_refusal_with_one_pointer():
+    message = worker_refusal(
+        ["FISH_API_KEY"], ["STT_ENABLED"], ["AUTO_LANGUAGE_SWITCH", "STT_PROVIDER"]
+    )
+    assert message is not None
+    assert "FISH_API_KEY" in message
+    assert "STT_ENABLED" in message
+    assert "AUTO_LANGUAGE_SWITCH" in message
+    assert message.count("Set them in agent/.env") == 1
+    assert message.splitlines()[-1].startswith("Set them in agent/.env")
 
 
 # --- the per-call duration cap --------------------------------------------

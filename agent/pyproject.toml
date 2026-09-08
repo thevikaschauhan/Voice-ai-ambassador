@@ -77,6 +77,7 @@ voice = [
     "livekit-plugins-fishaudio>=1.7,<2",
     "livekit-plugins-silero>=1.7,<2",
     "livekit-plugins-deepgram>=1.7,<2",
+    "livekit-plugins-soniox>=1.7,<2",
 ]
 
 [tool.uv]

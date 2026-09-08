@@ -189,12 +189,20 @@ async def test_status_and_language_narrow_together(client, seeded):
 
 @pytest.mark.parametrize(
     ("query", "field"),
-    [("?language=fr", "language"), ("?status=maybe", "status")],
+    [("?language=xx", "language"), ("?status=maybe", "status")],
 )
 async def test_a_value_outside_the_enum_is_a_fixed_422(client, query, field):
     """Refused rather than ignored. A filter value the API silently dropped
     would show an admin the unfiltered list and let them believe it was
-    filtered, which is worse than an error - they would act on it."""
+    filtered, which is worse than an error - they would act on it.
+
+    `xx` rather than a real-looking code, and that is the finding this closes:
+    the case used `fr`, and widening `Language` PROMOTED it to a valid value,
+    so the test guarding the enum boundary started asserting that a supported
+    language is refused. `xx` is not an ISO code, so no later widening can
+    adopt it. Same substitution the language-switch commit already made in
+    test_language_set.py, test_prohibited.py and test_reviewer_packet.py; this
+    was the fourth site and it was missed."""
     response = await client.get(f"/v1/leads{query}", headers=auth())
     assert response.status_code == 422, response.text
     assert field in response.text

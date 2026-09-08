@@ -48,6 +48,7 @@ from livekit.agents import (
     ModelSettings,
     RunContext,
     SpeechCreatedEvent,
+    UserInputTranscribedEvent,
     WorkerOptions,
     cli,
     function_tool,
@@ -61,6 +62,16 @@ from livekit.agents.metrics import EOUMetrics
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils import is_given
 from livekit.agents.voice import SpeechHandle
+
+# The framework's own writer for the instructions message. Imported rather than
+# reimplemented because the message id is load-bearing upstream
+# (`lk.agent_task.instructions`, marked "value must not change") and this is the
+# function the framework itself calls on the agent's own context. An SDK move
+# breaks this import loudly, which is the point: the alternative failure mode is
+# a silent no-op that leaves the switching turn on the previous language.
+from livekit.agents.voice.generation import (
+    update_instructions as write_ctx_instructions,
+)
 from livekit.plugins import silero
 
 from ambassador.budget import BudgetPolicy, Decision, load_currency_vocabulary
@@ -95,6 +106,7 @@ from ambassador.projects import (
 from ambassador.ambassadors import load_ambassadors
 from ambassador.recognition import RecognitionMonitor, load_noise_words
 from ambassador.schemas import Language
+from ambassador.language_switch import SwitchProgress, choose_language
 from ambassador.verbalise import load_spoken_forms
 from evals.runner import Harness
 
@@ -130,7 +142,7 @@ from .analysis import Ask, analysis_ask, finalise_analysis
 from .persist import LeadWriter, _failure_code, build_lead_writer
 from .lexicon import load_lexicon, respell_stream
 from .llm_openrouter import CONN_OPTIONS, BuiltLLM, UsageFrame, build_llm
-from .stt_factory import build_stt, describe
+from .stt_factory import build_stt, switch_excluded_terms, describe
 from .tts_factory import build_tts
 from .tts_factory import describe as describe_tts
 from .tts_pool import connection_state, reprewarm
@@ -184,11 +196,32 @@ class AmbassadorAgent(Agent):
         close_call: Callable[[str], Awaitable[None]] | None = None,
         knowledge: KnowledgeRetriever | None = None,
         contact: ContactPolicy | None = None,
+        update_tts_voice: Callable[[str], None] | None = None,
     ) -> None:
         projects = load_inventory()
         self._projects = projects
         self._project_ids = [p.id for p in projects]
         self._settings = settings
+        self._initial_language = settings.language
+        self._switch_excluded_terms = switch_excluded_terms(projects)
+        # (language, reason) pairs already said once. A buyer simply speaking
+        # another language trips the same refusal on every turn for the rest of
+        # the call, and the durable stream is not the place to say one thing
+        # forty times.
+        self._switch_skips: set[tuple[str, str]] = set()
+        self._session_voice_id = settings.voice_id(settings.language)
+        # The TRANSCRIPT, not a letter count: excluding a project name from the
+        # evidence needs the text, and the whole weighting rule then lives in
+        # one pure, covered place. This list therefore holds raw buyer speech
+        # for the length of a turn and must never reach an event emitter.
+        self._language_segments: list[tuple[str, str]] = []
+        # Carried across turns, because the rule needs a challenger to lead for
+        # more than one turn before it takes over. Held here rather than inside
+        # the pure module so the whole decision stays replayable from a list of
+        # turns in a test.
+        self._switch_progress = SwitchProgress()
+        self._guard_factory = guard_factory
+        self._update_tts_voice = update_tts_voice
         self._log = log
         # ADR-019. None until the pool is wired, and None is a working
         # configuration: a call with no knowledge base speaks the
@@ -436,8 +469,11 @@ class AmbassadorAgent(Agent):
         # at a terminal. Deciding this after the room connects means finding
         # out that the agent has nothing to disclose while a buyer is already
         # on the line.
+        # Read ONCE. The certification check on a refused switch used to
+        # re-read this YAML from disk inside the turn path, on every turn.
+        self._disclosures = load_disclosures()
         self._opening, self._opening_language = resolve_opening(
-            load_disclosures(),
+            self._disclosures,
             settings.language,
             allow_uncertified=settings.allow_uncertified_language,
             names=self._ambassadors.names,
@@ -466,7 +502,8 @@ class AmbassadorAgent(Agent):
         # did before this existed, which is the safe direction. The farewell
         # SPEECH is loaded regardless, because the duration cap can end a call
         # the buyer never said goodbye in.
-        self._farewell_detects = self._farewells.detects(settings.language)
+        self._farewell_language = self._farewell_reading_language(settings.language)
+        self._farewell_detects = self._farewells.detects(self._farewell_language)
         self._farewell_line = self._compose_farewell()
         self._close_call = close_call
         # One close per call, whichever path asks for it. A second farewell
@@ -501,6 +538,10 @@ class AmbassadorAgent(Agent):
     @property
     def tracker(self) -> TurnTracker | None:
         return self._tracker
+
+    def set_tts_voice_updater(self, updater: Callable[[str], None]) -> None:
+        """Attach the framework-owned TTS option update after session setup."""
+        self._update_tts_voice = updater
 
     # -- the opening disclosure -------------------------------------------
 
@@ -570,6 +611,30 @@ class AmbassadorAgent(Agent):
         measured (#51). When a turn is already open on a partial, the final
         transcript is adopted onto it instead.
         """
+        if self._settings.auto_language_switch:
+            language, self._switch_progress = choose_language(
+                self._settings.language,
+                self._language_segments,
+                progress=self._switch_progress,
+                excluded_terms=self._switch_excluded_terms,
+            )
+            self._language_segments.clear()
+            try:
+                await self._set_response_language(language, turn_ctx)
+            except Exception as exc:
+                # The framework catches an exception out of this hook and
+                # RETURNS, which skips the reply entirely - and this runs before
+                # the tracker exists, so the turn would go missing from the
+                # record too, with `audit_incomplete` unable to see it because
+                # there is no turn object to flag. The call continues in the
+                # language it is already speaking, and the reason reaches the
+                # durable stream: the exception CLASS only, never `str(exc)`,
+                # which can quote the buyer.
+                self._log.emit(
+                    "response_language_switch_failed",
+                    language=language,
+                    error=type(exc).__name__,
+                )
         text = new_message.text_content or ""
         tracker = self._tracker
         if tracker is not None and tracker.opened_on_partial and not tracker.adopted:
@@ -577,6 +642,174 @@ class AmbassadorAgent(Agent):
             self._note_closing_from_final(text, tracker)
             return
         self._start_tracker(text)
+
+    def note_transcribed_language(self, event: UserInputTranscribedEvent) -> None:
+        """Collect final recogniser evidence; partials never change speech state."""
+        if self._settings.auto_language_switch and event.is_final:
+            # `.language` is the framework's own base-code normalisation (ISO
+            # 639-3 to 639-1, cmn to zh included). The adapter may use it; the
+            # pure module may not, and keeps its own for the eval harness.
+            self._language_segments.append(
+                (
+                    event.language.language if event.language else "unknown",
+                    event.transcript,
+                )
+            )
+
+    def _skip_switch(self, language: Language, reason: str) -> None:
+        """Say why a switch was refused, once per (language, reason)."""
+        if (language, reason) in self._switch_skips:
+            return
+        self._switch_skips.add((language, reason))
+        self._log.emit(
+            "response_language_switch_skipped", language=language, reason=reason
+        )
+
+    def _farewell_reading_language(self, language: Language) -> str:
+        """Which language's closing phrases goodbye detection should READ.
+
+        `Farewells.farewell_speech` already falls back to English rather than
+        silence; this is the same rule for the other direction. Without it a
+        call whose response language has no authored phrases cannot be ended by
+        the buyer at all - reachable today on a degraded opening, where
+        `settings.language` is 'ar' but the call is actually SPEAKING English.
+        """
+        if self._farewells.detects(language):
+            return language
+        return _FAREWELL_FALLBACK_LANGUAGE
+
+    async def _set_response_language(
+        self, language: Language, turn_ctx: lk_llm.ChatContext
+    ) -> None:
+        previous = self._settings.language
+        if previous == language:
+            return
+        certified = self._disclosures.is_certified(language)
+        if not certified and not self._settings.allow_uncertified_language:
+            self._skip_switch(language, "uncertified_language")
+            return
+        if not self._farewells.detects(language):
+            # A call the buyer cannot END is worse than a call in the wrong
+            # language. Goodbye detection is keyed on the response language and
+            # only English has authored closing phrases, so switching to a
+            # language with none left the buyer with no way out and
+            # `demo_max_call_seconds=0` means nothing else ends the call
+            # either. Between the two halves of this pair, the switch is the
+            # optional one. Refused rather than degraded, so the barrier is
+            # visible in the audit instead of being an absence.
+            self._skip_switch(language, "no_farewell_coverage")
+            return
+        # Prepare a complete speech profile before changing the current one.
+        guard = self._guard_factory(
+            language=language,
+            allowed=self._guard.allowed,
+            patterns=self._guard.patterns,
+            forms=self._guard.forms,
+            mode=self._settings.guardrail_mode,
+            vocatives=self._buyer_vocatives,
+        )
+        budget_runs = self._confirmations.covers(language)
+        project_runs = self._confirmations.covers(language, PROJECT_KEYS)
+        recognition_runs = self._confirmations.covers(language, RECOGNITION_KEYS)
+        fixed_lines = {
+            key: guard.compose(self._confirmations.line(language, key))
+            for key, enabled in (
+                ("give_up", budget_runs),
+                ("project_give_up", project_runs),
+                ("recognition_escalation", recognition_runs),
+            )
+            if enabled
+        }
+        farewell = guard.compose(self._farewells.farewell_speech(language))
+        instructions = build_ambassador_prompt(
+            serialise_for_prompt(self._projects),
+            language,
+            system_confirms_budget=budget_runs,
+            system_confirms_project=project_runs,
+            ambassador_name=self._ambassador_name,
+        )
+        # BOTH copies, and that is the whole of P1b. `update_instructions` is
+        # LiveKit's public hook and keeps chat history, but the framework copied
+        # the chat context BEFORE calling this hook and generates THIS turn from
+        # that copy - which the hook receives as `turn_ctx`. Writing only to the
+        # agent's own context left the turn that triggered the switch being
+        # generated under the previous language while it was already being
+        # spoken in the new language's voice, because the voice rides in Fish's
+        # per-request body and lands immediately.
+        #
+        # Editing `turn_ctx` is what the framework intends here, and it has a
+        # second effect worth keeping: it makes any preemptive generation
+        # started on the partial compare unequal, so the framework cancels it
+        # and regenerates under the new prompt instead of serving the stale one.
+        # That is why this feature no longer has to disable preemptive
+        # generation session-wide - a turn that does NOT switch never touches
+        # `turn_ctx`, so it still takes the fast path.
+        await self.update_instructions(instructions)
+        write_ctx_instructions(turn_ctx, instructions=instructions, add_if_missing=True)
+        voice_id = self._settings.voice_id(language)
+        if self._update_tts_voice is not None:
+            self._update_tts_voice(voice_id)
+        self._settings = replace(self._settings, language=language)
+        self._session_voice_id = voice_id
+        self._guard = guard
+        self._budget_policy_runs = budget_runs
+        self._project_policy_runs = project_runs
+        self._recognition_policy_runs = recognition_runs
+        self._policies.set_language(
+            language,
+            budget_runs=budget_runs,
+            project_runs=project_runs,
+            recognition_runs=recognition_runs,
+        )
+        self._fixed_lines = fixed_lines
+        self._farewell_line = farewell
+        reading_language = self._farewell_reading_language(language)
+        self._farewell_language = reading_language
+        self._farewell_detects = self._farewells.detects(reading_language)
+        if reading_language != language:
+            self._log.emit(
+                "farewell_fallback_language",
+                language=language,
+                detection_language=reading_language,
+            )
+        # `_signed_off_turn` deliberately SURVIVES a switch. Every other reset
+        # here is right because an unanswered question's READ-BACK is bound to
+        # the language it was asked in - honouring an Arabic read-back with a
+        # German reply would be the bug. A sign-off is not a read-back: the
+        # model DID say goodbye, and answering it in another language does not
+        # un-say it. Clearing it here cancelled an armed hang-up on the exact
+        # turn the pairing was waiting for.
+        if self._contact is not None:
+            self._contact.set_language(
+                language,
+                cancel_pending=self._contact_awaiting_reply,
+                turn_index=self._turn_index + 1,
+            )
+            if not self._contact.enabled(language):
+                # Contact copy is authored per language, so a switch can take
+                # the ask out of service for the rest of the call. That was
+                # silent: the lead simply had no phone number and nothing said
+                # why. Unreachable while the farewell gate above refuses every
+                # target without authored copy, and kept because the two
+                # coverage sets are independent and need not stay aligned.
+                self._log.emit(
+                    "contact_capture_dormant",
+                    language=language,
+                    turn=self._turn_index + 1,
+                )
+        self._contact_awaiting_reply = False
+        self._contact_awaiting_confirmation = False
+        self._contact_ask_closes = False
+        if self._knowledge is not None:
+            self._knowledge.set_language(language)
+        self._brief.set_language(language)
+        self._log.emit(
+            "response_language_changed",
+            previous_language=previous,
+            language=language,
+            turn=self._turn_index + 1,
+            uncertified=not certified,
+        )
 
     def _note_closing_from_final(self, text: str, tracker: TurnTracker) -> None:
         """Read the FINAL transcript for a closing, after the model has the turn.
@@ -896,8 +1129,8 @@ class AmbassadorAgent(Agent):
             call_end_reason=self._call_end_reason,
             ended_cleanly=not any(turn.audit_incomplete for turn in turns),
             language=self._settings.language,
-            requested_language=self._settings.language,
-            uncertified_fallback=(self._opening_language != self._settings.language),
+            requested_language=self._initial_language,
+            uncertified_fallback=(self._opening_language != self._initial_language),
             inventory_version=f"{len(self._projects)}-records",
             ambassador_name=self._ambassador_name,
             turns=turns,
@@ -943,7 +1176,7 @@ class AmbassadorAgent(Agent):
         return read_farewell(
             utterance,
             self._farewells,
-            self._settings.language,
+            self._farewell_language,
             names=self._ambassador_names,
         )
 
@@ -1761,7 +1994,7 @@ class AmbassadorAgent(Agent):
         # turn rather than per frame, and unity for the quietest voice - which
         # every other voice is matched down to - so the common path is the
         # identical object it was before.
-        gain = gain_for(self._settings.voice_id(self._settings.language))
+        gain = gain_for(self._session_voice_id)
         async for frame in Agent.default.tts_node(self, spoken, model_settings):
             if first:
                 first = False
@@ -2273,6 +2506,11 @@ async def shutdown_session(
 # without a coordinated deploy.
 _METADATA_VERSION: Final = 1
 _LANGUAGE_CODES: Final[frozenset[str]] = frozenset(get_args(Language))
+# The language whose closing phrases are read when the response language has
+# none authored. English for the same reason `fallbacks.yaml` gives for speech:
+# a call must stay endable, and English is the language such a call is already
+# being spoken in.
+_FAREWELL_FALLBACK_LANGUAGE: Final = "en"
 
 
 @dataclass(frozen=True)
@@ -2568,6 +2806,16 @@ async def entrypoint(ctx: JobContext) -> None:
         tts=tts,
     )
 
+    def update_tts_voice(voice_id: str) -> None:
+        if session.tts is not None:
+            session.tts.update_options(voice_id=voice_id)
+
+    agent.set_tts_voice_updater(update_tts_voice)
+
+    @session.on("user_input_transcribed")
+    def _on_transcribed(event: UserInputTranscribedEvent) -> None:
+        agent.note_transcribed_language(event)
+
     @session.on("speech_created")
     def _on_speech_created(ev: SpeechCreatedEvent) -> None:
         # The handle carries the framework's interruption state and its own
@@ -2745,7 +2993,9 @@ def preflight(argv: list[str] | None = None) -> str | None:
         return None
     settings = load_settings()
     return worker_refusal(
-        settings.missing_for_worker(), settings.undeclared_for_worker()
+        settings.missing_for_worker(),
+        settings.undeclared_for_worker(),
+        settings.contradictions_for_worker(),
     )
 
 

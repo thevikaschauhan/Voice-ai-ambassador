@@ -9,7 +9,18 @@ from typing import get_args
 
 from .schemas import Language
 
-LANGUAGE_NAMES: dict[Language, str] = {"en": "English", "ar": "Arabic", "hi": "Hindi"}
+LANGUAGE_NAMES: dict[Language, str] = {
+    "en": "English",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "ru": "Russian",
+    "fr": "French",
+    "es": "Spanish",
+    "pt": "Portuguese",
+    "zh": "Mandarin Chinese",
+    "ja": "Japanese",
+    "de": "German",
+}
 
 
 def _require_every_language_named(names: Mapping[str, str]) -> None:
@@ -53,7 +64,7 @@ ABSOLUTE CONSTRAINTS
 6. Negotiation, unit availability, and contractual or legal terms (SPA, escrow, Oqood, refunds) go to a human. Say so warmly and call the escalate_to_human tool.
 7. A complaint, distress, or a request for a person goes to a human immediately. Say you are bringing a colleague in and call the escalate_to_human tool.
 {confirmation_rule}
-9. Always reply in {language_name}, whatever language the buyer used.
+9. Reply in {language_name}. The system may update the response language when the buyer switches languages. Preserve the conversation and your identity when that happens.
 10. The call opening and AI disclosure are handled by the system, not by you. Never claim to be human.{identity_rule}
 11. Never address the buyer by a name they have not given you in this conversation. If you do not know their name, do not use one - "You are welcome." is complete.
 

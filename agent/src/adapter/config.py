@@ -328,6 +328,9 @@ class Settings:
     # no per-visitor quota, both of which docs/09- rules out. Zero by default
     # so the laptop demo and the console are unaffected.
     demo_max_call_seconds: int
+    auto_language_switch: bool = False
+    soniox_api_key: str = ""
+    soniox_model: str = "stt-rt-v5"
 
     @property
     def thinking_disabled(self) -> bool:
@@ -337,11 +340,14 @@ class Settings:
         return self.llm_thinking.lower() != "on"
 
     def voice_id(self, language: Language) -> str:
+        # The client-selected voices exist for the opening three languages.
+        # Additional switch targets deliberately reuse the English Fish voice
+        # until their voice references are selected and checked by ear.
         return {
             "en": self.tts_voice_id_en,
             "ar": self.tts_voice_id_ar,
             "hi": self.tts_voice_id_hi,
-        }[language]
+        }.get(language, self.tts_voice_id_en)
 
     def stt_model(self, language: Language) -> str:
         """Per-language STT routing (ADR-015). The Arabic slot is decided by the
@@ -358,7 +364,7 @@ class Settings:
         highest risk (A6) and is settled by listening to real recordings, not
         by guessing a locale string here.
         """
-        return {"en": "en-US", "ar": "ar", "hi": "hi"}[language]
+        return {"en": "en-US"}.get(language, language)
 
     def redacted(self) -> dict[str, object]:
         """Loggable view: secrets collapse to a presence flag, never a value."""
@@ -394,6 +400,8 @@ class Settings:
         }
         if self.stt_enabled and self.stt_provider.lower() == "deepgram":
             required["DEEPGRAM_API_KEY"] = self.deepgram_api_key
+        if self.stt_enabled and self.stt_provider.lower() == "soniox":
+            required["SONIOX_API_KEY"] = self.soniox_api_key
         return [name for name, value in required.items() if not value]
 
     def missing_for_transport(self) -> list[str]:
@@ -441,6 +449,34 @@ class Settings:
             if not value
         ]
 
+    def contradictions_for_worker(self) -> list[str]:
+        """Settings that are each legal alone and cannot both hold, by name.
+
+        A third kind of refusal, and it needs to be third because the other two
+        would both describe it wrongly. Nothing is missing - `AUTO_LANGUAGE_SWITCH`
+        and `STT_PROVIDER` are present - and nothing is unchosen, since both were
+        set on purpose. They disagree.
+
+        This lived in `build_stt` as a `ValueError`, which runs inside
+        `entrypoint` and therefore per JOB: a worker with the flag on and the
+        provider left at `deepgram` passed preflight, registered, showed SUCCESS
+        on the dashboard and raised on the first buyer call. That is the failure
+        `preflight` exists to end, and it had grown back for a new variable. The
+        guard stays there as defence in depth; this is what stops the deploy.
+
+        Conditional on `stt_enabled` for the same reason `build_stt` is: it
+        returns None before reaching the guard when STT is off, so the flag is
+        inert rather than wrong in text mode, and refusing there would stop a
+        worker that runs.
+        """
+        if (
+            self.stt_enabled
+            and self.auto_language_switch
+            and self.stt_provider.lower() != "soniox"
+        ):
+            return ["AUTO_LANGUAGE_SWITCH", "STT_PROVIDER"]
+        return []
+
     def missing_for_worker(self) -> list[str]:
         """Everything a worker process must have before it registers.
 
@@ -486,7 +522,25 @@ _LEAD_STORE_REMEDY = (
     "DATABASE_URL to run with no lead store."
 )
 
+# Both ways out, because either is a legitimate answer and the operator is the
+# one who knows which they meant. The `SONIOX_API_KEY` remedy below names only
+# the retreat, which is right when a key is missing and wrong here: the far more
+# likely intent is that somebody enabled the feature and did not know it needs
+# its own recogniser.
+_SWITCH_CONTRADICTION: Final = (
+    "  AUTO_LANGUAGE_SWITCH only works on the Soniox recogniser, which is the "
+    "one that reports which language was spoken. Either set STT_PROVIDER=soniox "
+    "and add SONIOX_API_KEY from console.soniox.com, or set "
+    "AUTO_LANGUAGE_SWITCH=false to keep the fixed-language path on the provider "
+    "you have."
+)
+
 _REMEDIES: Final[dict[str, str]] = {
+    "SONIOX_API_KEY": (
+        "Soniox is the multilingual recogniser used by AUTO_LANGUAGE_SWITCH. "
+        "Add a key from console.soniox.com, or set AUTO_LANGUAGE_SWITCH=false "
+        "and choose STT_PROVIDER=deepgram for the fixed-language path."
+    ),
     "PII_ENCRYPTION_KEY": _LEAD_STORE_REMEDY,
     "PII_HASH_KEY": _LEAD_STORE_REMEDY,
     "DEEPGRAM_API_KEY": (
@@ -545,23 +599,53 @@ def _undeclared_lines(undeclared: list[str]) -> list[str]:
     return lines
 
 
-def worker_refusal(missing: list[str], undeclared: list[str]) -> str | None:
+def contradictory_settings_error(contradictory: list[str]) -> str:
+    """The startup message for two settings that cannot both hold.
+
+    Its own message rather than a third use of one of the others, because the
+    first line of a refusal is the part an operator acts on. "missing
+    credentials" sends them hunting for a key that is not the problem, and
+    "settings a worker must choose explicitly" is simply false when both were
+    chosen. What is wrong is the pair.
+    """
+    return "\n".join([*_contradictory_lines(contradictory), _WHERE_TO_SET])
+
+
+def _contradictory_lines(contradictory: list[str]) -> list[str]:
+    lines = ["settings that contradict each other: " + ", ".join(contradictory)]
+    if "AUTO_LANGUAGE_SWITCH" in contradictory:
+        lines.append(_SWITCH_CONTRADICTION)
+    return lines
+
+
+def worker_refusal(
+    missing: list[str],
+    undeclared: list[str],
+    contradictory: list[str] | None = None,
+) -> str | None:
     """Everything wrong with a worker's configuration at once, or None.
 
-    Both kinds of refusal in one message, because an operator on a platform
+    All three kinds of refusal in one message, because an operator on a platform
     pays a rebuild and a deploy per cycle: learning about the second problem
     after fixing the first costs a round trip for nothing. That is the same
     reasoning `missing_for_worker` already applies across the credentials.
 
-    The pointer to where variables are set is appended ONCE. Printing the two
-    complete messages back to back repeats it, which reads like two unrelated
-    failures rather than one refusal with two causes.
+    The pointer to where variables are set is appended ONCE. Printing the
+    complete messages back to back repeats it, which reads like unrelated
+    failures rather than one refusal with several causes.
+
+    `contradictory` defaults to none so the two-argument callers in the tests
+    still read as they did; the one production caller, `preflight`, passes all
+    three, and a fourth category should be added the same way rather than by
+    widening one of the first two to mean something it does not.
     """
     lines: list[str] = []
     if missing:
         lines += _credential_lines(missing)
     if undeclared:
         lines += _undeclared_lines(undeclared)
+    if contradictory:
+        lines += _contradictory_lines(contradictory)
     return "\n".join([*lines, _WHERE_TO_SET]) if lines else None
 
 
@@ -611,6 +695,11 @@ def load_settings(env_path: Path | None = None) -> Settings:
         stt_model_ar=_resolve(file_values, "STT_MODEL_AR"),
         deepgram_api_key=_resolve(file_values, "DEEPGRAM_API_KEY"),
         deepgram_model=_resolve(file_values, "DEEPGRAM_MODEL", "nova-3"),
+        auto_language_switch=_resolve_bool(
+            file_values, "AUTO_LANGUAGE_SWITCH", default=False
+        ),
+        soniox_api_key=_resolve(file_values, "SONIOX_API_KEY"),
+        soniox_model=_resolve(file_values, "SONIOX_MODEL", "stt-rt-v5"),
         # Off by default: OpenRouter rejects audio requests under a $0.50
         # balance (AGENTS.md project learnings, 2026-08-27), and the agent must
         # stay runnable in text mode without it.

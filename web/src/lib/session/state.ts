@@ -240,6 +240,17 @@ function reduceAgentEvent(state: SessionState, event: AgentEvent): SessionState 
         disclosure: event.text ?? state.disclosure,
       }
 
+    case 'response_language_changed':
+      return {
+        ...state,
+        language: event.language,
+        spokenLanguage: event.language,
+        uncertifiedFallback: event.uncertified,
+      }
+
+    case 'response_language_switch_skipped':
+      return state
+
     case 'user_turn':
       return withTurn(state, event.turn, (turn) => {
         turn.buyerUtterance = event.text

@@ -156,6 +156,9 @@ class RecognitionMonitor:
     def handed_over(self) -> bool:
         return self._handed_over
 
+    def set_language(self, language: str) -> None:
+        self._language = language
+
     def observe(self, utterance: str) -> RecognitionDecision:
         failed = is_failed_recognition(utterance, self._noise, self._language)
         if not failed:
