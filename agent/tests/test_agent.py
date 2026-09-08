@@ -4298,3 +4298,98 @@ async def test_the_tail_threshold_is_what_separates_the_two_pair_cases():
     )
     assert tail.unexplained <= _Agent._TAIL_MISS
     assert question.unexplained > _Agent._TAIL_MISS
+
+
+# --- the model fallback array, and what it costs the cache ------------------
+#
+# Closes task-llm-provider-rate-limits. `qwen/qwen3.7-flash` has exactly ONE
+# endpoint on OpenRouter (Alibaba), so provider routing has nothing to route to
+# and a rate limit on that shared pool has no way around it. The `models`
+# parameter is the only config-only answer: OpenRouter tries the next slug when
+# the primary's providers are "down, rate-limited, or refuse to reply".
+#
+# Measured on the 2026-09-08 call this closes: eleven 429s across six of twelve
+# turns, TTFT ~= 834ms + 685ms per 429, and the worst turn used three of its
+# four attempts.
+
+
+def test_the_fallback_models_reach_the_request_body():
+    built = build_llm(
+        make_settings(llm_fallback_models=("qwen/qwen3-next-80b-a3b-instruct",)),
+        lambda usage: None,
+    )
+    assert built.llm._opts.extra_body["models"] == ["qwen/qwen3-next-80b-a3b-instruct"]
+
+
+def test_no_fallback_configured_sends_no_models_key():
+    """An empty list must not send `models: []`, which is a different request
+    from one that never mentioned fallbacks."""
+    built = build_llm(make_settings(llm_fallback_models=()), lambda usage: None)
+    extra = built.llm._opts.extra_body
+    assert not isinstance(extra, dict) or "models" not in extra
+
+
+def test_the_cache_breakpoint_is_not_offered_to_a_model_that_did_not_ask_for_it():
+    """The breakpoint exists for Alibaba, whose caching through OpenRouter is
+    explicit-only. Every fallback candidate reports
+    `supports_implicit_caching: false`, and nothing in OpenRouter's docs says a
+    non-caching provider ignores the marker harmlessly - so it is offered to the
+    slug it was written for and to nothing else."""
+    import json as _json
+
+    from adapter.llm_openrouter import mark_system_prompt_cacheable
+
+    body = _json.dumps(
+        {
+            "model": "qwen/qwen3-next-80b-a3b-instruct",
+            "messages": [{"role": "system", "content": "INVENTORY"}],
+        }
+    ).encode()
+    assert (
+        mark_system_prompt_cacheable(body, only_for_model="qwen/qwen3.7-flash") is body
+    )
+
+
+def test_the_primary_still_gets_its_cache_breakpoint():
+    """The other half of the condition: narrowing it must not switch it off.
+    74% of prompt tokens on the measured call were cache reads."""
+    import json as _json
+
+    from adapter.llm_openrouter import mark_system_prompt_cacheable
+
+    body = _json.dumps(
+        {
+            "model": "qwen/qwen3.7-flash",
+            "messages": [{"role": "system", "content": "INVENTORY"}],
+        }
+    ).encode()
+    out = _json.loads(
+        mark_system_prompt_cacheable(body, only_for_model="qwen/qwen3.7-flash")
+    )
+    assert out["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_a_fallback_response_is_recorded_under_the_model_that_served_it():
+    """Without this a fallback is INVISIBLE: the turn recorded the model we
+    asked for, so a call served entirely by the fallback would report the
+    primary's name and nobody would know the fallback had ever fired."""
+    from adapter.llm_openrouter import _extract_usage
+
+    frame = _extract_usage(
+        {
+            "model": "qwen/qwen3-next-80b-a3b-instruct",
+            "usage": {"prompt_tokens": 100, "completion_tokens": 10},
+        }
+    )
+    assert frame is not None
+    assert frame["served_model"] == "qwen/qwen3-next-80b-a3b-instruct"
+
+
+def test_a_response_that_names_no_model_leaves_the_configured_one_standing():
+    """`served_model` is None rather than a guess, so the emitter keeps the
+    configured name instead of inventing one."""
+    from adapter.llm_openrouter import _extract_usage
+
+    frame = _extract_usage({"usage": {"prompt_tokens": 100, "completion_tokens": 10}})
+    assert frame is not None
+    assert frame["served_model"] is None
