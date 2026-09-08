@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TalkCall } from '@/components/talk-call'
 import type { TalkEnding, TalkEvents, TalkLine } from '@/lib/talk/session'
+import { ambassadorNames } from './fixtures'
 
 /**
  * What the visitor SEES when a call ends, which is the half of this that a
@@ -63,7 +64,7 @@ beforeEach(() => {
   captured = null
   end.mockClear()
   vi.stubGlobal('fetch', mintOk())
-  render(<TalkCall names={{ en: 'Jane', ar: '', hi: '' }} />)
+  render(<TalkCall names={ambassadorNames({ en: 'Jane', ar: '', hi: '' })} />)
 })
 
 afterEach(() => {

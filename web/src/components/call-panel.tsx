@@ -20,6 +20,12 @@ const LANGUAGE_NAMES: Record<Language, string> = {
   de: 'German',
 }
 
+/** "Hindi", "Arabic and Hindi", "Arabic, Hindi and Russian". */
+function listNames(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
 interface CallPanelProps {
   state: SessionState
   running: boolean
@@ -38,6 +44,11 @@ export function CallPanel({
   onEnd,
 }: CallPanelProps) {
   const live = provenance === 'live'
+  // Derived, never restated: a hardcoded pair was correct only while exactly
+  // Arabic and Hindi lacked copy, and silently wrong the moment that changed.
+  const unavailable = languages
+    .filter(({ ready }) => !ready)
+    .map(({ language }) => LANGUAGE_NAMES[language])
   const speaking = state.buyerSpeaking || state.agentSpeaking
   const speaker = state.buyerSpeaking ? 'Buyer' : state.agentSpeaking ? 'Ambassador' : 'Nobody'
 
@@ -115,9 +126,11 @@ export function CallPanel({
               )
             })}
           </div>
-          {languages.some((l) => !l.ready) ? (
+          {unavailable.length > 0 ? (
             <p className="mt-3 text-[12px] leading-relaxed text-ink-500">
-              Arabic and Hindi are unavailable because neither has native-authored
+              {listNames(unavailable)}{' '}
+              {unavailable.length === 1 ? 'is' : 'are'} unavailable because{' '}
+              {unavailable.length === 1 ? 'it has' : 'they have'} no native-authored
               disclosure copy in <code className="text-ink-400">data/disclosures.yaml</code>.
               The agent refuses to open a call in a language it cannot disclose itself in,
               so readiness is a state of the repository rather than a setting here.

@@ -5,6 +5,7 @@ import { TalkCall } from '@/components/talk-call'
 import { TalkOrb } from '@/components/talk-orb'
 import { TalkSubtitles } from '@/components/talk-subtitles'
 import { AMBASSADOR_FALLBACK } from '@/lib/ambassador.shared'
+import { ambassadorNames } from './fixtures'
 import type { TalkEvents, TalkLine } from '@/lib/talk/session'
 
 /**
@@ -31,7 +32,7 @@ vi.mock('@/lib/talk/session', async (importOriginal) => {
   }
 })
 
-const NAMES = { en: 'Jane', ar: '', hi: '' } as const
+const NAMES = ambassadorNames({ en: 'Jane', ar: '', hi: '' })
 
 function mintOk(): typeof fetch {
   return (async () =>
