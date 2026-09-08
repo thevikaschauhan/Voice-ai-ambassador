@@ -548,8 +548,9 @@ Web now writes three JSON lines of its own, all scoped to the admin surface, and
 they are told apart by `event`:
 
 - `web_request` - a request ARRIVED. Fields: `ts`, `level`, `event`, `method`,
-  `path`. Written by `src/middleware.ts`, matched on `/admin/:path*` and
-  `/api/admin/:path*`. `path` is a pathname and never carries a query string.
+  `path`, `prefetch`. Written by `src/middleware.ts`, matched on `/admin/:path*`
+  and `/api/admin/:path*`. `path` is a pathname and never carries a query
+  string.
 - `admin_proxy` - a proxied call FINISHED. Fields: `ts`, `level`, `event`,
   `method`, `route`, `status`, `duration_ms`. Written by
   `src/lib/admin/proxy.ts`, the single chokepoint every `/api/admin/*` route
@@ -585,20 +586,40 @@ emitters use that one vocabulary, so a filter over the log does not need to know
 which of them wrote a line. `admin_page_read` never carries 403, because a page
 read is not a mutation and the same-origin check does not apply to it.
 
-No line carries a header, a cookie, a session id, a body, a query string or
-a client address. That is enforced structurally rather than by convention - the
+**An arrival is not a render, and `prefetch` is how you tell.** Next prefetches
+the routes a rendered page links to, and a prefetch reaches the middleware
+without running the page, so it produces a `web_request` and no outcome line at
+all. Before the flag existed a prefetch and a navigation were identical here,
+and the ratio is not small: one visit produced sixteen arrivals at a document
+detail route and zero renders of it, which read as a broken page until the leads
+route showed the same shape - two arrivals that rendered nothing, then one that
+rendered and reached admin-api. **Count navigations as `prefetch: false`**;
+counting arrivals counts the prefetches too. A line with no `prefetch` field at
+all predates this and cannot be classified either way.
+
+No line carries a header value, a cookie, a session id, a body, a query string
+or a client address. That is enforced structurally rather than by convention - the
 emitters in `src/lib/request-log.ts` take positional primitives, so there is no
 field for a caller to slip a cookie into - and asserted in
 `tests/web-request-log.test.ts`, which plants the marker `NOTAREAL` in the
 cookie, the query string and the body of one request and greps every emitted
 line for it.
 
+`prefetch` is the one narrow exception to "no header", and it is written beside
+the rule it narrows in `src/lib/request-log.ts`. Two header NAMES are tested for
+presence (`next-router-prefetch`, `next-router-segment-prefetch`, Next's own);
+the boolean that results is logged and the header's VALUE never is, which the
+marker test holds by planting `NOTAREAL` in the header itself. `rsc` is not one
+of the two: it marks any RSC request, navigations included, so it would report
+every client-side navigation as a prefetch.
+
 **Which surface is recorded where.** The matcher covers the admin surface only,
 so a zero in web's log is evidence about `/admin` and about nothing else:
 
 | what was used | where the request is recorded |
 | --- | --- |
-| an `/admin` page | `web_request` **and** `admin_page_read` on web (one read per server component that reads), plus the uvicorn access line on admin-api |
+| an `/admin` page | `web_request` (`prefetch: false`) **and** `admin_page_read` on web (one read per server component that reads), plus the uvicorn access line on admin-api |
+| a link to an `/admin` page, prefetched | `web_request` with `prefetch: true` and **nothing else** - the page is not run, so there is no read and no admin-api line |
 | `/api/admin/*` | `web_request` **and** `admin_proxy` on web, plus the uvicorn access line on admin-api |
 | `/talk`, and the demo APIs it calls | **nothing on web** - the worker's event stream is the only record |
 

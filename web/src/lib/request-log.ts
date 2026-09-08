@@ -23,15 +23,45 @@
  * implementation logs "the request", and a Request carries all three. Nothing
  * here can accept them.
  *
+ * NO HEADER IS EVER RECORDED, WITH ONE NARROW EXCEPTION WRITTEN HERE BESIDE THE
+ * RULE IT NARROWS. `logWebRequest` takes a `prefetch` boolean derived from the
+ * presence of Next's two router-prefetch request headers and nothing else. The
+ * header VALUE is never read into the line, no other header is ever consulted,
+ * and the field is a boolean rather than a string so there is nothing for a
+ * value to travel in. Recording a derived boolean is not recording the header.
+ *
+ * The exception was granted because without it every count of page views taken
+ * from this log is wrong by the prefetch factor: an arrival is not a render,
+ * and on 2026-09-07 the same visit produced 16 arrivals at a detail route and
+ * 0 renders of it. See `tests/web-request-log.test.ts` and docs/09-deploy.md's
+ * coverage map, which both carry the exception too.
+ *
  * JSON one line per event, matching the Python services' stream so Railway
  * parses `event` as a field on all three (`railway logs --json`).
  */
 
-/** Written by `src/middleware.ts` when an admin request arrives. */
-export function logWebRequest(method: string, path: string): void {
+/**
+ * Written by `src/middleware.ts` when an admin request arrives.
+ *
+ * `prefetch` says whether the arrival was Next prefetching the route rather
+ * than a person navigating to it. It is recorded as `false` and not omitted
+ * when it is false: a missing field is what every line written before this
+ * shipped looks like, and a count that treats the two alike folds the old
+ * lines silently into "navigation".
+ */
+export function logWebRequest(method: string, path: string, prefetch: boolean): void {
   // `path` is a pathname, which by construction has no query string: the
   // caller passes `nextUrl.pathname`, never `nextUrl.href`.
-  console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', event: 'web_request', method, path }))
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'info',
+      event: 'web_request',
+      method,
+      path,
+      prefetch,
+    }),
+  )
 }
 
 /**
