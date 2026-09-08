@@ -323,3 +323,36 @@ async def test_contact_capture_dormancy_is_reported_once_for_the_call():
         await agent.brief_extractor.aclose()
     names = await event_names(log, buf)
     assert names.count("contact_capture_dormant") == 1
+
+
+async def test_each_farewell_fallback_is_declared_where_it_actually_happens():
+    """Both fallbacks are recorded at CONSTRUCTION, which is where they occur.
+
+    The detection fallback was previously emitted only inside the switch,
+    where the farewell-coverage gate makes it unreachable - an event in a
+    branch that cannot run - while the place it does happen stayed silent: a
+    degraded opening leaves `settings.language` as 'ar' although the call is
+    already speaking English.
+
+    They are separate events because either can be true without the other,
+    and Arabic is the proof: it has authored closing PHRASES for detection
+    only in English, but it does have a `speech` entry, so exactly one of the
+    two fires. German has neither and fires both.
+    """
+    en, _, en_buf = make_agent(language="en")
+    ar, _, ar_buf = make_agent(language="ar")
+    de, _, de_buf = make_agent(language="de")
+    try:
+        pass
+    finally:
+        for agent in (en, ar, de):
+            await agent.brief_extractor.aclose()
+    for agent, buf, expected in (
+        (en, en_buf, set()),
+        (ar, ar_buf, {"farewell_fallback_language"}),
+        (de, de_buf, {"farewell_fallback_language", "farewell_speech_fallback"}),
+    ):
+        names = await event_names(agent._log, buf)
+        assert {name for name in names if name.startswith("farewell_")} == expected, (
+            agent._settings.language
+        )

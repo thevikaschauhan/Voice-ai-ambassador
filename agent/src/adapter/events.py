@@ -248,6 +248,7 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "response_language_switch_failed": "closed language code and an exception class name",
     "contact_capture_dormant": "closed language code and a turn index",
     "farewell_fallback_language": "two closed language codes",
+    "farewell_speech_fallback": "two closed language codes",
     # ADR-018's keep-alive, from the admin API. One boolean and nothing
     # else: deliberately NOT the exception, because a driver error can
     # quote a DSN and this event is on the durable stream. The service log
