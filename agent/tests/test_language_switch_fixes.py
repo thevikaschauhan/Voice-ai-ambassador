@@ -35,6 +35,7 @@ NON_ENGLISH = tuple(language for language in get_args(Language) if language != "
 def make_agent(**settings):
     """An agent mid-call, with the switch enabled and the event stream captured."""
     buf = StringIO()
+    log = EventLog("lsfix", stream=buf)
     agent = AmbassadorAgent(
         settings=make_settings(
             **{
@@ -43,12 +44,19 @@ def make_agent(**settings):
                 **settings,
             }
         ),
-        log=EventLog("lsfix", stream=buf),
+        log=log,
     )
-    return agent, buf
+    return agent, log, buf
 
 
-def events(buf, name):
+async def emitted(log, buf, name):
+    """The named events, AFTER draining the writer.
+
+    `emit` queues under a running loop, so reading the buffer without this
+    reports an empty stream for every event - which would make each of the
+    assertions below pass against code that emits nothing at all.
+    """
+    await log.aclose()
     records = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
     return [record for record in records if record["event"] == name]
 
@@ -84,7 +92,7 @@ async def test_the_turn_that_triggers_the_switch_generates_under_the_new_languag
     being generated under the previous language while it was already being
     spoken in the new language's voice.
     """
-    agent, _ = make_agent(language="hi")
+    agent, _, _ = make_agent(language="hi")
     try:
         turn_ctx = await switching_turn(agent, "en")
         assert agent._settings.language == "en"
@@ -97,7 +105,7 @@ async def test_a_turn_that_does_not_switch_leaves_the_turn_context_untouched():
     """The other half of P1b: editing the turn context invalidates the
     framework's preemptive generation, so a turn that does not switch must not
     touch it or every turn would pay for the feature."""
-    agent, _ = make_agent()
+    agent, _, _ = make_agent()
     try:
         turn_ctx = await switching_turn(agent, "en")
         assert instructions_in(turn_ctx) is None
@@ -112,7 +120,7 @@ async def test_a_switch_does_not_cancel_a_pending_sign_off():
     """P1d. The model said goodbye on the previous turn; the buyer answering in
     another language must not un-say it. A sign-off is not a language-bound
     read-back, unlike the confirmation questions that DO reset."""
-    agent, _ = make_agent(language="hi")
+    agent, _, _ = make_agent(language="hi")
     try:
         agent._signed_off_turn = 1
         await switching_turn(agent, "en")
@@ -131,13 +139,14 @@ async def test_a_target_with_no_authored_farewell_phrases_is_refused(language):
     has authored closing phrases, so switching away from English left a call
     the buyer could not end. Refused rather than degraded: the switch is the
     optional feature, being able to hang up is not."""
-    agent, buf = make_agent()
+    agent, log, buf = make_agent()
     try:
         await switching_turn(agent, language, text="Ein ausreichend langer Satz hier")
         assert agent._settings.language == "en"
         assert agent._farewell_detects
         assert [
-            record["reason"] for record in events(buf, "response_language_switch_skipped")
+            record["reason"]
+            for record in await emitted(log, buf, "response_language_switch_skipped")
         ] == ["no_farewell_coverage"]
     finally:
         await agent.brief_extractor.aclose()
@@ -153,7 +162,7 @@ async def test_a_failure_inside_the_switch_keeps_the_turn_and_the_old_language(
     which skips the reply - and because the switch runs before the tracker is
     started, the turn went missing from the record too, with nothing on the
     durable stream to say why."""
-    agent, buf = make_agent(language="hi")
+    agent, log, buf = make_agent(language="hi")
     try:
 
         def unbuildable(**kwargs):
@@ -165,7 +174,8 @@ async def test_a_failure_inside_the_switch_keeps_the_turn_and_the_old_language(
         assert agent.tracker is not None
         assert agent.tracker.buyer_utterance == ENGLISH_UTTERANCE
         assert [
-            record["error"] for record in events(buf, "response_language_switch_failed")
+            record["error"]
+            for record in await emitted(log, buf, "response_language_switch_failed")
         ] == ["RuntimeError"]
     finally:
         await agent.brief_extractor.aclose()
@@ -180,7 +190,7 @@ async def test_a_refused_switch_neither_re_reads_the_yaml_nor_repeats_itself(
     """P2. The certification check read disclosures.yaml from disk inside the
     turn path, and emitted a skip event on EVERY turn, for a buyer who was
     simply speaking another language."""
-    agent, buf = make_agent(allow_uncertified_language=False)
+    agent, log, buf = make_agent(allow_uncertified_language=False)
     try:
         import adapter.agent as agent_module
 
@@ -192,7 +202,8 @@ async def test_a_refused_switch_neither_re_reads_the_yaml_nor_repeats_itself(
         await switching_turn(agent, "de", text="Noch ein ausreichend langer Satz")
         assert agent._settings.language == "en"
         assert [
-            record["reason"] for record in events(buf, "response_language_switch_skipped")
+            record["reason"]
+            for record in await emitted(log, buf, "response_language_switch_skipped")
         ] == ["uncertified_language"]
     finally:
         await agent.brief_extractor.aclose()
@@ -204,7 +215,7 @@ async def test_a_refused_switch_neither_re_reads_the_yaml_nor_repeats_itself(
 async def test_the_turn_record_carries_the_language_the_turn_was_spoken_in():
     """P2. The call-level record reports the language at hang-up, so a call that
     switched could not say which language any given turn was answered in."""
-    agent, _ = make_agent(language="hi")
+    agent, _, _ = make_agent(language="hi")
     try:
         await switching_turn(agent, "en")
         assert agent.tracker is not None

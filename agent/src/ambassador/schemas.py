@@ -255,6 +255,13 @@ class TurnRecord(BaseModel):
     timings_ms: Timings = Timings()
     inventory_version: str
     model: str
+    # The language this TURN was answered in, which on a call that switched
+    # mid-way is not the call-level language: that one reports where the call
+    # ended up. Without it a bilingual call cannot say which language any given
+    # turn was spoken in, and the reviewer packet's whole question is per-turn.
+    # The default exists only for the test fixtures that build a record
+    # directly; the one production producer always sets it from the tracker.
+    language: Language = "en"
     prompt_mode: Literal["ambassador", "naive"]
     guardrail_mode: Literal["enforce", "warn"]
     # True only when teardown stranded an unresolved speech handle, so whether
