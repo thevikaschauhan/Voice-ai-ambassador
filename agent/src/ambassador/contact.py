@@ -396,6 +396,21 @@ class ContactPolicy:
             )
             self._emit("contact_settled", turn=turn_index, status="unconfirmed")
 
+    def enabled(self, language: str) -> bool:
+        """Whether the ask can be made in this language at all.
+
+        The authored lines live on the COPY, so this delegates rather than
+        duplicating the rule. It exists because a caller holding the policy
+        should not have to reach past it to the copy to ask a question about
+        the policy - the absence of this method was read as a policy that
+        could not be asked about, and the AttributeError it raised was
+        swallowed by a caller's own safety net.
+
+        The language is a parameter rather than the policy's own, so a caller
+        that has just set the language cannot accidentally read a stale one.
+        """
+        return self._copy.enabled(language)
+
     @property
     def state(self) -> ContactCapture:
         return self._state

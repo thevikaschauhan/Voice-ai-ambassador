@@ -22,6 +22,11 @@ from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID  # noqa: E40
 
 from adapter.agent import AmbassadorAgent  # noqa: E402
 from adapter.events import EventLog  # noqa: E402
+from ambassador.contact import (  # noqa: E402
+    ContactCopy,
+    ContactPolicy,
+    load_contact_copy,
+)
 from ambassador.language_switch import choose_language  # noqa: E402
 from ambassador.prompts import LANGUAGE_NAMES  # noqa: E402
 from ambassador.schemas import Language  # noqa: E402
@@ -55,6 +60,16 @@ def make_agent(**settings):
         log=log,
     )
     return agent, log, buf
+
+
+async def event_names(log, buf):
+    """Every event on the stream, drained. For asking what DID happen."""
+    await log.aclose()
+    return [
+        json.loads(line)["event"]
+        for line in buf.getvalue().splitlines()
+        if line.strip()
+    ]
 
 
 async def emitted(log, buf, name):
@@ -246,3 +261,98 @@ async def test_the_turn_record_carries_the_language_the_turn_was_spoken_in():
         assert agent.tracker.finish(audit_incomplete=False).language == "en"
     finally:
         await agent.brief_extractor.aclose()
+
+
+# -- the follow-up: the wrapper hid a half-applied switch -------------------
+
+
+async def test_a_switch_with_contact_capture_attached_completes_and_says_so():
+    """A real ContactPolicy attached was enough to half-apply every switch.
+
+    The dormancy check called a method that does not exist on the policy, the
+    P1e wrapper caught the AttributeError, and the call carried on speaking the
+    new language while the brief extractor, the retrieval language and the
+    contact flags stayed on the old one - with the audit saying the switch had
+    FAILED and nothing saying it had partly succeeded.
+
+    This asserts the SUCCESS event, and that is the whole point of it. A test
+    that only checked `response_language_switch_failed` was absent would have
+    passed before the wrapper existed AND after the bug arrived; only asking
+    whether the switch said it finished can tell those apart. Reachable with
+    `AUTO_LANGUAGE_SWITCH=true` alone, on any call whose response language is
+    not already English.
+    """
+    agent, log, buf = make_agent(language="ar")
+    try:
+        agent._contact = ContactPolicy(load_contact_copy(), "ar")
+        agent._contact_awaiting_reply = True
+        await switching_turn(agent, "en")
+        assert agent._settings.language == "en"
+        # The three that were silently skipped after the raise.
+        assert agent._brief._language == "en"
+        assert not agent._contact_awaiting_reply
+        assert not agent._contact_awaiting_confirmation
+    finally:
+        await agent.brief_extractor.aclose()
+    names = await event_names(log, buf)
+    assert "response_language_changed" in names
+    assert "response_language_switch_failed" not in names
+
+
+async def test_contact_capture_dormancy_is_reported_once_for_the_call():
+    """Proves the EMIT and its dedup - NOT that dormancy is reachable.
+
+    It is not reachable today, and the reason is worth writing down: contact
+    copy exists for English, Arabic and Hindi, and the farewell-coverage gate
+    leaves English as the only reachable switch target, so `enabled()` at that
+    call site is always true on a real call. The precondition here is built
+    with a deliberately empty `ContactCopy`, which drives the agent's real
+    path while making no claim about reachability. The two coverage sets are
+    independent and will diverge the moment one language is authored before
+    the other, which is when this line starts mattering.
+
+    Asserted as exactly one rather than at most one. `<= 1` is satisfied by
+    ZERO, and zero is what the bug this test was written alongside actually
+    produced - the emit never ran at all, because the line above it raised.
+    """
+    agent, log, buf = make_agent(language="ar")
+    try:
+        agent._contact = ContactPolicy(ContactCopy(), "ar")
+        await switching_turn(agent, "en", extra_turns=2)
+    finally:
+        await agent.brief_extractor.aclose()
+    names = await event_names(log, buf)
+    assert names.count("contact_capture_dormant") == 1
+
+
+async def test_each_farewell_fallback_is_declared_where_it_actually_happens():
+    """Both fallbacks are recorded at CONSTRUCTION, which is where they occur.
+
+    The detection fallback was previously emitted only inside the switch,
+    where the farewell-coverage gate makes it unreachable - an event in a
+    branch that cannot run - while the place it does happen stayed silent: a
+    degraded opening leaves `settings.language` as 'ar' although the call is
+    already speaking English.
+
+    They are separate events because either can be true without the other,
+    and Arabic is the proof: it has authored closing PHRASES for detection
+    only in English, but it does have a `speech` entry, so exactly one of the
+    two fires. German has neither and fires both.
+    """
+    en, _, en_buf = make_agent(language="en")
+    ar, _, ar_buf = make_agent(language="ar")
+    de, _, de_buf = make_agent(language="de")
+    try:
+        pass
+    finally:
+        for agent in (en, ar, de):
+            await agent.brief_extractor.aclose()
+    for agent, buf, expected in (
+        (en, en_buf, set()),
+        (ar, ar_buf, {"farewell_fallback_language"}),
+        (de, de_buf, {"farewell_fallback_language", "farewell_speech_fallback"}),
+    ):
+        names = await event_names(agent._log, buf)
+        assert {name for name in names if name.startswith("farewell_")} == expected, (
+            agent._settings.language
+        )

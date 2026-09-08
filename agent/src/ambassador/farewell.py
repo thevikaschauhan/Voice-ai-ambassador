@@ -55,6 +55,15 @@ class Farewells:
         """
         return bool(self.phrases.get(language))
 
+    def speaks(self, language: str) -> bool:
+        """Whether an authored farewell exists in this language.
+
+        False means `farewell_speech` will fall back to English. The caller
+        asks so the fallback can be recorded: this module has no log and must
+        not acquire one (ADR-002), so the fact has to be observable instead.
+        """
+        return bool(self.speech.get(language))
+
     def farewell_speech(self, language: str) -> str:
         """The authored farewell, falling back to English.
 

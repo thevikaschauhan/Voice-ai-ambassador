@@ -209,6 +209,9 @@ class AmbassadorAgent(Agent):
         # the call, and the durable stream is not the place to say one thing
         # forty times.
         self._switch_skips: set[tuple[str, str]] = set()
+        # The contact ask being out of service is a fact about the CALL, not
+        # about each switch, so it is said once.
+        self._contact_dormancy_reported = False
         self._session_voice_id = settings.voice_id(settings.language)
         # The TRANSCRIPT, not a letter count: excluding a project name from the
         # evidence needs the text, and the whole weighting rule then lives in
@@ -504,6 +507,14 @@ class AmbassadorAgent(Agent):
         # the buyer never said goodbye in.
         self._farewell_language = self._farewell_reading_language(settings.language)
         self._farewell_detects = self._farewells.detects(self._farewell_language)
+        # HERE is where the fallback is real, and it was silent. A degraded
+        # opening leaves `settings.language` as 'ar' while `resolve_opening`
+        # has already put the call into English, so detection reads English
+        # phrases for a call whose requested language has none - and the only
+        # record of that was its absence. The emit used to sit inside the
+        # switch instead, where the farewell-coverage gate makes it
+        # unreachable: an event in a branch that cannot run.
+        self._note_farewell_fallbacks(settings.language)
         self._farewell_line = self._compose_farewell()
         self._close_call = close_call
         # One close per call, whichever path asks for it. A second farewell
@@ -678,6 +689,51 @@ class AmbassadorAgent(Agent):
             return language
         return _FAREWELL_FALLBACK_LANGUAGE
 
+    def _note_contact_dormant(self, language: Language) -> None:
+        """Say once that the contact ask is out of service for this call.
+
+        Contact copy is authored per language, so a switch can take the ask
+        out of service for the rest of the call. That was silent: the lead
+        simply had no phone number and nothing said why. Said once because it
+        is a fact about the call rather than about each switch.
+
+        Unreachable while the farewell-coverage gate refuses every target
+        without authored closing phrases, since every language that has those
+        also has contact copy today. Kept because the two coverage sets are
+        independent and will diverge the moment one language is authored
+        before the other.
+        """
+        if self._contact_dormancy_reported:
+            return
+        self._contact_dormancy_reported = True
+        self._log.emit(
+            "contact_capture_dormant",
+            language=language,
+            turn=self._turn_index + 1,
+        )
+
+    def _note_farewell_fallbacks(self, language: Language) -> None:
+        """Say when a farewell falls back to English, in either direction.
+
+        Two independent fallbacks that happen to share a language: detection
+        reads another language's phrases (`_farewell_reading_language`), and
+        the spoken line is another language's copy
+        (`Farewells.farewell_speech`). Either can be true without the other,
+        so they are separate events rather than one with two meanings.
+        """
+        if self._farewell_language != language:
+            self._log.emit(
+                "farewell_fallback_language",
+                language=language,
+                detection_language=self._farewell_language,
+            )
+        if not self._farewells.speaks(language):
+            self._log.emit(
+                "farewell_speech_fallback",
+                language=language,
+                speech_language=_FAREWELL_FALLBACK_LANGUAGE,
+            )
+
     async def _set_response_language(
         self, language: Language, turn_ctx: lk_llm.ChatContext
     ) -> None:
@@ -763,15 +819,9 @@ class AmbassadorAgent(Agent):
         )
         self._fixed_lines = fixed_lines
         self._farewell_line = farewell
-        reading_language = self._farewell_reading_language(language)
-        self._farewell_language = reading_language
-        self._farewell_detects = self._farewells.detects(reading_language)
-        if reading_language != language:
-            self._log.emit(
-                "farewell_fallback_language",
-                language=language,
-                detection_language=reading_language,
-            )
+        self._farewell_language = self._farewell_reading_language(language)
+        self._farewell_detects = self._farewells.detects(self._farewell_language)
+        self._note_farewell_fallbacks(language)
         # `_signed_off_turn` deliberately SURVIVES a switch. Every other reset
         # here is right because an unanswered question's READ-BACK is bound to
         # the language it was asked in - honouring an Arabic read-back with a
@@ -786,17 +836,7 @@ class AmbassadorAgent(Agent):
                 turn_index=self._turn_index + 1,
             )
             if not self._contact.enabled(language):
-                # Contact copy is authored per language, so a switch can take
-                # the ask out of service for the rest of the call. That was
-                # silent: the lead simply had no phone number and nothing said
-                # why. Unreachable while the farewell gate above refuses every
-                # target without authored copy, and kept because the two
-                # coverage sets are independent and need not stay aligned.
-                self._log.emit(
-                    "contact_capture_dormant",
-                    language=language,
-                    turn=self._turn_index + 1,
-                )
+                self._note_contact_dormant(language)
         self._contact_awaiting_reply = False
         self._contact_awaiting_confirmation = False
         self._contact_ask_closes = False
