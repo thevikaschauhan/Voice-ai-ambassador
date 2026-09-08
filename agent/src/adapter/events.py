@@ -243,6 +243,11 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     "session_end": "a turn count",
     "response_language_changed": "closed language codes, turn index and certification boolean",
     "response_language_switch_skipped": "closed language code and fixed reason",
+    # The exception CLASS name only, never `str(exc)` - same rule as
+    # `llm_failure`'s `error` field beside its redacted `detail`.
+    "response_language_switch_failed": "closed language code and an exception class name",
+    "contact_capture_dormant": "closed language code and a turn index",
+    "farewell_fallback_language": "two closed language codes",
     # ADR-018's keep-alive, from the admin API. One boolean and nothing
     # else: deliberately NOT the exception, because a driver error can
     # quote a DSN and this event is on the durable stream. The service log
@@ -1115,6 +1120,7 @@ class TurnTracker:
             ),
             inventory_version=self.inventory_version,
             model=self.model,
+            language=self.language,
             prompt_mode=self.prompt_mode,  # type: ignore[arg-type]
             guardrail_mode=self.guardrail_mode,  # type: ignore[arg-type]
             audit_incomplete=audit_incomplete,

@@ -2,6 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TalkCall } from '@/components/talk-call'
+import { ambassadorNames } from './fixtures'
 
 /**
  * The client's own button (task-web-silent-disabled-family).
@@ -59,7 +60,7 @@ function stubFetch() {
 
 beforeEach(() => {
   vi.restoreAllMocks()
-  render(<TalkCall names={{ en: 'Jane', ar: '', hi: '' }} />)
+  render(<TalkCall names={ambassadorNames({ en: 'Jane', ar: '', hi: '' })} />)
 })
 
 afterEach(() => {

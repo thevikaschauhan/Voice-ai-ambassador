@@ -10,18 +10,17 @@ export interface LanguageReadiness {
   ready: boolean
 }
 
-const LANGUAGES: readonly Language[] = [
-  'en',
-  'ar',
-  'hi',
-  'ru',
-  'fr',
-  'es',
-  'pt',
-  'zh',
-  'ja',
-  'de',
-]
+/**
+ * The languages a call can be OPENED in.
+ *
+ * Deliberately not every member of `Language`. The runtime gained seven more
+ * codes as mid-call SWITCH TARGETS (docs/04-): the agent may move into one
+ * after a call has started, but no call has ever begun in one, so offering
+ * them here would put buttons on the page that can never be pressed. Widen
+ * this list only when a language becomes a language the agent will answer the
+ * phone in.
+ */
+const OPENING_LANGUAGES: readonly Language[] = ['en', 'ar', 'hi']
 
 /**
  * Which languages can open a call, read from the file that decides it.
@@ -32,14 +31,14 @@ const LANGUAGES: readonly Language[] = [
  * selector therefore reads that file instead of carrying its own list, so it
  * cannot offer a language the agent would refuse to start in.
  *
- * A deliberately small reader rather than a YAML dependency: it needs one
- * key per supported language and whether each is empty. If this file ever grows structure, take the
- * dependency instead of growing the parser.
+ * A deliberately small reader rather than a YAML dependency: it needs one key
+ * per opening language and whether each is empty. If this file ever grows
+ * structure, take the dependency instead of growing the parser.
  */
 export async function loadLanguageReadiness(): Promise<LanguageReadiness[]> {
   const path = join(process.cwd(), '..', 'data', 'disclosures.yaml')
   const text = await readFile(path, 'utf-8')
-  return LANGUAGES.map((language) => ({
+  return OPENING_LANGUAGES.map((language) => ({
     language,
     ready: hasCopy(text, language),
   }))

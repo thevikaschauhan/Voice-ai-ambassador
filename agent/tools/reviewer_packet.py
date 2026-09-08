@@ -43,6 +43,7 @@ from ambassador.guardrails.prohibited import (  # noqa: E402
     languages_covered,
     load_patterns,
 )
+from ambassador import prompts  # noqa: E402
 from ambassador.inventory import build_allowed_figures, load_inventory  # noqa: E402
 from evals.cases import load_cases  # noqa: E402
 from ambassador.verbalise import (  # noqa: E402
@@ -52,16 +53,18 @@ from ambassador.verbalise import (  # noqa: E402
     spoken_form_gaps,
 )
 
+# DERIVED from the prompt names, minus English. This was a second hand-kept
+# copy of the language set, and `tools/` is outside the tripwire that catches
+# those (test_language_set.py globs src, tests and spikes), so a language
+# eleven would have been silently un-reviewable: the tool refuses a code it
+# does not know, and the native-review dependency for it could never even be
+# requested. English is excluded because this packet exists to ask a native
+# speaker about the copy nobody on the team may write, and English is the copy
+# the team writes.
 LANGUAGE_NAMES = {
-    "ar": "Arabic",
-    "hi": "Hindi",
-    "ru": "Russian",
-    "fr": "French",
-    "es": "Spanish",
-    "pt": "Portuguese",
-    "zh": "Chinese",
-    "ja": "Japanese",
-    "de": "German",
+    language: name
+    for language, name in prompts.LANGUAGE_NAMES.items()
+    if language != "en"
 }
 
 # Every data file that needs native-authored ar/hi copy, mapped to the heading

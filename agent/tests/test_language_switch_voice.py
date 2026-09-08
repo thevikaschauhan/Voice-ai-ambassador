@@ -1,7 +1,6 @@
 """Exercise final-transcript switching through the actual agent and guard."""
 
 from io import StringIO
-from typing import get_args
 
 import pytest
 
@@ -10,9 +9,9 @@ from livekit.agents import UserInputTranscribedEvent, llm  # noqa: E402
 from adapter.agent import AmbassadorAgent  # noqa: E402
 from adapter.events import EventLog  # noqa: E402
 from adapter.stt_factory import build_stt  # noqa: E402
+from ambassador.ambassadors import load_ambassadors  # noqa: E402
 from ambassador.contact import ContactPolicy, load_contact_copy  # noqa: E402
 from ambassador.prompts import LANGUAGE_NAMES  # noqa: E402
-from ambassador.schemas import Language  # noqa: E402
 from test_agent import make_settings  # noqa: E402
 
 
@@ -34,13 +33,21 @@ async def final_turn(agent, language, text="A sufficiently long recognised utter
     await agent.on_user_turn_completed(ctx, message)
 
 
-@pytest.mark.parametrize(
-    "language", tuple(language for language in get_args(Language) if language != "en")
-)
+@pytest.mark.parametrize("language", ("ar", "hi"))
 async def test_final_speech_changes_prompt_and_guard_without_changing_identity(
     language,
 ):
-    agent = make_agent()
+    """A switch swaps the speech profile and keeps the identity.
+
+    Driven INTO English, because a target with no authored farewell phrases is
+    now refused and English is the only language that has them - every other
+    target is covered by the refusal test in test_language_switch_fixes.py.
+    The opening languages here are the two non-English ones that HAVE an
+    ambassador name, which is what makes the identity assertion mean something:
+    a call that opens as Nora is still Nora after switching to English. The
+    name is a fact about the call, not about the language being spoken.
+    """
+    agent = make_agent(language=language)
     try:
         voices: list[str] = []
         agent.set_tts_voice_updater(voices.append)
@@ -51,16 +58,18 @@ async def test_final_speech_changes_prompt_and_guard_without_changing_identity(
             item for item in agent.chat_ctx.items if item.role != "system"
         ]
         brief = agent.brief_extractor
-        await final_turn(agent, language)
-        assert agent._guard.language == language
-        assert f"Reply in {LANGUAGE_NAMES[language]}" in agent.instructions
-        assert "Your name is Jane" in agent.instructions
+        await final_turn(agent, "en")
+        assert agent._guard.language == "en"
+        assert f"Reply in {LANGUAGE_NAMES['en']}" in agent.instructions
+        assert f"Your name is {load_ambassadors().name_for(language)}" in (
+            agent.instructions
+        )
         assert [
             item for item in agent.chat_ctx.items if item.role != "system"
         ] == prior_messages
         assert agent.brief_extractor is brief
-        assert agent._session_voice_id == make_settings().voice_id(language)
-        assert voices[-1] == make_settings().voice_id(language)
+        assert agent._session_voice_id == make_settings().voice_id("en")
+        assert voices[-1] == make_settings().voice_id("en")
         # Both success and blocked speech still use the real guard pipeline.
         assert agent._guard.check("Welcome.").outcome == "pass"
         assert (
@@ -68,26 +77,31 @@ async def test_final_speech_changes_prompt_and_guard_without_changing_identity(
             == "violation_blocked"
         )
         assert agent._guard.compose("Let me put you through to one of our ambassadors.")
-        await final_turn(agent, "en")
-        assert agent._guard.language == "en"
         assert agent._budget_policy_runs
+        # And it does NOT switch back: the opening language has no authored
+        # closing phrases, so going there would leave a call the buyer cannot
+        # end. Refused, and the refusal is on the stream.
+        await final_turn(agent, language, "Ein ausreichend langer Satz hier bitte")
+        assert agent._settings.language == "en"
     finally:
         await agent.brief_extractor.aclose()
 
 
 async def test_partials_do_not_switch_and_short_final_does_not_inherit_partial_language():
-    agent = make_agent()
+    agent = make_agent(language="fr")
     try:
         agent.note_transcribed_language(
             UserInputTranscribedEvent(
-                language="fr", transcript="A long partial transcript", is_final=False
+                language="en", transcript="A long partial transcript", is_final=False
             )
         )
-        await final_turn(agent, "en", "Yes")
-        assert agent._settings.language == "en"
-        await final_turn(agent, "fr")
+        # A short final cannot inherit the partial's language, and the partial
+        # cannot carry the switch on its own.
         await final_turn(agent, "en", "Yes")
         assert agent._settings.language == "fr"
+        # A final with enough evidence does switch.
+        await final_turn(agent, "en")
+        assert agent._settings.language == "en"
     finally:
         await agent.brief_extractor.aclose()
 
@@ -105,13 +119,15 @@ async def test_uncertified_switch_refused_without_explicit_demo_override():
 
 
 async def test_contact_permission_is_not_inferred_by_switching_language():
-    agent = make_agent()
+    agent = make_agent(language="fr")
     try:
+        # In English because the ask has to have HAPPENED for cancelling it to
+        # mean anything, and contact copy exists for English.
         contact = ContactPolicy(load_contact_copy(), "en")
         contact.on_farewell(1)
         agent._contact = contact
         agent._contact_awaiting_reply = True
-        await final_turn(agent, "fr")
+        await final_turn(agent, "en")
         assert contact.state.status == "unconfirmed"
         assert not contact.state.confirmed
         assert not contact.state.contact_permission
