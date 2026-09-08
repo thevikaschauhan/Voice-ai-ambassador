@@ -2,11 +2,15 @@
 
 Closes review finding P1a: at 3ab4928 a SINGLE utterance could flip the
 response language for the rest of the call, and a project name was enough to
-do it. `Binghatti Skyhall` (16 letters) and `Mercedes Benz Places` (18) both
-flipped it, which means saying the client's own product name in an English
-call could switch the agent into another language - and the language decides
-which guardrail patterns, farewell phrases and disclosure copy apply from then
-on (ADR-010).
+do it: `Binghatti Skyrise` is 16 letters, and once the recogniser tagged those
+letters as German that was enough. So saying the client's own product name in
+an English call could switch the agent out of English - and the language
+decides which guardrail patterns, farewell phrases and disclosure copy apply
+for the rest of the call (ADR-010).
+
+(god's report named `Binghatti Skyhall` and `Mercedes Benz Places`. Neither is
+one of ours - they were illustrations - which matters here only because a term
+list can exclude a real project and can never exclude the second kind.)
 
 Two independent barriers, and they fail apart, which is why both are here:
 
@@ -44,16 +48,28 @@ from ambassador.schemas import Language
 # project and area names from inventory). Kept EXPLICIT here rather than
 # imported from his assembly on purpose: a change to inventory must never
 # quietly turn one of these assertions green.
+# These are the real sixteen `switch_excluded_terms()` returns, longest first.
+# `Skyhall` is NOT among them: it was one of god's illustrations, not one of
+# our projects, and a test asserting it is excluded would go green on the
+# LETTER THRESHOLD (seven letters) whether the exclusion existed or not -
+# dwight's catch, and the reason the cases below assert both directions.
 TERMS = (
-    "Binghatti",
-    "Bugatti Residences",
-    "Burj Binghatti",
-    "Skyrise",
-    "Skyhall",
-    "Business Bay",
+    "Bugatti Residences by Binghatti",
     "Jumeirah Village Circle",
-    "AED",
+    "Dubai Maritime City",
+    "Binghatti Aquarise",
+    "Bugatti Residences",
+    "Binghatti Skyrise",
+    "Binghatti Circle",
+    "Burj Binghatti",
+    "Business Bay",
+    "Jacob and Co",
+    "Al Jaddaf",
+    "Binghatti",
+    "Skyrise",
     "dirhams",
+    "Meydan",
+    "AED",
 )
 
 
@@ -132,24 +148,51 @@ def test_a_challenger_has_to_lead_on_CONSECUTIVE_turns():
 
 
 @pytest.mark.parametrize(
-    "utterance",
+    "name",
     [
-        "okay",
-        "ok sure",
-        "Skyhall",
         "Binghatti",
-        "Binghatti Skyhall",
-        "Bugatti Residences",
-        "AED",
+        "Binghatti Skyrise",
+        "Bugatti Residences by Binghatti",
+        "Business Bay",
     ],
 )
-def test_a_name_or_an_acknowledgement_never_flips_the_call(utterance):
-    """Every one of these was tagged as another language by the recogniser and
-    `Binghatti`(9), `Binghatti Skyhall`(16) and `Bugatti Residences`(18) were
-    long enough to flip the call at 3ab4928. Asserted over TWO turns, so it is
-    the terms doing the work here and not the turn count."""
-    said = [("de", utterance)]
+def test_a_project_or_area_name_is_not_evidence_of_a_language(name):
+    """A real inventory name, tagged as German by the recogniser.
+
+    The SECOND assertion is what makes this a test of the exclusion rather
+    than of the letter threshold. Each of these is long enough to take the
+    call on its own once the terms are gone - `Binghatti` is 9, the others 12
+    to 28 - so deleting the exclusion turns this red instead of leaving it
+    green for the wrong reason.
+
+    That distinction is dwight's catch. My first draft asserted `Skyhall` and
+    `Binghatti Skyhall`, and `Skyhall` is seven letters: under the threshold,
+    so it holds whether or not anything is excluded. Neither is one of our
+    projects either - both were god's illustrations - so the list could not
+    have contained them anyway.
+
+    An area is here for the same reason as a project: a buyer naming the
+    district they want to live in has not changed language.
+    """
+    said = [("de", name)]
     assert settle("en", said, said) == "en"
+    assert settle("en", said, said, terms=()) == "de", (
+        "with no terms excluded this name DOES take the call, which is what "
+        "makes the assertion above about the exclusion and not the threshold"
+    )
+
+
+@pytest.mark.parametrize("utterance", ["okay", "ok sure", "AED", "Skyhall"])
+def test_a_short_utterance_is_too_little_evidence(utterance):
+    """The other barrier, named for what it actually exercises.
+
+    These hold on the LETTER THRESHOLD - four, six, three and seven letters
+    against a minimum of eight - so they are asserted with NO terms excluded.
+    Keeping them separate from the names above is the point: read as exclusion
+    cases they would be four tests that cannot fail.
+    """
+    said = [("de", utterance)]
+    assert settle("en", said, said, terms=()) == "en"
 
 
 def test_mercedes_benz_places_is_stopped_by_the_turns_not_the_terms():
