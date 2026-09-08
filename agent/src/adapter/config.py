@@ -189,6 +189,26 @@ PROVISIONAL_VOICE_ID_AR = "10c5c2a37a284a81bb0cf3c53955d795"  # Gulf-accented, c
 PROVISIONAL_VOICE_ID_HI = "6209a5682085409fa935f901f0bce950"  # "neel", community
 
 
+# The one slug with real provider redundancy: five endpoints (Alibaba,
+# DeepInfra, Google, Novita, Parasail) against the primary's one, so a rate
+# limit on Alibaba's shared pool has somewhere to go. Same family, instruct
+# tuned, no thinking. Set LLM_FALLBACK_MODELS= (empty) to switch it off.
+_DEFAULT_FALLBACK_MODELS: Final = "qwen/qwen3-next-80b-a3b-instruct"
+
+
+def _resolve_list(
+    file_values: dict[str, str], key: str, default: str = ""
+) -> tuple[str, ...]:
+    """A comma-separated setting, emptied by setting it to nothing.
+
+    Blank entries are dropped rather than passed on, because `a,,b` is a typo
+    and an empty model id would be rejected by the API with a 400 that named
+    the request rather than the variable.
+    """
+    raw = _resolve(file_values, key, default)
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 def _resolve(file_values: dict[str, str], key: str, default: str = "") -> str:
     """Process environment wins over the file, so a one-off run can override
     without editing .env (`GUARDRAIL_MODE=warn uv run ...`)."""
@@ -331,6 +351,11 @@ class Settings:
     auto_language_switch: bool = False
     soniox_api_key: str = ""
     soniox_model: str = "stt-rt-v5"
+    # Slugs OpenRouter may fall back to, in order, when the primary's providers
+    # are down, rate-limited or refuse to reply. Empty disables it, and empty is
+    # a real answer: a fallback only ever runs on a turn the primary already
+    # failed, so the choice is between an unmeasured model and a dead turn.
+    llm_fallback_models: tuple[str, ...] = ()
 
     @property
     def thinking_disabled(self) -> bool:
@@ -676,6 +701,9 @@ def load_settings(env_path: Path | None = None) -> Settings:
         livekit_api_secret=_resolve(file_values, "LIVEKIT_API_SECRET"),
         openrouter_api_key=_resolve(file_values, "OPENROUTER_API_KEY"),
         llm_model=_resolve(file_values, "LLM_MODEL", "qwen/qwen3.7-flash"),
+        llm_fallback_models=_resolve_list(
+            file_values, "LLM_FALLBACK_MODELS", _DEFAULT_FALLBACK_MODELS
+        ),
         llm_base_url=_resolve(
             file_values, "LLM_BASE_URL", "https://openrouter.ai/api/v1"
         ),

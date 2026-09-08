@@ -57,6 +57,12 @@ class UsageFrame(TypedDict):
     completion_tokens: int | None
     reasoning_tokens: int
     cached_tokens: int
+    # Which model actually answered, from the response rather than the request.
+    # With a `models` fallback array the two differ exactly when the fallback
+    # fired, and this is the only place that difference is visible: the turn
+    # records the model we ASKED for. None when the frame does not say, so the
+    # emitter keeps the configured name instead of inventing one.
+    served_model: str | None
 
 
 UsageCallback = Callable[[UsageFrame], None]
@@ -94,7 +100,9 @@ def _extract_usage(payload: dict[str, Any]) -> UsageFrame | None:
         return None
     completion_details = usage.get("completion_tokens_details") or {}
     prompt_details = usage.get("prompt_tokens_details") or {}
+    served = payload.get("model")
     return UsageFrame(
+        served_model=served if isinstance(served, str) and served else None,
         prompt_tokens=usage.get("prompt_tokens"),
         completion_tokens=usage.get("completion_tokens"),
         # Absent means the provider reported no reasoning at all, which for
@@ -182,7 +190,9 @@ class _UsageTappedStream(httpx.AsyncByteStream):
             await aclose()
 
 
-def mark_system_prompt_cacheable(body: bytes) -> bytes:
+def mark_system_prompt_cacheable(
+    body: bytes, *, only_for_model: str | None = None
+) -> bytes:
     """Attach a cache breakpoint to the system message, in place.
 
     Alibaba caching through OpenRouter is explicit-only, and measured
@@ -201,9 +211,21 @@ def mark_system_prompt_cacheable(body: bytes) -> bytes:
 
     Returns the body unchanged on anything unexpected. A missed cache costs
     latency and money; a corrupted request costs the turn.
+
+    `only_for_model` narrows it to one slug. It exists because a `models`
+    fallback array means the request we send is not necessarily the request a
+    caching provider serves.
     """
     try:
         payload = json.loads(body)
+        # The breakpoint exists for Alibaba, whose caching through OpenRouter is
+        # explicit-only. Every fallback candidate reports
+        # `supports_implicit_caching: false`, and OpenRouter's docs do not say
+        # what a non-caching provider does with the marker, so it is offered to
+        # the slug it was written for and to nothing else. `None` keeps the
+        # original unconditional behaviour for callers that have no model.
+        if only_for_model is not None and payload.get("model") != only_for_model:
+            return body
         messages = payload.get("messages")
         if not isinstance(messages, list) or not messages:
             return body
@@ -241,15 +263,19 @@ class UsageTappingTransport(httpx.AsyncBaseTransport):
         inner: httpx.AsyncBaseTransport | None = None,
         on_status: StatusCallback | None = None,
         cache_system_prompt: bool = True,
+        cache_only_for_model: str | None = None,
     ):
         self._on_usage = on_usage
         self._on_status = on_status
         self._inner = inner or httpx.AsyncHTTPTransport()
         self._cache_system_prompt = cache_system_prompt
+        self._cache_only_for_model = cache_only_for_model
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         if self._cache_system_prompt and request.method == "POST":
-            marked = mark_system_prompt_cacheable(request.content)
+            marked = mark_system_prompt_cacheable(
+                request.content, only_for_model=self._cache_only_for_model
+            )
             if marked is not request.content:
                 request = httpx.Request(
                     method=request.method,
@@ -323,8 +349,19 @@ def build_llm(
         # enable_thinking. Verified live: reasoning_tokens comes back 0.
         extra_body["reasoning"] = {"enabled": False}
 
+    if settings.llm_fallback_models:
+        # OpenRouter tries these in order when the primary's providers are
+        # "down, rate-limited, or refuse to reply", and prices the request at
+        # whichever model actually answered. With the OpenAI SDK the array goes
+        # in `extra_body`, which is the dict this function already builds.
+        extra_body["models"] = list(settings.llm_fallback_models)
+
     http_client = httpx.AsyncClient(
-        transport=UsageTappingTransport(on_usage, on_status=on_status),
+        transport=UsageTappingTransport(
+            on_usage,
+            on_status=on_status,
+            cache_only_for_model=settings.llm_model,
+        ),
         timeout=httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0),
         follow_redirects=True,
     )

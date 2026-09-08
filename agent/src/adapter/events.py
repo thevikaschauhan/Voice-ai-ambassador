@@ -1067,6 +1067,7 @@ class TurnTracker:
         completion_tokens: int | None,
         reasoning_tokens: int | None,
         cached_tokens: int | None,
+        served_model: str | None = None,
     ) -> None:
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
@@ -1075,7 +1076,10 @@ class TurnTracker:
         self._log.emit(
             "llm_usage",
             turn=self.turn_index,
-            model=self.model,
+            # What ANSWERED, not what was asked for. They differ exactly when a
+            # `models` fallback fired, and the turn itself only knows the
+            # request, so without this a fallback would be invisible.
+            model=served_model or self.model,
             prompt_tokens=prompt_tokens,
             cached_tokens=cached_tokens,
             completion_tokens=completion_tokens,

@@ -939,6 +939,7 @@ class AmbassadorAgent(Agent):
             completion_tokens=usage["completion_tokens"],
             reasoning_tokens=usage["reasoning_tokens"],
             cached_tokens=usage["cached_tokens"],
+            served_model=usage["served_model"],
         )
 
     def note_metrics(self, metrics: Any) -> None:
