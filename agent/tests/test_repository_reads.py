@@ -345,60 +345,106 @@ async def test_get_audit_events_returns_the_event_that_was_added(repository, lea
 # -- full-text retrieval (ADR-019) --------------------------------------
 
 
+def a_project_in_inventory() -> str:
+    """A project id that is actually in inventory.
+
+    Derived, never restated. The fixture this replaces bound a chunk to
+    `binghatti-canal`, which is not an inventory project at all - the raw
+    UPDATE wrote the binding directly, so nothing ever checked it, and the
+    real publication path refuses it with "Choose an existing inventory
+    project."
+    """
+    from ambassador.inventory import load_inventory
+
+    return sorted(project.id for project in load_inventory())[0]
+
+
+async def publish_through_the_real_path(repository, *, title, text, actions):
+    """Ingest `text` and publish it the way the admin API does.
+
+    `actions` maps a chunk's ordinal to its scope choice: either a scope name
+    or a `(scope, project_id)` pair.
+
+    Nothing here writes a status. Every retrieval precondition below - the
+    document being published, a chunk carrying a `prompt_body`, a figure
+    surface withheld - is whatever the publication transaction leaves behind.
+    That is the point: audit #166 found that NO production code published a
+    document, and the reason 1900+ green tests never noticed is that the
+    fixtures set `status = 'published'` themselves. A fixture that asserts a
+    precondition into existence cannot report that nothing produces it.
+    """
+    from adapter.ingestion import parse_document, store_document
+    from ambassador.schemas import KnowledgePublicationRequest
+
+    stored = await store_document(
+        repository, title=title, parsed=parse_document(None, None, pasted=text)
+    )
+    document_id = stored["id"]
+    review = await repository.get_document_review(document_id)
+    selections = []
+    for chunk in review["chunks"]:
+        choice = actions[chunk["ordinal"]]
+        action, project_id = choice if isinstance(choice, tuple) else (choice, None)
+        selections.append(
+            {
+                "chunk_id": str(chunk["id"]),
+                "action": action,
+                "project_id": project_id,
+            }
+        )
+    await repository.publish_document(
+        document_id,
+        KnowledgePublicationRequest(
+            request_id=uuid.uuid4(),
+            expected_revision=review["revision"],
+            expected_review_token=review["review_token"],
+            confirmed=True,
+            selections=selections,
+        ),
+    )
+    return document_id, {chunk["ordinal"]: chunk["id"] for chunk in review["chunks"]}
+
+
+HANDBOOK = """# Amenities
+
+The rooftop pool is open to residents and faces the water.
+
+# Aquarise
+
+Aquarise faces the water.
+
+# Internal
+
+Internal margin guidance for the pool."""
+
+
 @pytest.fixture
 async def published(repository):
     """A published document with three chunks: general, bound project, and
-    one still closed. Only Postgres can settle what the search returns."""
-    document_id = await repository.add_document(
-        revision=1,
+    one still closed. Only Postgres can settle what the search returns.
+
+    Reached through ingestion and the publication transaction. The bodies
+    carry the words the searches below look for, rather than being edited into
+    place afterwards, so what retrieval matches is what publication wrote.
+    """
+    project_id = a_project_in_inventory()
+    document_id, chunks = await publish_through_the_real_path(
+        repository,
         title="Handbook",
-        source_type="txt",
-        original_filename=None,
-        mime_type="text/plain",
-        source_bytes=512,
-        source_sha256="c" * 64,
-        extracted_text="",
+        text=HANDBOOK,
+        actions={
+            0: "general_knowledge",
+            1: ("project_knowledge", project_id),
+            2: "admin_only",
+        },
     )
-    ids = {}
-    for ordinal, (key, body, scope, project) in enumerate(
-        [
-            (
-                "general",
-                "The rooftop pool is open to residents.",
-                "general_knowledge",
-                None,
-            ),
-            (
-                "project",
-                "Canal Residences faces the water.",
-                "project_knowledge",
-                "binghatti-canal",
-            ),
-            ("closed", "Internal margin guidance for the pool.", "admin_only", None),
-        ]
-    ):
-        chunk_id = await repository.add_chunk(
-            document_id,
-            document_revision=1,
-            ordinal=ordinal,
-            heading=None,
-            body=body,
-            content_sha256=f"{ordinal:064d}",
-        )
-        ids[key] = chunk_id
-        if scope != "admin_only":
-            await repository._pool.execute(
-                "UPDATE knowledge_chunks SET retrieval_scope = $2, project_id = $3,"
-                " prompt_body = body WHERE id = $1",
-                chunk_id,
-                scope,
-                project,
-            )
-    await repository._pool.execute(
-        "UPDATE knowledge_documents SET status = 'published' WHERE id = $1",
-        document_id,
-    )
-    return {"document_id": document_id, **ids}
+    return {
+        "document_id": document_id,
+        "project_id": project_id,
+        "general": chunks[0],
+        "project": chunks[1],
+        "closed": chunks[2],
+    }
 
 
 async def test_search_returns_reviewed_prose_and_never_a_closed_chunk(
@@ -408,12 +454,116 @@ async def test_search_returns_reviewed_prose_and_never_a_closed_chunk(
     assert [row["id"] for row in rows] == [published["general"]]
 
 
-async def test_search_skips_a_document_that_is_not_published(repository, published):
-    await repository._pool.execute(
-        "UPDATE knowledge_documents SET status = 'draft' WHERE id = $1",
-        published["document_id"],
+async def test_a_draft_document_never_retrieves(repository):
+    """Ingested and not published: the state a document is in until somebody
+    publishes it, which is the state audit #166 found everything was in."""
+    from adapter.ingestion import parse_document, store_document
+
+    await store_document(
+        repository,
+        title="Handbook",
+        parsed=parse_document(None, None, pasted=HANDBOOK),
     )
     assert await repository.search_chunks(["pool"], project_ids=[], limit=4) == []
+
+
+async def test_republishing_stops_the_superseded_revision_retrieving(
+    repository, published
+):
+    """`publish_document` archives the older revision in the same transaction
+    (repository.py: "Older revisions stop retrieving in the same transaction"),
+    and nothing else in the suite asserts that it does.
+
+    This is also the only test here in which `d.status = 'published'` is
+    load-bearing. Revision 1's chunks keep the `prompt_body` publication gave
+    them, so status is the ONLY reason they stop being retrievable - which is
+    what the raw flip to `'draft'` was standing in for, except that no
+    production path can put a published document back into `'draft'` while
+    republishing is exactly how one stops retrieving.
+    """
+    revised = await _second_revision(
+        repository,
+        published["document_id"],
+        text="# Amenities\n\nThe rooftop terrace is open to residents.",
+    )
+    assert (
+        await repository.get_document_review(published["document_id"])
+    )["status"] == "published"
+
+    rows = await repository.search_chunks(["pool"], project_ids=[], limit=4)
+    assert rows == [], "a superseded revision must stop retrieving"
+    rows = await repository.search_chunks(["terrace"], project_ids=[], limit=4)
+    assert [row["id"] for row in rows] == [revised], (
+        "and the revision that replaced it must retrieve"
+    )
+
+
+async def _second_revision(repository, document_id, *, text):
+    """Revision 2 of an existing document, published through the real path.
+
+    `store_document` hardcodes `revision=1` and `add_document` mints a fresh
+    id on every call, so the revision-2 row itself is the one statement written
+    directly here. Its chunks and figures still go through the repository's own
+    writers, and the publication is the real transaction - which is what makes
+    revision 1 archived rather than a status this test chose.
+    """
+    from ambassador.knowledge import chunk_text, load_limits
+    from ambassador.schemas import KnowledgePublicationRequest
+    from adapter.ingestion import figures_in, parse_document
+
+    parsed = parse_document(None, None, pasted=text)
+    await repository._pool.execute(
+        """
+        INSERT INTO knowledge_documents (
+            id, revision, title, source_type, original_filename, mime_type,
+            source_bytes, source_sha256, extracted_text, status)
+        VALUES ($1, 2, 'Handbook', 'txt', NULL, 'text/plain', $2, $3, $4, 'draft')
+        """,
+        document_id,
+        parsed.source_bytes,
+        parsed.source_sha256,
+        parsed.text,
+    )
+    import hashlib
+
+    for chunk in chunk_text(parsed.text, load_limits()):
+        chunk_id = await repository.add_chunk(
+            document_id=document_id,
+            document_revision=2,
+            ordinal=chunk.ordinal,
+            heading=chunk.heading,
+            body=chunk.body,
+            content_sha256=hashlib.sha256(chunk.body.encode("utf-8")).hexdigest(),
+        )
+        for figure in figures_in(chunk.body):
+            await repository.add_figure(
+                document_id=document_id,
+                document_revision=2,
+                chunk_id=chunk_id,
+                value=figure.value,
+                kind=figure.kind,
+                currency=figure.currency,
+                unit=figure.unit,
+                surface=figure.surface,
+                source_sentence=figure.source_sentence,
+                page=figure.page,
+            )
+    review = await repository.get_document_review(document_id)
+    assert review["revision"] == 2
+    await repository.publish_document(
+        document_id,
+        KnowledgePublicationRequest(
+            request_id=uuid.uuid4(),
+            expected_revision=2,
+            expected_review_token=review["review_token"],
+            confirmed=True,
+            selections=[
+                {"chunk_id": str(c["id"]), "action": "general_knowledge"}
+                for c in review["chunks"]
+            ],
+        ),
+    )
+    return review["chunks"][0]["id"]
 
 
 async def test_a_bound_project_chunk_ranks_ahead_of_general_knowledge(
@@ -421,15 +571,13 @@ async def test_a_bound_project_chunk_ranks_ahead_of_general_knowledge(
 ):
     """docs/10-: when the turn's project is known its prose sorts first, and
     general knowledge stays eligible on every turn."""
-    await repository._pool.execute(
-        "UPDATE knowledge_chunks SET prompt_body = 'The rooftop pool faces the water.'"
-        " WHERE id = $1",
-        published["general"],
-    )
     rows = await repository.search_chunks(
-        ["water"], project_ids=["binghatti-canal"], limit=4
+        ["water"], project_ids=[published["project_id"]], limit=4
     )
     assert rows[0]["id"] == published["project"]
+    assert published["general"] in [row["id"] for row in rows], (
+        "general knowledge stays eligible"
+    )
 
 
 async def test_figures_for_chunks_reports_approval_from_the_active_review(
@@ -458,38 +606,24 @@ async def test_figures_for_chunks_reports_approval_from_the_active_review(
 @pytest.fixture
 async def brochure(repository):
     """One published chunk that answers a real question, so the search can be
-    asked the question a buyer would actually ask."""
-    document_id = await repository.add_document(
-        revision=1,
+    asked the question a buyer would actually ask.
+
+    Published through the real path, which means the four figures in this
+    sentence are extracted and withheld from `prompt_body` on the way. The
+    search still finds it because `search_vector` is generated from `body`,
+    not from `prompt_body` - a distinction a fixture that wrote
+    `prompt_body = body` could not have shown.
+    """
+    _, chunks = await publish_through_the_real_path(
+        repository,
         title="Aquarise",
-        source_type="txt",
-        original_filename=None,
-        mime_type="text/plain",
-        source_bytes=256,
-        source_sha256="d" * 64,
-        extracted_text="",
-    )
-    chunk_id = await repository.add_chunk(
-        document_id,
-        document_revision=1,
-        ordinal=0,
-        heading=None,
-        body=(
+        text=(
             "Aquarise studios start at AED 985,000 with handover in 2027. "
             "The tower has 24 floors and 3 pools."
         ),
-        content_sha256="e" * 64,
+        actions={0: "general_knowledge"},
     )
-    await repository._pool.execute(
-        "UPDATE knowledge_chunks SET retrieval_scope = 'general_knowledge',"
-        " prompt_body = body WHERE id = $1",
-        chunk_id,
-    )
-    await repository._pool.execute(
-        "UPDATE knowledge_documents SET status = 'published' WHERE id = $1",
-        document_id,
-    )
-    return chunk_id
+    return chunks[0]
 
 
 async def test_a_natural_question_finds_the_chunk_that_answers_it(repository, brochure):
@@ -625,33 +759,13 @@ async def test_a_hindi_sentence_finds_a_hindi_chunk(repository):
     """End to end, because parity is a means and this is the point of it."""
     from adapter.retrieval import content_tokens
 
-    document_id = await repository.add_document(
-        revision=1,
+    _, chunks = await publish_through_the_real_path(
+        repository,
         title="Aquarise HI",
-        source_type="txt",
-        original_filename=None,
-        mime_type="text/plain",
-        source_bytes=256,
-        source_sha256="f" * 64,
-        extracted_text="",
+        text="अक्वाराइज़ में स्टूडियो की कीमत 985,000 दिरहम है और हैंडओवर 2027 में है।",
+        actions={0: "general_knowledge"},
     )
-    chunk_id = await repository.add_chunk(
-        document_id,
-        document_revision=1,
-        ordinal=0,
-        heading=None,
-        body="अक्वाराइज़ में स्टूडियो की कीमत 985,000 दिरहम है और हैंडओवर 2027 में है।",
-        content_sha256="0" * 64,
-    )
-    await repository._pool.execute(
-        "UPDATE knowledge_chunks SET retrieval_scope = 'general_knowledge',"
-        " prompt_body = body WHERE id = $1",
-        chunk_id,
-    )
-    await repository._pool.execute(
-        "UPDATE knowledge_documents SET status = 'published' WHERE id = $1",
-        document_id,
-    )
+    chunk_id = chunks[0]
 
     rows = await repository.search_chunks(
         content_tokens(PARITY_SENTENCES["hi"], "hi"), project_ids=[], limit=4

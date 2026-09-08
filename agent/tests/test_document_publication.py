@@ -1,10 +1,56 @@
 """Document approval is one transaction, never a loop of browser writes."""
 
+import ast
 import os
 import secrets
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
+TESTS = Path(__file__).resolve().parent
+
+
+def test_no_test_publishes_a_document_by_writing_its_status():
+    """Audit #166 finding (1), enforced rather than remembered.
+
+    Three retrieval fixtures reached `status = 'published'` with a raw UPDATE.
+    That is why 1900+ green tests could not notice that no production code
+    published a document at all: the tests asserted the precondition into
+    existence, so the suite was measuring its own fixture. The state has to
+    come from `publish_document`, which is the only thing that produces it.
+
+    Statement-shaped and AST-scoped on purpose. It reads string LITERALS and
+    asks whether one is an UPDATE naming this table and this column, so it
+    cannot fire on a docstring that happens to discuss publishing - a guard
+    with false positives gets widened, and a widened guard stops meaning
+    anything. Deliberately NOT covered: any other way to reach the state,
+    including a psql call or a helper built from concatenated fragments. This
+    closes the door that was actually walked through.
+    """
+    offenders = []
+    for path in sorted(TESTS.glob("test_*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            sql = " ".join(node.value.split()).lower()
+            words = sql.split(" ")
+            if not words:
+                continue
+            names_the_table = "knowledge_documents" in sql
+            if (
+                words[0] == "update"
+                and names_the_table
+                and "status" in sql
+                or words[0] == "insert"
+                and names_the_table
+                and "published" in sql
+            ):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert offenders == [], (
+        "these tests write a document's publication state directly; publish it "
+        f"through repository.publish_document instead: {offenders}"
+    )
 
 
 def test_publication_requires_the_exact_reviewed_set_and_preserves_closures():
