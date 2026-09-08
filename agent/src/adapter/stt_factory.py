@@ -37,7 +37,10 @@ from livekit.agents import stt
 # one was the exception. tests/test_plugin_registration.py holds the rule for the
 # whole adapter, not just for this line.
 from livekit.plugins import deepgram, soniox
+from collections.abc import Sequence
 from typing import get_args
+
+from ambassador.inventory import Project
 from ambassador.schemas import Language
 
 from .config import Settings
@@ -62,6 +65,39 @@ BRAND_KEYTERMS: tuple[str, ...] = (
     "dirhams",
     "AED",
 )
+
+
+def switch_excluded_terms(projects: Sequence[Project]) -> tuple[str, ...]:
+    """Words that must never count as evidence of a language change.
+
+    The same names we TELL the recogniser to expect are the ones that cannot
+    be evidence the buyer switched language: a Dubai buyer saying "Binghatti
+    Skyrise" in the middle of an Arabic sentence is speaking Arabic (ADR-010 -
+    code-switching is normal register here, and an Arabic speaker reaching for
+    an English project name is not a language signal). Before this list,
+    "Binghatti" alone - nine letters, the whole utterance - flipped an Arabic
+    call to English.
+
+    Returned LONGEST FIRST, which is the property the caller needs rather than
+    a cosmetic one: the terms are stripped by phrase before letters are
+    counted, so "Binghatti Skyrise" has to be tried before "Binghatti" or the
+    shorter match would leave "Skyrise" behind to be counted as English.
+    Deduplicated case-insensitively, because the inventory and the keyterms
+    overlap and a term counted twice is still just one term.
+    """
+    terms = {
+        term.strip()
+        for term in (
+            *BRAND_KEYTERMS,
+            *(project.name for project in projects),
+            *(project.area for project in projects),
+        )
+        if term and term.strip()
+    }
+    seen: dict[str, str] = {}
+    for term in terms:
+        seen.setdefault(term.casefold(), term)
+    return tuple(sorted(seen.values(), key=lambda term: (-len(term), term)))
 
 
 def build_stt(settings: Settings, *, keyterms: tuple[str, ...] = BRAND_KEYTERMS):
