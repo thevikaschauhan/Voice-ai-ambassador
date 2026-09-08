@@ -147,6 +147,41 @@ One gap a deployer will hit, recorded rather than smoothed over. `agent/.env.exa
 
 The last two are same-host paths, and the section below is about what that means. Writing the web contract down is `task-railway-web-service`; this table is the current state, and the section below is the destination.
 
+### Turning on mid-call language switching, if anyone ever does
+
+It ships DORMANT: `AUTO_LANGUAGE_SWITCH` defaults to false, no Railway variable
+changes when it merges, and a worker that never sets it behaves exactly as it
+does today. Recorded here so that whoever flips it does not discover the list
+one failure at a time.
+
+On the **worker service only**. `admin-api` never runs a connecting subcommand,
+so preflight does not fire there and none of these are read; `web` has no
+knowledge of any of them.
+
+1. `SONIOX_API_KEY`, from a new vendor account. A key nothing in the project has
+   held before.
+2. `STT_PROVIDER=soniox`, **in the same edit as the flag**. Setting the flag
+   alone is now a startup refusal naming both settings rather than a call that
+   dies on the first buyer, but it is still a wasted deploy.
+3. `AUTO_LANGUAGE_SWITCH=true`.
+4. `SONIOX_MODEL` is **not** required. It defaults to `stt-rt-v5` in code.
+
+And two that are not variables, and matter more than the four that are.
+
+A switch target needs a native-authored disclosure in `data/disclosures.yaml`,
+and `en` is the only entry that has one: `ar`, `hi` and every additional target
+are empty. With `ALLOW_UNCERTIFIED_LANGUAGE` at its default the certification
+gate skips every switch away from English and logs the skip, so the feature
+turned on against today's copy can only switch BACK to English. That is a
+repository change and a deploy, not a dashboard edit.
+
+Second, `STT_PROVIDER=soniox` moves production off the only recogniser anyone
+has measured. `docs/04-` carries the Deepgram figure, 258-327 ms after audio
+ends, inside the budget line; there is no equivalent number for Soniox anywhere
+in this repository. Measure one call before this goes near a demo, because the
+recogniser sits on the latency-critical path and the meter is the only place a
+regression would show.
+
 ## The `web` service contract
 
 The table above is the inventory; this is the destination. Every value here is
@@ -395,7 +430,14 @@ has no `next/image`. If an `<Image>` ever lands, both sides drop the flag
 together and `sharp` gets pinned explicitly rather than half-installed.
 ## Verifying a deploy
 
-You have pasted the six secrets and Railway has redeployed. This section is how
+You have pasted the secrets `agent/.env.example` names and Railway has
+redeployed. How many that is depends on the configuration rather than being a
+fixed number: `DEEPGRAM_API_KEY` is asked for only on the Deepgram recogniser
+and `SONIOX_API_KEY` only on Soniox, so read the count off the contract rather
+than off this sentence. The measurements further down say "six" and keep saying
+it, because each of those records one experiment on one configuration and a
+measurement that is renumbered later is no longer a measurement. This section is
+how
 you find out whether that worked. Most of the states below were produced on
 purpose, against a production `web` build and the worker image from this tree;
 the rest are read from the framework source at the version this repo pins. Which
@@ -534,6 +576,17 @@ purpose - and refuses to start when it is unset, blank, or misspelled, since
 each of those is equally deaf and equally accidental. Measured in this image:
 all six secrets and no `STT_ENABLED` exits 1 naming it; the same six with
 `STT_ENABLED=false` reaches `registered worker` normally.
+
+The same paragraph reads the same way on the other recogniser, with one name
+changed: with `STT_PROVIDER=soniox` preflight asks for `SONIOX_API_KEY` instead
+of `DEEPGRAM_API_KEY`, and a wrong Soniox key registers just as cleanly as a
+wrong Deepgram one. What preflight now also refuses is the PAIR being
+inconsistent. `AUTO_LANGUAGE_SWITCH=true` with the provider left at `deepgram`
+exits 1 naming both settings, because that check used to live in `build_stt`,
+which runs per job: the worker registered, showed SUCCESS, and raised on the
+first buyer call. A configuration error that only appears when someone dials is
+the failure this whole section exists to prevent, so it is now a startup
+refusal, and the guard in `build_stt` stays behind it as defence in depth.
 
 ### `web`: the healthcheck proves the layout, not the configuration
 

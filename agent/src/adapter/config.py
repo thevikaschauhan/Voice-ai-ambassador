@@ -449,6 +449,34 @@ class Settings:
             if not value
         ]
 
+    def contradictions_for_worker(self) -> list[str]:
+        """Settings that are each legal alone and cannot both hold, by name.
+
+        A third kind of refusal, and it needs to be third because the other two
+        would both describe it wrongly. Nothing is missing - `AUTO_LANGUAGE_SWITCH`
+        and `STT_PROVIDER` are present - and nothing is unchosen, since both were
+        set on purpose. They disagree.
+
+        This lived in `build_stt` as a `ValueError`, which runs inside
+        `entrypoint` and therefore per JOB: a worker with the flag on and the
+        provider left at `deepgram` passed preflight, registered, showed SUCCESS
+        on the dashboard and raised on the first buyer call. That is the failure
+        `preflight` exists to end, and it had grown back for a new variable. The
+        guard stays there as defence in depth; this is what stops the deploy.
+
+        Conditional on `stt_enabled` for the same reason `build_stt` is: it
+        returns None before reaching the guard when STT is off, so the flag is
+        inert rather than wrong in text mode, and refusing there would stop a
+        worker that runs.
+        """
+        if (
+            self.stt_enabled
+            and self.auto_language_switch
+            and self.stt_provider.lower() != "soniox"
+        ):
+            return ["AUTO_LANGUAGE_SWITCH", "STT_PROVIDER"]
+        return []
+
     def missing_for_worker(self) -> list[str]:
         """Everything a worker process must have before it registers.
 
@@ -492,6 +520,19 @@ _LEAD_STORE_REMEDY = (
     "are encrypted before they reach Postgres (docs/10-). Any string of at "
     "least 32 characters works - `openssl rand -base64 32` - or clear "
     "DATABASE_URL to run with no lead store."
+)
+
+# Both ways out, because either is a legitimate answer and the operator is the
+# one who knows which they meant. The `SONIOX_API_KEY` remedy below names only
+# the retreat, which is right when a key is missing and wrong here: the far more
+# likely intent is that somebody enabled the feature and did not know it needs
+# its own recogniser.
+_SWITCH_CONTRADICTION: Final = (
+    "  AUTO_LANGUAGE_SWITCH only works on the Soniox recogniser, which is the "
+    "one that reports which language was spoken. Either set STT_PROVIDER=soniox "
+    "and add SONIOX_API_KEY from console.soniox.com, or set "
+    "AUTO_LANGUAGE_SWITCH=false to keep the fixed-language path on the provider "
+    "you have."
 )
 
 _REMEDIES: Final[dict[str, str]] = {
@@ -558,23 +599,53 @@ def _undeclared_lines(undeclared: list[str]) -> list[str]:
     return lines
 
 
-def worker_refusal(missing: list[str], undeclared: list[str]) -> str | None:
+def contradictory_settings_error(contradictory: list[str]) -> str:
+    """The startup message for two settings that cannot both hold.
+
+    Its own message rather than a third use of one of the others, because the
+    first line of a refusal is the part an operator acts on. "missing
+    credentials" sends them hunting for a key that is not the problem, and
+    "settings a worker must choose explicitly" is simply false when both were
+    chosen. What is wrong is the pair.
+    """
+    return "\n".join([*_contradictory_lines(contradictory), _WHERE_TO_SET])
+
+
+def _contradictory_lines(contradictory: list[str]) -> list[str]:
+    lines = ["settings that contradict each other: " + ", ".join(contradictory)]
+    if "AUTO_LANGUAGE_SWITCH" in contradictory:
+        lines.append(_SWITCH_CONTRADICTION)
+    return lines
+
+
+def worker_refusal(
+    missing: list[str],
+    undeclared: list[str],
+    contradictory: list[str] | None = None,
+) -> str | None:
     """Everything wrong with a worker's configuration at once, or None.
 
-    Both kinds of refusal in one message, because an operator on a platform
+    All three kinds of refusal in one message, because an operator on a platform
     pays a rebuild and a deploy per cycle: learning about the second problem
     after fixing the first costs a round trip for nothing. That is the same
     reasoning `missing_for_worker` already applies across the credentials.
 
-    The pointer to where variables are set is appended ONCE. Printing the two
-    complete messages back to back repeats it, which reads like two unrelated
-    failures rather than one refusal with two causes.
+    The pointer to where variables are set is appended ONCE. Printing the
+    complete messages back to back repeats it, which reads like unrelated
+    failures rather than one refusal with several causes.
+
+    `contradictory` defaults to none so the two-argument callers in the tests
+    still read as they did; the one production caller, `preflight`, passes all
+    three, and a fourth category should be added the same way rather than by
+    widening one of the first two to mean something it does not.
     """
     lines: list[str] = []
     if missing:
         lines += _credential_lines(missing)
     if undeclared:
         lines += _undeclared_lines(undeclared)
+    if contradictory:
+        lines += _contradictory_lines(contradictory)
     return "\n".join([*lines, _WHERE_TO_SET]) if lines else None
 
 

@@ -2866,7 +2866,9 @@ def preflight(argv: list[str] | None = None) -> str | None:
         return None
     settings = load_settings()
     return worker_refusal(
-        settings.missing_for_worker(), settings.undeclared_for_worker()
+        settings.missing_for_worker(),
+        settings.undeclared_for_worker(),
+        settings.contradictions_for_worker(),
     )
 
 
