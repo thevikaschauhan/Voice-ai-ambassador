@@ -21,7 +21,6 @@ an ending, and treating it as one would be the expensive mistake.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,13 +28,9 @@ from typing import Any
 import yaml
 
 from .figures import normalise_digits
+from .tokens import has_content, tokens
 
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
-
-# Any letter or digit in any script, so the token split works in Arabic and
-# Devanagari without an authored list. Same pair as `recognition.py`.
-_CONTENT = re.compile(r"[^\W_]", re.UNICODE)
-_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 @dataclass(frozen=True)
@@ -76,7 +71,15 @@ class Farewells:
 
 
 def _tokens(text: str) -> list[str]:
-    return _TOKEN.findall(normalise_digits(text).lower())
+    """Words, via the shared tokeniser.
+
+    `tokens` rather than a local `[^\\W_]+`, which was letters and digits only
+    and so made every Devanagari matra a token boundary: this table used to
+    load "मुझे जाना है" as five consonant fragments. `recognition.py` shares
+    the module, which is the point - two copies of this question drifted once
+    already.
+    """
+    return tokens(normalise_digits(text))
 
 
 def load_farewells(path: Path | None = None) -> Farewells:
@@ -154,8 +157,8 @@ def _same_word(spoken: str, listed: str) -> bool:
     return spoken == f"{listed}s" or listed == f"{spoken}s"
 
 
-def _match_at(tokens: list[str], index: int, run: tuple[str, ...]) -> bool:
-    window = tokens[index : index + len(run)]
+def _match_at(spoken_tokens: list[str], index: int, run: tuple[str, ...]) -> bool:
+    window = spoken_tokens[index : index + len(run)]
     if len(window) != len(run):
         return False
     return all(_same_word(spoken, listed) for spoken, listed in zip(window, run))
@@ -220,24 +223,24 @@ def read_farewell(
         courtesy_only=False,
     )
     text = normalise_digits(utterance)
-    if not _CONTENT.search(text):
+    if not has_content(text):
         return nothing
     runs = farewells.phrases.get(language) or ()
     if not runs:
         return nothing
-    tokens = _tokens(text)
+    utterance_tokens = _tokens(text)
     ordered = sorted(runs, key=len, reverse=True)
     matched = False
     index = 0
     leftovers: list[str] = []
-    while index < len(tokens):
+    while index < len(utterance_tokens):
         for run in ordered:
-            if _match_at(tokens, index, run):
+            if _match_at(utterance_tokens, index, run):
                 matched = True
                 index += len(run)
                 break
         else:
-            leftovers.append(tokens[index])
+            leftovers.append(utterance_tokens[index])
             index += 1
     lowered = frozenset(name.lower() for name in names)
     courtesies = (farewells.courtesies.get(language) or frozenset()) | lowered
@@ -253,7 +256,7 @@ def read_farewell(
             has_phrase=False,
             unexplained=0,
             named_ambassador=False,
-            courtesy_only=bool(tokens) and not unexplained,
+            courtesy_only=bool(utterance_tokens) and not unexplained,
         )
     return FarewellReading(
         closes=not unexplained,
@@ -287,7 +290,9 @@ def contains_closing_phrase(text: str, farewells: Farewells, language: str) -> b
     runs = farewells.phrases.get(language) or ()
     if not runs:
         return False
-    tokens = _tokens(normalise_digits(text))
+    reply_tokens = _tokens(normalise_digits(text))
     return any(
-        _match_at(tokens, index, run) for index in range(len(tokens)) for run in runs
+        _match_at(reply_tokens, index, run)
+        for index in range(len(reply_tokens))
+        for run in runs
     )

@@ -26,6 +26,11 @@ The garbage half needs an authored list, and a language without one simply
 never classifies a turn as garbage - the safe direction, and no worse than the
 behaviour before this existed.
 
+The two halves ask different questions of the text and only one of them used
+to survive a non-Latin script: "is there any content" reads single characters
+and was always right, while "is every token a filler" needed WORDS and got
+consonant fragments. Both now go through `tokens.py`.
+
 ## Consecutive, and once
 
 The counter resets on any real turn: three failures spread over a good call
@@ -41,7 +46,6 @@ it once.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -49,14 +53,9 @@ from typing import Any, Literal
 import yaml
 
 from .figures import normalise_digits
+from .tokens import has_content, tokens
 
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data"
-
-# Any letter or digit in any script. Arabic and Devanagari included: `\w`
-# under re.UNICODE covers them, which is what makes the empty test work in
-# every language without an authored list.
-_CONTENT = re.compile(r"[^\W_]", re.UNICODE)
-_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 
 # Three, from ADR-011 and docs/04-. A voice bot that makes the buyer repeat
 # themselves a fourth time earns lasting resentment.
@@ -106,13 +105,18 @@ def load_noise_words(path: Path | None = None) -> NoiseWords:
 def is_failed_recognition(utterance: str, noise: NoiseWords, language: str) -> bool:
     """Did this turn carry anything the agent can answer?"""
     text = normalise_digits(utterance)
-    if not _CONTENT.search(text):
+    if not has_content(text):
         return True
     words = noise.words(language)
     if not words:
         return False
-    tokens = _TOKEN.findall(text.lower())
-    return all(token in words for token in tokens)
+    # The shared tokeniser, not a local `[^\W_]+`. That pattern was letters
+    # and digits only, so in Devanagari or vocalised Arabic a real word
+    # arrived as consonant fragments - and fragments being short, an authored
+    # filler list was likelier to contain all of them than to contain the word.
+    # Both directions were wrong: real speech classified as noise, and an
+    # authored whole-word filler that could never classify at all.
+    return all(token in words for token in tokens(text))
 
 
 Action = Literal["none", "escalate"]

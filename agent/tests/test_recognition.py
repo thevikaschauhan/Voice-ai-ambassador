@@ -82,9 +82,13 @@ def test_a_real_turn_is_not_a_failed_recognition(noise, utterance):
 
 
 def test_the_empty_half_works_in_every_language(noise):
-    """`\\w` under re.UNICODE covers Arabic and Devanagari, so an empty turn is
-    caught without an authored word list. This is the half of the trigger that
-    is live in ar/hi today."""
+    """An empty turn is caught without an authored word list, in every
+    language. This is the half of the trigger that is live in ar/hi today.
+
+    Note what this does NOT cover, because for a while nothing did: it asks
+    whether any CHARACTER is content, which was true in every script even
+    while the token split was shattering Devanagari into fragments. A test
+    below covers the token half."""
     for language in get_args(Language):
         assert is_failed_recognition("  ", noise, language)
         assert is_failed_recognition("...", noise, language)

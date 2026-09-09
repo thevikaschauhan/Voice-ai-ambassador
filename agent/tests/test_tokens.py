@@ -67,14 +67,16 @@ def test_arabic_tokenises_the_same_with_and_without_harakat():
     assert tokens("مَعَ السَّلامَة") == ["مع", "السلامة"]
 
 
-def test_a_joiner_does_not_split_a_word():
-    """ZWNJ and ZWJ control how a conjunct renders and occur INSIDE one word.
-    They are format characters, not letters, so the old pattern broke the word
-    in half at them."""
+def test_a_joiner_neither_splits_a_word_nor_changes_it():
+    """ZWNJ and ZWJ sit INSIDE one word and control only how a conjunct
+    renders, so the old pattern broke the word in half at them. Dropping them
+    rather than keeping them is what makes the joined and unjoined spellings
+    of one word the same token - otherwise the recogniser's choice decides
+    whether an authored phrase matches."""
     from ambassador.tokens import tokens
 
-    assert tokens("क्‍ष") == ["क्‍ष"]
-    assert tokens("अ‌ब") == ["अ‌ब"]
+    assert tokens("क्\u200dष") == ["क्ष"]
+    assert tokens("अ\u200cब") == ["अब"]
 
 
 # --- everything that must not have changed -----------------------------------
@@ -118,6 +120,31 @@ def test_the_change_is_additive_across_the_whole_character_range():
         if tokens(probe) != OLD.findall(probe.lower()):
             disagreements.append(hex(point))
     assert disagreements == []
+
+
+def test_the_word_characters_are_exactly_the_unicode_letter_mark_number_set():
+    """Pinned because `adapter/retrieval.py` states the same rule separately,
+    as `frozenset("LMN")`, and it has to agree with a Postgres index
+    expression. The two modules cannot import each other (ADR-002 puts core
+    below the adapter), so the guard against them drifting apart is that each
+    one asserts the same set. If this test fails, retrieval parity is the
+    thing to check before changing the expectation."""
+    import unicodedata
+
+    from ambassador.tokens import _ARABIC_DIACRITICS, _JOINERS, tokens
+
+    for point in range(0, 0x110000, 37):
+        char = chr(point)
+        if char in _ARABIC_DIACRITICS or char in _JOINERS:
+            # Excluded by name rather than by category: see the module.
+            continue
+        # A mark cannot open a word, so the probe puts a letter in front of
+        # the character and asks whether it joined on.
+        joined = tokens(f"a{char}") == [f"a{char}".lower()]
+        assert joined == (unicodedata.category(char)[0] in "LMN"), (
+            hex(point),
+            unicodedata.category(char),
+        )
 
 
 def test_an_underscore_still_separates():
