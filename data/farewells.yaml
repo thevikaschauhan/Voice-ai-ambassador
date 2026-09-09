@@ -34,6 +34,15 @@
 #               (ADR-013): a farewell that varies is not authored copy. It
 #               still passes the guardrail pipeline like any other speech.
 #
+# A `draft:` BLOCK AT THE FOOT OF THIS FILE holds copy the build team has
+# written and NOT certified. The loader does not read it - `load_farewells`
+# reads `phrases`, `courtesies` and `speech` and nothing else - so staged copy
+# cannot arm the detector by being present. That separation is the point:
+# filling `phrases.ar` directly flips `detects("ar")`, which opens the mid-call
+# switch gate, which is a P0 behaviour change made by editing a data file. A
+# reviewer promotes a draft by moving it up into the live key, and that move is
+# the sign-off.
+#
 # Quote every entry. Bare no/yes/on/off load as YAML 1.1 BOOLEANS, and a
 # coerced boolean is a word that can never match - the trap `currencies.yaml`
 # and `recognition.yaml` both walked into. The loader rejects a non-string
@@ -97,9 +106,12 @@ phrases:
   # disclosure: with no phrases the detection simply never fires in Arabic and
   # the call ends the way it does today. A guessed phrase list is the dangerous
   # option, because a wrong entry hangs up on a live buyer.
+  # A drafted list is waiting in `draft.phrases.ar` at the foot of this file.
   ar: []
 
-  # VERIFY: native-authored Hindi closing phrases. Same rule, same reason.
+  # VERIFY: native-authored Hindi closing phrases. Same rule, same reason, and
+  # one more that is not about review at all: the detector cannot represent
+  # Devanagari today. See `draft.phrases.hi`.
   hi: []
 
   # The seven switch-target languages. Declared and empty for the same reason
@@ -208,6 +220,7 @@ courtesies:
     - "hmm"
     - "mhm"
     - "mm"
+  # Drafts for both are in the `draft:` block at the foot of this file.
   ar: []
   hi: []
   # Declared with `phrases` above and empty for the same reason. A courtesy
@@ -239,3 +252,170 @@ speech:
   hi: >
     Thank you for your time today. If you would like to go further, a Binghatti
     ambassador can pick this up with you whenever suits. Goodbye.
+
+# ---------------------------------------------------------------------------
+# draft: staged copy, read by NOBODY
+# ---------------------------------------------------------------------------
+#
+# Written by the build team, certified by no one. `load_farewells` never looks
+# at this key, so nothing here can fire, hang up a call, or open the mid-call
+# switch gate. It is here so a native reviewer has something concrete to
+# correct instead of a blank list, and so promoting it is one deliberate move:
+# lift the entries into the live key above, delete them from here.
+#
+# AGENTS.md's rule against authoring copy in a language you do not speak is NOT
+# resolved by this block. The VERIFY markers above stand.
+draft:
+  phrases:
+    # ERR SHORT, the same rule the English list is built on: an entry has to be
+    # a closing and nothing else. What was considered and deliberately LEFT OUT
+    # is the useful half of this draft, because a reviewer adding one of these
+    # back is how the list gets its first wrong entry:
+    #   "خلاص" / "بس"              "enough / that's it" - said constantly mid-call.
+    #   "سلام"                     greeting AND farewell; cannot be told apart here.
+    #   "تسلم" / "يعطيك العافية"    thanks for an answer, not an ending.
+    #   "شكرا على وقتك"            "thanks for your time" - left out for exactly
+    #                              the reason the English list leaves it out: it
+    #                              is what a buyer says after a good answer.
+    #
+    # 28 entries against English's 34. NOT padded to match: the English list
+    # carries contraction pairs ("that is all" / "that's all") that have no
+    # Arabic counterpart, and inventing filler to hit a number would be putting
+    # unreviewed entries into a table that can end a call.
+    ar:
+      # The plain goodbyes.
+      - "مع السلامة"            # DRAFT, awaiting native review
+      - "إلى اللقاء"            # DRAFT, awaiting native review
+      - "الى اللقاء"            # DRAFT, awaiting native review - the recogniser
+                                # may or may not write the hamza, so both
+                                # spellings are listed rather than guessed at.
+      - "في أمان الله"          # DRAFT, awaiting native review
+      - "باي"                   # DRAFT, awaiting native review
+      - "باي باي"               # DRAFT, awaiting native review
+      # "that is all", MSA and Gulf.
+      - "هذا كل شيء"            # DRAFT, awaiting native review
+      - "هذا كل شي"             # DRAFT, awaiting native review
+      - "هذا كل ما لدي"         # DRAFT, awaiting native review
+      # No more questions. The NEGATION has to be inside the phrase, the same
+      # construction the English entries need: "عندي أسئلة أخرى" without the
+      # "ما" is a buyer telling you they HAVE more.
+      - "ما عندي أسئلة أخرى"    # DRAFT, awaiting native review
+      - "ما عندي أسئلة ثانية"   # DRAFT, awaiting native review
+      - "ليس لدي أسئلة أخرى"    # DRAFT, awaiting native review
+      - "لا أسئلة أخرى"         # DRAFT, awaiting native review
+      - "ما عندي شي ثاني"       # DRAFT, awaiting native review
+      - "لا شيء آخر"            # DRAFT, awaiting native review
+      # Having to leave.
+      - "لازم أروح"             # DRAFT, awaiting native review
+      - "لازم أذهب"             # DRAFT, awaiting native review
+      - "يجب أن أذهب"           # DRAFT, awaiting native review
+      - "يجب أن أنهي المكالمة"  # DRAFT, awaiting native review
+      - "انتهينا"               # DRAFT, awaiting native review - the weakest
+                                # entry here. A reviewer should say whether it
+                                # can mean "we are done with THAT" mid-call; if
+                                # it can, delete it rather than keep it.
+      # Leaving the door open.
+      - "أراك لاحقا"            # DRAFT, awaiting native review
+      - "أشوفك بعدين"           # DRAFT, awaiting native review
+      - "نتواصل لاحقا"          # DRAFT, awaiting native review
+      - "طاب يومك"              # DRAFT, awaiting native review
+      - "يوم سعيد"              # DRAFT, awaiting native review
+      - "تصبح على خير"          # DRAFT, awaiting native review
+      # The information call that has run out of questions.
+      - "هذا يجيب على كل أسئلتي"   # DRAFT, awaiting native review
+      - "جاوبت على كل شي"          # DRAFT, awaiting native review
+
+    # EMPTY, AND NOT FOR WANT OF COPY. Hindi closing phrases are not drafted
+    # even here, because the detector cannot represent Devanagari and a
+    # reviewer correcting a list that cannot work would be wasted review.
+    #
+    # `farewell._TOKEN` is `[^\W_]+`, and every Devanagari vowel sign is a
+    # combining mark that `\w` does not match. A phrase is therefore not split
+    # into words, it is shattered into a consonant skeleton with the vowels
+    # erased:
+    #
+    #     "ठीक है, बाय"   ->  ('ठ', 'क', 'ह', 'ब', 'य')
+    #     "मुझे जाना है"   ->  ('म', 'झ', 'ज', 'न', 'ह')
+    #
+    # The authored phrase and the buyer's utterance are shattered the same way,
+    # so an exact repeat still matches and a round-trip test stays green while
+    # nothing works. What breaks is the safeguard the whole file rests on -
+    # "every remaining token must be a courtesy" - because fragments of
+    # unrelated words collide with courtesy fragments.
+    #
+    # REPRODUCED: with "मुझे जाना है" ("I have to go") listed, the QUESTION
+    # "मुझे जाना है क्या" ("do I have to go?") CLOSES THE CALL, because क्या
+    # shatters into ('क','य') and both fragments already appear as courtesy
+    # fragments. That is a hang-up on a live buyer, the one outcome this file
+    # exists to prevent.
+    #
+    # The fix is a tokeniser that keeps combining marks. It is a code change in
+    # `farewell.py`, and `recognition.py` uses the same regex pair, so the two
+    # want looking at together.
+    # VERIFY: native-authored Hindi closing phrases, AFTER that fix.
+    hi: []
+
+  courtesies:
+    # A courtesy NEVER fires on its own, which is what makes a generous list
+    # safe here and a generous PHRASE list dangerous. This is what decides
+    # whether "طيب، شكرا، مع السلامة" reads as a goodbye or as a near miss.
+    #
+    # The ambassador's name is NOT here, deliberately: it lives in
+    # data/ambassadors.yaml and is passed in, because one name in two files is
+    # a name that can disagree with itself.
+    #
+    # KNOWN GAP for the reviewer: a diacriticised token does not survive the
+    # tokeniser - "شكرًا" becomes ('شكر', 'ا') - so "شكرًا، مع السلامة" is a
+    # MISS. That is the safe direction, and it is left as a miss rather than
+    # patched by listing bare letters as courtesies, which would weaken the
+    # leftovers rule for every phrase at once. Whether the recogniser emits
+    # diacritics at all is a provider question worth answering first.
+    ar:  # DRAFT, awaiting native review - every token below
+      - "شكرا"
+      - "شكر"
+      - "جزيلا"
+      - "لك"
+      - "لكم"
+      - "كثيرا"
+      - "جدا"
+      - "طيب"
+      - "تمام"
+      - "اوكي"
+      - "أوكي"
+      - "حسنا"
+      - "ماشي"
+      - "زين"
+      - "خلاص"
+      - "بس"
+      - "على"
+      - "كل"
+      - "حال"
+      - "نعم"
+      - "ايه"
+      - "اي"
+      - "يا"
+      - "و"
+      - "في"
+      - "من"
+      - "الله"
+      - "يعطيك"
+      - "يسلمك"
+      - "العافية"
+      - "وقتك"
+      - "وقتكم"
+      - "مساعدتك"
+      - "المساعدة"
+      - "سعدت"
+      - "تشرفنا"
+      - "بالحديث"
+      - "معك"
+      - "معكم"
+      - "ممتاز"
+      - "رائع"
+      - "جميل"
+      - "هذا"
+      - "هذه"
+      - "أنا"
+      - "نحن"
+    # Nothing to surround until `draft.phrases.hi` can exist.
+    hi: []

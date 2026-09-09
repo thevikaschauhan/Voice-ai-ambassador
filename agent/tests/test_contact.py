@@ -590,3 +590,30 @@ def test_a_language_switch_between_the_read_back_and_the_reply_fails_safe() -> N
     assert policy.state.status == "unconfirmed"
     assert policy.state.phone is None
     assert policy.state.contact_permission is False
+
+def test_staged_draft_copy_exists_and_cannot_enable_a_language() -> None:
+    """Same contract as `farewells.yaml`, on the file where it matters more.
+
+    `enabled()` reads `ask`, and the ask is the one moment in the call where
+    the buyer is asked to hand something over. A draft written straight into
+    `ask` would turn that on for a language no reviewer has cleared, so the
+    staged copy lives under `draft:` where `ContactCopy` cannot see it.
+
+    Asserting the draft EXISTS matters as much as asserting it is inert: an
+    empty `draft:` would pass the inertness half while quietly losing the copy.
+    """
+    import yaml
+    from pathlib import Path
+
+    from ambassador.contact import load_contact_copy
+
+    raw = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "data" / "contact.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    copy = load_contact_copy()
+    for language in ("ar", "hi"):
+        assert raw[language]["draft"]["ask"].strip(), f"{language} draft ask is staged"
+        assert not copy.ask(language), f"{language} staged copy must stay unread"
+        assert copy.enabled(language) is False, f"{language} must stay disabled"
