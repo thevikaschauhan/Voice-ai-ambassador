@@ -288,3 +288,107 @@ def test_asking_about_questions_is_still_a_question():
         "who do I send further questions to",
     ):
         assert not is_farewell(utterance, FAREWELLS, "en", names=NAMES), utterance
+
+
+# --- scripts whose vowels are combining marks -------------------------------
+#
+# Reported by Pam from PR #181, reproduced here. `[^\W_]+` matched a letter or
+# digit and nothing else, and every Devanagari vowel sign is a combining mark
+# that `\w` does not match - so a phrase and an utterance both shattered into
+# consonant skeletons. They shattered IDENTICALLY, which is why a round-trip
+# test stayed green while the leftovers safeguard rotted underneath it.
+#
+# The fixtures below use Pam's two strings verbatim, because they are a repro
+# rather than shipped copy. No Hindi is authored here: AGENTS.md reserves that
+# for native review, and `data/farewells.yaml` still carries `hi: []`.
+
+HI_PHRASE = "मुझे जाना है"
+"""Pam's listed closing phrase: "I have to go"."""
+
+HI_QUESTION = "मुझे जाना है क्या"
+"""The same words plus one: "do I have to go?". A question, not a goodbye."""
+
+
+def _hindi_table(tmp_path, courtesies: str = "[]"):
+    path = tmp_path / "farewells.yaml"
+    path.write_text(
+        f'phrases:\n  hi: ["{HI_PHRASE}"]\n'
+        f"courtesies:\n  hi: {courtesies}\n"
+        'speech:\n  en: "x"\n  hi: "x"\n',
+        encoding="utf-8",
+    )
+    return load_farewells(path)
+
+
+def test_a_devanagari_phrase_is_one_run_of_whole_words(tmp_path):
+    """Three words in, three tokens out.
+
+    Before the shared tokeniser this phrase loaded as the five-consonant run
+    ('म','झ','ज','न','ह'), and the table looked like coverage while holding
+    something no buyer can say."""
+    table = _hindi_table(tmp_path)
+    assert table.phrases["hi"] == (("मुझे", "जाना", "है"),)
+
+
+def test_the_declarative_hindi_phrase_still_closes_the_call(tmp_path):
+    """The direction that must keep working: the authored closing IS a
+    farewell. It passed before the fix too, by matching skeleton to skeleton."""
+    table = _hindi_table(tmp_path)
+    assert is_farewell(HI_PHRASE, table, "hi")
+
+
+def test_a_hindi_question_does_not_close_the_call(tmp_path):
+    """Pam's repro, and the reason this is a P0 rather than tidying.
+
+    The question is the listed phrase plus क्या. Under the old tokeniser that
+    extra word shattered to ('क','य'), two fragments that a real Hindi
+    courtesy list already contains - so the leftovers were all "courtesies",
+    the strict rule was satisfied, and the agent hung up on a buyer who had
+    just asked it a question.
+
+    The courtesy entries here are those fragments rather than the Hindi
+    courtesies Pam drafted, for the AGENTS.md reason: they stand in for any
+    authored list that happens to contain them, and standing them in is what
+    lets this test exist before the copy is certified."""
+    table = _hindi_table(tmp_path, courtesies='["क", "य"]')
+    assert not is_farewell(HI_QUESTION, table, "hi")
+
+
+def test_the_leftovers_safeguard_sees_the_extra_word_not_its_fragments(tmp_path):
+    """The safeguard's own arithmetic, which is what actually rotted.
+
+    One extra word should read as one unexplained token. The old tokeniser
+    reported two, and a count that describes fragments rather than words
+    cannot be tuned against a real call."""
+    table = _hindi_table(tmp_path)
+    reading = read_farewell(HI_QUESTION, table, "hi")
+    assert reading.has_phrase is True
+    assert reading.closes is False
+    assert reading.unexplained == 1
+
+
+# Arabic is the same defect with a sharper edge: harakat are combining marks
+# too, and whether the recogniser emits them is not something the authored
+# table can know. So the SAME word had to tokenise the same way both ways, or
+# 28 drafted Arabic phrases match only the unvocalised half of what arrives.
+
+AR_PHRASE = "مع السلامة"
+""""goodbye", unvocalised, the way a phrase list is written."""
+
+AR_PHRASE_VOCALISED = "مَعَ السَّلامَة"
+"""The same two words with harakat, the way a recogniser may transcribe them."""
+
+
+@pytest.mark.parametrize("utterance", [AR_PHRASE, AR_PHRASE_VOCALISED])
+def test_an_arabic_closing_matches_with_or_without_harakat(tmp_path, utterance):
+    """Authored bare, spoken either way. Before the fix the vocalised form
+    tokenised to ('م','ع','الس','لام','ة') and matched nothing."""
+    path = tmp_path / "farewells.yaml"
+    path.write_text(
+        f'phrases:\n  ar: ["{AR_PHRASE}"]\n'
+        "courtesies:\n  ar: []\n"
+        'speech:\n  en: "x"\n  ar: "x"\n',
+        encoding="utf-8",
+    )
+    table = load_farewells(path)
+    assert is_farewell(utterance, table, "ar"), utterance
