@@ -356,3 +356,122 @@ async def test_each_farewell_fallback_is_declared_where_it_actually_happens():
         assert {name for name in names if name.startswith("farewell_")} == expected, (
             agent._settings.language
         )
+
+
+# -- The recogniser named a language: one event at the accumulation site ------
+#
+# Ryan's lsverify gap (2026-09-09): `note_transcribed_language` accumulated
+# segments and emitted nothing, so a language Soniox HEARD but which never
+# cleared `choose_language`'s letter threshold left no trace at all. He could
+# not tell "Arabic was spoken and rejected below threshold" from "Arabic was
+# never spoken" - only that no `ar` decision was ever taken. Same class as the
+# served-model gap in #177: the question has to be answered where the evidence
+# arrives, not downstream of the rule that discards most of it.
+
+
+async def observations(log, buf):
+    """Every `transcribed_language_observed` record, drained."""
+    return await emitted(log, buf, "transcribed_language_observed")
+
+
+async def test_a_heard_language_is_reported_exactly_once_per_call():
+    """Deduped per (call, language). Four turns of Hindi say Hindi ONCE.
+
+    `== 1` rather than `<= 1`: a count assertion that a silent stream also
+    satisfies is the failure mode this suite already shipped once.
+    """
+    agent, log, buf = make_agent()
+    for _ in range(4):
+        await one_turn(agent, "hi")
+    records = await observations(log, buf)
+    assert len(records) == 1
+    assert records[0]["language"] == "hi"
+    assert records[0]["response_language"] == "en"
+
+
+async def test_the_current_response_language_is_not_an_observation():
+    """English heard on an English call is not news, and must stay silent."""
+    agent, log, buf = make_agent()
+    for _ in range(REQUIRED_TURNS + 1):
+        await one_turn(agent, "en")
+    assert await observations(log, buf) == []
+
+
+async def test_each_heard_language_is_its_own_event():
+    """Two languages heard, two events, still one apiece."""
+    agent, log, buf = make_agent()
+    for language in ("hi", "ar", "hi", "ar"):
+        await one_turn(agent, language)
+    records = await observations(log, buf)
+    assert [record["language"] for record in records] == ["hi", "ar"]
+
+
+async def test_a_language_under_the_switch_threshold_is_still_visible():
+    """THE point of the event: heard, refused by the rule, and still visible.
+
+    `shukran` is 7 letters, under `choose_language`'s 8-letter minimum, so the
+    rule discards it without returning a candidate - no decision, not even a
+    refusal. Ryan's question ("spoken, or not spoken?") has no other answer.
+    """
+    agent, log, buf = make_agent()
+    await one_turn(agent, "ar", "shukran")
+    records = await observations(log, buf)
+    assert [record["language"] for record in records] == ["ar"]
+    names = await event_names(agent._log, buf)
+    assert "response_language_changed" not in names
+    assert "response_language_switch_skipped" not in names
+
+
+async def test_the_segment_count_is_the_position_in_the_turn():
+    """One buyer turn can carry several finals, so the count is not always 1.
+
+    Pinned because a field that is 1 by construction is not observability, and
+    a per-LANGUAGE count would be exactly that: the event fires on the first
+    segment of its language, so that count could only ever read 1.
+    """
+    agent, log, buf = make_agent()
+    # The recogniser changes its mind mid-turn: English first, then Hindi.
+    for language in ("en", "hi"):
+        agent.note_transcribed_language(
+            UserInputTranscribedEvent(
+                language=language, transcript=ENGLISH_UTTERANCE, is_final=True
+            )
+        )
+    records = await observations(log, buf)
+    assert [record["segment_count"] for record in records] == [2]
+
+
+async def test_a_partial_never_reports_a_language():
+    """Partials never change speech state, and this event is speech state."""
+    agent, log, buf = make_agent()
+    agent.note_transcribed_language(
+        UserInputTranscribedEvent(
+            language="hi", transcript=ENGLISH_UTTERANCE, is_final=False
+        )
+    )
+    assert await observations(log, buf) == []
+
+
+async def test_an_unnamed_language_is_not_a_language_observation():
+    """No `language` on the event means the recogniser named nothing.
+
+    The segment still accumulates as `unknown` for the rule's own arithmetic,
+    but `transcribed_language_observed` claims a language was IDENTIFIED, and
+    emitting it with `language="unknown"` would make the event say that about
+    a segment where nothing was.
+    """
+    agent, log, buf = make_agent()
+    agent.note_transcribed_language(
+        UserInputTranscribedEvent(
+            language=None, transcript=ENGLISH_UTTERANCE, is_final=True
+        )
+    )
+    assert await observations(log, buf) == []
+    assert agent._language_segments == [("unknown", ENGLISH_UTTERANCE)]
+
+
+async def test_the_switch_flag_gates_the_observation_with_the_accumulation():
+    """Flag off means no segments and no observations: one guard, not two."""
+    agent, log, buf = make_agent(auto_language_switch=False)
+    await one_turn(agent, "hi")
+    assert await observations(log, buf) == []
