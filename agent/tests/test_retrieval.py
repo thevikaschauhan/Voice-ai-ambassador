@@ -242,29 +242,226 @@ async def test_concurrent_retrieval_callers_share_one_inflight_search():
     assert len(repository.searches) == 1
 
 
-async def test_final_transcript_replaces_a_speculative_partial_context_once():
+async def test_retrieval_runs_once_per_final_turn_and_is_reused_by_repeat_llm_nodes():
+    from livekit.agents import AgentSession
+    from livekit.agents.voice.agent_activity import AgentActivity
+
     repository = SpyRepository([chunk_row("c1")], [])
+    agent, _, _, _ = make_agent_with_knowledge(
+        repository, [HealthyStream(["Available. "]), HealthyStream(["Available. "])]
+    )
+    session = AgentSession()
+    activity = AgentActivity(agent, session)
+    # Exercise the framework's merged options, so a session default cannot
+    # silently re-enable generation (and retrieval) from a partial transcript.
+    assert activity.preemptive_generation_opts["enabled"] is False
+    assert repository.searches == []
+    ctx = user_ctx("Tell me about the rooftop pool")
+    await agent.on_user_turn_completed(ctx, ctx.items[-1])
+    await run_llm_node(agent, ctx)
+    first = agent._knowledge_context
+    await run_llm_node(agent, ctx)
+    assert agent._knowledge_context is first
+    assert len(repository.searches) == 1
+    assert len(agent.knowledge_use()) == 1
+
+
+async def test_adopting_an_equivalent_final_preserves_the_reply_and_audit():
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class PausedRepository(SpyRepository):
+        async def search_chunks(self, *args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await super().search_chunks(*args, **kwargs)
+
+    repository = PausedRepository([chunk_row("c1")], [])
+    agent, _, _, _ = make_agent_with_knowledge(
+        repository, [HealthyStream(["Available. "])]
+    )
+    ctx = user_ctx("Tell me about the rooftop pool")
+    generation = asyncio.create_task(run_llm_node(agent, ctx))
+    await entered.wait()
+    await agent.on_user_turn_completed(ctx, ctx.items[-1])
+    release.set()
+    await generation
+    assert len(repository.searches) == 1
+    assert len(agent.knowledge_use()) == 1
+
+
+async def test_cancelled_waiter_and_overlapping_turns_keep_one_result_each():
     from adapter.events import EventLog
     from adapter.retrieval import KnowledgeRetriever
     from ambassador.inventory import build_allowed_figures, load_inventory
 
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class PausedRepository(SpyRepository):
+        async def search_chunks(self, query, **kwargs):
+            if "rooftop" in query:
+                entered.set()
+                await release.wait()
+            return await super().search_chunks(query, **kwargs)
+
+    repository = PausedRepository([chunk_row("c1")], [])
     log = EventLog("sess_test", stream=StringIO(), verbose=False)
     retriever = KnowledgeRetriever(lambda: repository, log=log)
     base = build_allowed_figures(load_inventory())
-    await retriever.for_turn(
-        turn_index=1, query="partial amenity", base=base, project_ids=[]
+    first_waiter = asyncio.create_task(
+        retriever.for_turn(
+            turn_index=1, query="rooftop pool", base=base, project_ids=[]
+        )
     )
-    retriever.reset_turn(1)
-    final = await retriever.for_turn(
-        turn_index=1, query="final handover date", base=base, project_ids=[]
+    await entered.wait()
+    first_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_waiter
+    second = await retriever.for_turn(
+        turn_index=2, query="landscaping", base=base, project_ids=[]
+    )
+    release.set()
+    first = await retriever.for_turn(
+        turn_index=1, query="rooftop pool", base=base, project_ids=[]
+    )
+    assert (
+        await retriever.for_turn(
+            turn_index=2, query="landscaping", base=base, project_ids=[]
+        )
+        is second
+    )
+    assert (
+        await retriever.for_turn(
+            turn_index=1, query="rooftop pool", base=base, project_ids=[]
+        )
+        is first
     )
 
     assert len(repository.searches) == 2
-    assert retriever.buffered()[-1].query_fingerprint == final.query_fingerprint
-    assert len(retriever.buffered()) == 1
+    assert [use.turn_index for use in retriever.buffered()] == [1, 2]
 
 
 # -- source scoping (docs/06 P2-S09) ------------------------------------
+
+
+async def test_changed_continuation_text_cannot_replace_final_turn_evidence():
+    from adapter.events import EventLog
+    from adapter.retrieval import KnowledgeRetriever
+    from ambassador.inventory import build_allowed_figures, load_inventory
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class PausedRepository(SpyRepository):
+        async def search_chunks(self, *args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await super().search_chunks(*args, **kwargs)
+
+    repository = PausedRepository([chunk_row("c1")], [])
+    retriever = KnowledgeRetriever(
+        lambda: repository, log=EventLog("sess_test", stream=StringIO(), verbose=False)
+    )
+    base = build_allowed_figures(load_inventory())
+    first = asyncio.create_task(
+        retriever.for_turn(
+            turn_index=1, query="rooftop pool", base=base, project_ids=[]
+        )
+    )
+    await entered.wait()
+    second = asyncio.create_task(
+        retriever.for_turn(
+            turn_index=1, query="tool continuation", base=base, project_ids=[]
+        )
+    )
+    release.set()
+    assert await first is await second
+    assert len(repository.searches) == len(retriever.buffered()) == 1
+
+
+async def test_timeout_covers_both_reads_and_is_cached_for_repeated_calls():
+    from adapter.events import EventLog
+    from adapter.retrieval import KnowledgeRetriever
+    from ambassador.inventory import build_allowed_figures, load_inventory
+
+    cancelled = asyncio.Event()
+
+    class StalledFigures(SpyRepository):
+        async def figures_for_chunks(self, chunk_ids):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    repository = StalledFigures([chunk_row("c1")], [])
+    retriever = KnowledgeRetriever(
+        lambda: repository, log=EventLog("sess_test", stream=StringIO(), verbose=False)
+    )
+    base = build_allowed_figures(load_inventory())
+    started = asyncio.get_running_loop().time()
+    first = await asyncio.wait_for(
+        retriever.for_turn(
+            turn_index=1, query="rooftop pool", base=base, project_ids=[]
+        ),
+        timeout=0.5,
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+    assert 0.20 <= elapsed < 0.5
+    assert cancelled.is_set()
+    assert first.chunks == ()
+    assert first.allowed is base
+    assert first.system_message is None
+    second = await retriever.for_turn(
+        turn_index=1, query="rooftop pool", base=base, project_ids=[]
+    )
+    assert second is first
+    assert len(repository.searches) == len(retriever.buffered()) == 1
+
+
+@pytest.mark.parametrize("late_failure", [False, True])
+async def test_database_cancellation_cleanup_cannot_extend_the_budget(late_failure):
+    from adapter.events import EventLog
+    from adapter.retrieval import KnowledgeRetriever
+    from ambassador.inventory import build_allowed_figures, load_inventory
+
+    release, cleaned = asyncio.Event(), asyncio.Event()
+
+    class SlowCleanup(SpyRepository):
+        async def figures_for_chunks(self, chunk_ids):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                try:
+                    await release.wait()
+                    if late_failure:
+                        raise RuntimeError("cleanup failed")
+                    return await super().figures_for_chunks(chunk_ids)
+                finally:
+                    cleaned.set()
+
+    repository = SlowCleanup([chunk_row("c1")], [])
+    retriever = KnowledgeRetriever(
+        lambda: repository, log=EventLog("sess_test", stream=StringIO(), verbose=False)
+    )
+    base = build_allowed_figures(load_inventory())
+    try:
+        first = await asyncio.wait_for(
+            retriever.for_turn(
+                turn_index=1, query="rooftop pool", base=base, project_ids=[]
+            ),
+            timeout=0.5,
+        )
+        assert not cleaned.is_set()
+        assert first.chunks == ()
+        assert first.allowed is base
+    finally:
+        release.set()
+        await asyncio.wait_for(cleaned.wait(), timeout=0.5)
+    assert (
+        await retriever.for_turn(
+            turn_index=1, query="rooftop pool", base=base, project_ids=[]
+        )
+        is first
+    )
+    assert len(retriever.buffered()) == 1
 
 
 async def test_only_approved_figures_from_retrieved_chunks_extend_the_turn_set():

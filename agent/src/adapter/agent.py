@@ -347,7 +347,17 @@ class AmbassadorAgent(Agent):
                 ambassador_name=self._ambassador_name,
             )
         )
-        super().__init__(instructions=instructions)
+        super().__init__(
+            instructions=instructions,
+            # ADR-019 retrieves once from the FINAL buyer text. Let LiveKit
+            # schedule these turns after endpointing; speculative retrieval
+            # cannot be revoked safely when the framework reuses a reply.
+            turn_handling=(
+                {"preemptive_generation": {"enabled": False}}
+                if knowledge is not None
+                else NOT_GIVEN
+            ),
+        )
 
         patterns = load_patterns()
         covered = languages_covered(patterns)
@@ -651,9 +661,6 @@ class AmbassadorAgent(Agent):
         tracker = self._tracker
         if tracker is not None and tracker.opened_on_partial and not tracker.adopted:
             tracker.adopt_final_utterance(text)
-            if self._knowledge is not None:
-                self._knowledge.reset_turn(tracker.turn_index)
-            self._knowledge_context = None
             self._note_closing_from_final(text, tracker)
             return
         self._start_tracker(text)

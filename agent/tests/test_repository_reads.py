@@ -454,6 +454,26 @@ async def test_search_returns_reviewed_prose_and_never_a_closed_chunk(
     assert [row["id"] for row in rows] == [published["general"]]
 
 
+async def test_bound_project_prose_is_eligible_without_a_project_preference(
+    repository, published
+):
+    rows = await repository.search_chunks(["water"], project_ids=[], limit=4)
+    assert {row["id"] for row in rows} == {published["general"], published["project"]}
+
+
+async def test_conflicted_prose_cannot_consume_a_ranked_slot(repository, published):
+    # Simulate a stored conflict with a stale prompt projection: eligibility
+    # must be enforced before LIMIT, even if the prompt body is still present.
+    await repository._pool.execute(
+        "UPDATE knowledge_chunks SET conflict_code = 'unknown_project' WHERE id = $1",
+        published["project"],
+    )
+    rows = await repository.search_chunks(
+        ["water"], project_ids=[published["project_id"]], limit=1
+    )
+    assert [row["id"] for row in rows] == [published["general"]]
+
+
 async def test_a_draft_document_never_retrieves(repository):
     """Ingested and not published: the state a document is in until somebody
     publishes it, which is the state audit #166 found everything was in."""

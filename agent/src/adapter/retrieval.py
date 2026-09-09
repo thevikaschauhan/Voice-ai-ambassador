@@ -7,11 +7,11 @@ result is frozen for that turn.
 Three properties live here rather than in the agent, because each of them is
 a rule about retrieval and not a rule about conversation:
 
-- **Once.** `llm_node` runs again for the same turn on a tool split or a
-  preemptive generation. The cache is keyed on turn index and the final query
-  fingerprint, and the SECOND call returns the identical object. Recomputing
-  would be the bug: a second search can rank differently or race a revocation,
-  and then the audit records one figure set while the buyer heard another.
+- **Once.** `llm_node` runs again for the same turn on a tool continuation.
+  The cache is keyed on final turn index, and the SECOND call returns the
+  identical object. Recomputing would be the bug: a second search can rank
+  differently or race a revocation, and then the audit records one figure
+  set while the buyer heard another.
 - **Bounded.** At most 250ms is added before `llm_ttft`. A slow or paused
   database costs the turn its budget and nothing more; the turn then proceeds
   with the inventory figures it already had.
@@ -219,9 +219,9 @@ class KnowledgeRetriever:
         self._language = language
         self._limit = limit
         self._budget = budget_seconds
-        self._context: KnowledgeContext | None = None
         self._buffered: list[KnowledgeUse] = []
-        self._inflight: tuple[int, str, asyncio.Task[KnowledgeContext]] | None = None
+        self._tasks: dict[int, asyncio.Task[KnowledgeContext]] = {}
+        self._reads: set[asyncio.Task[KnowledgeContext]] = set()
 
     def set_language(self, language: str) -> None:
         """Use the current speech language for subsequent query tokenisation."""
@@ -229,25 +229,7 @@ class KnowledgeRetriever:
 
     def buffered(self) -> list[KnowledgeUse]:
         """The rows persist will write, in turn order."""
-        return list(self._buffered)
-
-    def reset_turn(self, turn_index: int) -> None:
-        """Discard a speculative context when the final transcript arrives.
-
-        LiveKit may start a preemptive generation from a partial transcript.
-        Once ``on_user_turn_completed`` supplies the final text, that context
-        is no longer authoritative. Clearing both the cache and its buffered
-        audit row lets the replacement generation retrieve exactly once for
-        the final query.
-        """
-        if self._context is not None and self._context.turn_index == turn_index:
-            self._context = None
-        if self._inflight is not None and self._inflight[0] == turn_index:
-            self._inflight[2].cancel()
-            self._inflight = None
-        self._buffered = [
-            item for item in self._buffered if item.turn_index != turn_index
-        ]
+        return sorted(self._buffered, key=lambda use: use.turn_index)
 
     async def for_turn(
         self,
@@ -257,42 +239,19 @@ class KnowledgeRetriever:
         base: AllowedFigures,
         project_ids: Sequence[str],
     ) -> KnowledgeContext:
-        # The whole point of the cache: same turn, same object, no second
-        # search. Identity rather than equality, so a caller cannot be handed
-        # a rebuilt set that merely compares equal today.
-        query_fingerprint = fingerprint(query)
-        if (
-            self._context is not None
-            and self._context.turn_index == turn_index
-            and self._context.query_fingerprint == query_fingerprint
-        ):
-            return self._context
-
-        # A final transcript can replace a preemptive partial. Keep one audit
-        # row for the turn even when that replacement needs a fresh search.
-        if self._context is not None and self._context.turn_index == turn_index:
-            self.reset_turn(turn_index)
-
-        if (
-            self._inflight is not None
-            and self._inflight[0] == turn_index
-            and self._inflight[1] == query_fingerprint
-        ):
-            return await asyncio.shield(self._inflight[2])
-
-        task = asyncio.create_task(
-            self._resolve(turn_index, query, base, project_ids),
-            name=f"knowledge-retrieval-{turn_index}",
-        )
-        self._inflight = (turn_index, query_fingerprint, task)
-        try:
-            return await asyncio.shield(task)
-        finally:
-            # A cancelled llm generation must not cancel or forget the shared
-            # retrieval task. A later generation for the same turn can then
-            # await it instead of starting a second database search.
-            if task.done() and self._inflight is not None and self._inflight[2] is task:
-                self._inflight = None
+        # The framework starts knowledge-enabled generations only after the
+        # final transcript. A tool continuation cannot change that turn's
+        # evidence, even if its context text or language has changed.
+        # Keep each task for the call: overlapping turns and cancelled waiters
+        # must not replace each other's cache or duplicate their audit rows.
+        task = self._tasks.get(turn_index)
+        if task is None:
+            task = asyncio.create_task(
+                self._resolve(turn_index, query, base, tuple(project_ids)),
+                name=f"knowledge-retrieval-{turn_index}",
+            )
+            self._tasks[turn_index] = task
+        return await asyncio.shield(task)
 
     async def _resolve(
         self,
@@ -302,11 +261,17 @@ class KnowledgeRetriever:
         project_ids: Sequence[str],
     ) -> KnowledgeContext:
         started = asyncio.get_running_loop().time()
+        read = asyncio.create_task(self._retrieve(turn_index, query, base, project_ids))
+        self._reads.add(read)
+        read.add_done_callback(self._read_finished)
         try:
-            context = await asyncio.wait_for(
-                self._retrieve(turn_index, query, base, project_ids),
-                timeout=self._budget,
-            )
+            # wait_for also waits for cancellation cleanup, which a database
+            # driver can extend past the budget. Bound the caller's wait and
+            # discard late results while the driver releases its connection.
+            done, _ = await asyncio.wait({read}, timeout=self._budget)
+            if not done:
+                raise TimeoutError
+            context = read.result()
         except LookupError:
             context = self._miss(turn_index, query, base, started, "not_connected")
         except TimeoutError:
@@ -322,10 +287,19 @@ class KnowledgeRetriever:
                 withheld=context.withheld_figure_match,
                 elapsed_ms=context.elapsed_ms,
             )
+        finally:
+            if not read.done():
+                read.cancel()
 
-        self._context = context
         self._buffer(context)
         return context
+
+    def _read_finished(self, read: asyncio.Task[KnowledgeContext]) -> None:
+        self._reads.discard(read)
+        if not read.cancelled():
+            # Observe cleanup errors too, without changing a frozen miss or
+            # exposing a provider's exception text in the event stream.
+            read.exception()
 
     async def _retrieve(
         self,
