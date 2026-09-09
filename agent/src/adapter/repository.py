@@ -520,6 +520,11 @@ class Repository:
             WHERE query.any_of IS NOT NULL
               AND d.status = 'published'
               AND c.prompt_body IS NOT NULL
+              AND c.retrieval_scope IN ('general_knowledge', 'project_knowledge')
+              AND (
+                    c.retrieval_scope = 'general_knowledge'
+                    OR c.project_id = ANY($2::text[])
+                  )
               AND c.search_vector @@ query.any_of
               AND (
                     SELECT count(*) FROM lexeme

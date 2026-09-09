@@ -651,6 +651,9 @@ class AmbassadorAgent(Agent):
         tracker = self._tracker
         if tracker is not None and tracker.opened_on_partial and not tracker.adopted:
             tracker.adopt_final_utterance(text)
+            if self._knowledge is not None:
+                self._knowledge.reset_turn(tracker.turn_index)
+            self._knowledge_context = None
             self._note_closing_from_final(text, tracker)
             return
         self._start_tracker(text)

@@ -22,6 +22,7 @@ than one collection error.
 
 from __future__ import annotations
 
+import asyncio
 from io import StringIO
 from typing import Any
 
@@ -212,6 +213,55 @@ async def test_retrieval_runs_once_per_turn_and_reuses_the_same_revision_and_fig
     assert [c.document_revision for c in second.chunks] == [3]
     assert second.allowed.currency_amounts == first.allowed.currency_amounts
     assert 1250000.0 in second.allowed.currency_amounts
+
+
+async def test_concurrent_retrieval_callers_share_one_inflight_search():
+    class SlowRepository(SpyRepository):
+        async def search_chunks(self, *args, **kwargs):
+            await asyncio.sleep(0)
+            return await super().search_chunks(*args, **kwargs)
+
+    repository = SlowRepository([chunk_row("c1")], [])
+    from adapter.events import EventLog
+    from adapter.retrieval import KnowledgeRetriever
+    from ambassador.inventory import build_allowed_figures, load_inventory
+
+    log = EventLog("sess_test", stream=StringIO(), verbose=False)
+    retriever = KnowledgeRetriever(lambda: repository, log=log)
+    base = build_allowed_figures(load_inventory())
+    first, second = await asyncio.gather(
+        retriever.for_turn(
+            turn_index=1, query="rooftop pool", base=base, project_ids=[]
+        ),
+        retriever.for_turn(
+            turn_index=1, query="rooftop pool", base=base, project_ids=[]
+        ),
+    )
+
+    assert first is second
+    assert len(repository.searches) == 1
+
+
+async def test_final_transcript_replaces_a_speculative_partial_context_once():
+    repository = SpyRepository([chunk_row("c1")], [])
+    from adapter.events import EventLog
+    from adapter.retrieval import KnowledgeRetriever
+    from ambassador.inventory import build_allowed_figures, load_inventory
+
+    log = EventLog("sess_test", stream=StringIO(), verbose=False)
+    retriever = KnowledgeRetriever(lambda: repository, log=log)
+    base = build_allowed_figures(load_inventory())
+    await retriever.for_turn(
+        turn_index=1, query="partial amenity", base=base, project_ids=[]
+    )
+    retriever.reset_turn(1)
+    final = await retriever.for_turn(
+        turn_index=1, query="final handover date", base=base, project_ids=[]
+    )
+
+    assert len(repository.searches) == 2
+    assert retriever.buffered()[-1].query_fingerprint == final.query_fingerprint
+    assert len(retriever.buffered()) == 1
 
 
 # -- source scoping (docs/06 P2-S09) ------------------------------------

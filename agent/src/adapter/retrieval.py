@@ -8,10 +8,10 @@ Three properties live here rather than in the agent, because each of them is
 a rule about retrieval and not a rule about conversation:
 
 - **Once.** `llm_node` runs again for the same turn on a tool split or a
-  preemptive generation. The cache is keyed on turn index, and the SECOND
-  call returns the identical object. Recomputing would be the bug: a second
-  search can rank differently or race a revocation, and then the audit
-  records one figure set while the buyer heard another.
+  preemptive generation. The cache is keyed on turn index and the final query
+  fingerprint, and the SECOND call returns the identical object. Recomputing
+  would be the bug: a second search can rank differently or race a revocation,
+  and then the audit records one figure set while the buyer heard another.
 - **Bounded.** At most 250ms is added before `llm_ttft`. A slow or paused
   database costs the turn its budget and nothing more; the turn then proceeds
   with the inventory figures it already had.
@@ -61,7 +61,7 @@ class ChunkSource(Protocol):
     """What retrieval needs from the repository, and nothing else."""
 
     async def search_chunks(
-        self, query: str, *, project_ids: Sequence[str], limit: int
+        self, query: Sequence[str], *, project_ids: Sequence[str], limit: int
     ) -> list[dict[str, Any]]: ...
 
     async def figures_for_chunks(
@@ -221,6 +221,7 @@ class KnowledgeRetriever:
         self._budget = budget_seconds
         self._context: KnowledgeContext | None = None
         self._buffered: list[KnowledgeUse] = []
+        self._inflight: tuple[int, str, asyncio.Task[KnowledgeContext]] | None = None
 
     def set_language(self, language: str) -> None:
         """Use the current speech language for subsequent query tokenisation."""
@@ -229,6 +230,24 @@ class KnowledgeRetriever:
     def buffered(self) -> list[KnowledgeUse]:
         """The rows persist will write, in turn order."""
         return list(self._buffered)
+
+    def reset_turn(self, turn_index: int) -> None:
+        """Discard a speculative context when the final transcript arrives.
+
+        LiveKit may start a preemptive generation from a partial transcript.
+        Once ``on_user_turn_completed`` supplies the final text, that context
+        is no longer authoritative. Clearing both the cache and its buffered
+        audit row lets the replacement generation retrieve exactly once for
+        the final query.
+        """
+        if self._context is not None and self._context.turn_index == turn_index:
+            self._context = None
+        if self._inflight is not None and self._inflight[0] == turn_index:
+            self._inflight[2].cancel()
+            self._inflight = None
+        self._buffered = [
+            item for item in self._buffered if item.turn_index != turn_index
+        ]
 
     async def for_turn(
         self,
@@ -241,9 +260,47 @@ class KnowledgeRetriever:
         # The whole point of the cache: same turn, same object, no second
         # search. Identity rather than equality, so a caller cannot be handed
         # a rebuilt set that merely compares equal today.
-        if self._context is not None and self._context.turn_index == turn_index:
+        query_fingerprint = fingerprint(query)
+        if (
+            self._context is not None
+            and self._context.turn_index == turn_index
+            and self._context.query_fingerprint == query_fingerprint
+        ):
             return self._context
 
+        # A final transcript can replace a preemptive partial. Keep one audit
+        # row for the turn even when that replacement needs a fresh search.
+        if self._context is not None and self._context.turn_index == turn_index:
+            self.reset_turn(turn_index)
+
+        if (
+            self._inflight is not None
+            and self._inflight[0] == turn_index
+            and self._inflight[1] == query_fingerprint
+        ):
+            return await asyncio.shield(self._inflight[2])
+
+        task = asyncio.create_task(
+            self._resolve(turn_index, query, base, project_ids),
+            name=f"knowledge-retrieval-{turn_index}",
+        )
+        self._inflight = (turn_index, query_fingerprint, task)
+        try:
+            return await asyncio.shield(task)
+        finally:
+            # A cancelled llm generation must not cancel or forget the shared
+            # retrieval task. A later generation for the same turn can then
+            # await it instead of starting a second database search.
+            if task.done() and self._inflight is not None and self._inflight[2] is task:
+                self._inflight = None
+
+    async def _resolve(
+        self,
+        turn_index: int,
+        query: str,
+        base: AllowedFigures,
+        project_ids: Sequence[str],
+    ) -> KnowledgeContext:
         started = asyncio.get_running_loop().time()
         try:
             context = await asyncio.wait_for(
@@ -251,17 +308,10 @@ class KnowledgeRetriever:
                 timeout=self._budget,
             )
         except LookupError:
-            # Not an error: a call whose pool has not finished connecting, or
-            # a deployment with no database at all. Named separately from the
-            # generic failure so the event says "not_connected" rather than
-            # the name of an exception class.
             context = self._miss(turn_index, query, base, started, "not_connected")
         except TimeoutError:
             context = self._miss(turn_index, query, base, started, "budget_exceeded")
         except Exception as exc:  # a paused database must not end the call
-            # A CLOSED code, never the class name. `CLEAR_EVENTS` promises
-            # `reason` is a fixed set, and a new dependency's exception class
-            # would otherwise put an unreviewed string on the stream.
             context = self._miss(turn_index, query, base, started, _failure_code(exc))
         else:
             self._log.emit(
