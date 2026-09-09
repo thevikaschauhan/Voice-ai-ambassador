@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import io
 
+import pytest
+
 
 def test_first_goodbye_asks_once_second_goodbye_closes_and_decline_is_valid() -> None:
     """The card's named test: the whole shape of the interception in one case.
@@ -439,3 +441,152 @@ def test_the_first_noted_interest_is_the_one_that_is_reported() -> None:
     policy.note_interest("callback", turn_index=6)
     step = policy.on_interest(turn_index=7)
     assert step is not None and step.stage == "ask_after_budget"
+
+
+# --- the read-back consent defect (task-contact-agrees-consent-defect) -------
+#
+# `_agrees` reused the shared word lists but reimplemented the matching, and
+# got wrong the two things `projects.read_agreement` gets right: it matched on
+# a bare substring instead of a word boundary, and it never read
+# `contradictions`, so nothing could win over an affirmation. Every one of
+# these was True before the fix, on the live English path.
+
+REFUSALS = [
+    # substring of an affirmation inside its own negation
+    ("that is not correct", "correct"),
+    ("no, that is not correct", "correct"),
+    ("absolutely not", "absolutely"),
+    ("sorry, incorrect", "correct inside incorrect"),
+    ("I am not sure", "sure"),
+    # an affirmation inside an unrelated word
+    ("I want to book a viewing", "ok inside book"),
+    # the precedence `projects.Agreement` documents: a contradiction in the
+    # same reply wins, whichever order the buyer says them in
+    ("yes, not that one", "contradiction wins over a leading yes"),
+    ("no, that's right", "contradiction wins over a trailing right"),
+]
+
+
+@pytest.mark.parametrize("reply,why", REFUSALS)
+def test_a_read_back_reply_carrying_a_no_is_never_consent(reply, why) -> None:
+    """A wrong number recorded as confirmed is a call to a stranger.
+
+    Asserted through the policy rather than the matcher, because the value at
+    risk is the stored one: `confirmed`, `contact_permission` and the phone
+    itself, not a boolean in the middle.
+    """
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    policy.on_farewell(turn_index=1)
+    policy.observe_reply("Sara, 050 123 4567", turn_index=2)
+
+    outcome = policy.observe_confirmation(reply, turn_index=3)
+
+    assert outcome.settled, "settled either way - the policy never re-asks"
+    assert policy.state.status == "unconfirmed", why
+    assert policy.state.phone is None, "a contradicted number is not kept"
+    assert policy.state.confirmed is False
+    assert policy.state.contact_permission is False
+
+
+@pytest.mark.parametrize(
+    "reply", ["yes", "yes, that is right", "correct", "yep that's it", "perfect"]
+)
+def test_a_plain_agreement_still_captures_the_number(reply) -> None:
+    """The other direction, or the fix would just be a refusal machine."""
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    policy.on_farewell(turn_index=1)
+    policy.observe_reply("Sara, 050 123 4567", turn_index=2)
+
+    policy.observe_confirmation(reply, turn_index=3)
+
+    assert policy.state.status == "captured"
+    assert policy.state.phone == "0501234567"
+    assert policy.state.confirmed is True
+    assert policy.state.contact_permission is True
+
+
+def test_an_unauthored_language_cannot_read_consent_and_discards_the_number() -> None:
+    """Arabic has no authored yes-words, so the safe direction is the only one.
+
+    Sweeping every language's affirmations at once - what the old matcher did -
+    would let an English "yes" settle an Arabic read-back while an Arabic "no"
+    went unread, because only the affirmations were being swept. Reading both
+    halves from the SAME language is what removes that asymmetry.
+    """
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="ar")
+    policy._pending_phone = "0501234567"
+
+    policy.observe_confirmation("نعم", turn_index=3)
+
+    assert policy.state.status == "unconfirmed"
+    assert policy.state.phone is None
+
+
+def test_a_promoted_language_reads_its_own_yes_and_its_own_no(monkeypatch) -> None:
+    """The language argument does its job the day ar/hi words are promoted.
+
+    Driven with a SYNTHETIC vocabulary rather than by promoting the drafts in
+    data/currencies.yaml, so this proves the plumbing without shipping copy no
+    native speaker has cleared. The words here are only fixtures.
+
+    The second half is the one that matters: "غير صحيح" ("not correct")
+    contains the affirmation "صحيح", exactly the shape that made
+    "that is not correct" read as consent in English.
+    """
+    import dataclasses
+
+    from ambassador import budget
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    fixture = dataclasses.replace(
+        budget.load_currency_vocabulary(),
+        affirmations={"ar": ("نعم", "صحيح")},
+        contradictions={"ar": ("لا", "غير صحيح")},
+        negators={"ar": ()},
+    )
+    monkeypatch.setattr(budget, "load_currency_vocabulary", lambda *a, **k: fixture)
+
+    agreed = ContactPolicy(load_contact_copy(), language="ar")
+    agreed._pending_phone = "0501234567"
+    agreed.observe_confirmation("نعم", turn_index=3)
+    assert agreed.state.status == "captured"
+    assert agreed.state.phone == "0501234567"
+
+    refused = ContactPolicy(load_contact_copy(), language="ar")
+    refused._pending_phone = "0501234567"
+    refused.observe_confirmation("غير صحيح", turn_index=3)
+    assert refused.state.status == "unconfirmed", (
+        "the affirmation sits inside the contradiction; the contradiction wins"
+    )
+    assert refused.state.phone is None
+
+
+def test_a_language_switch_between_the_read_back_and_the_reply_fails_safe() -> None:
+    """The adapter cancels a pending REPLY on a switch, not a pending
+    CONFIRMATION (`agent.py`: `cancel_pending=self._contact_awaiting_reply`),
+    so a number awaiting its read-back survives a mid-call language change.
+
+    Reading agreement in the call's own language is what makes that safe. The
+    old sweep would have accepted an English "yes" for a call that had just
+    become Arabic; now an unauthored language reads no consent at all and the
+    number is discarded. Pinned because the safety here is a consequence of the
+    language argument rather than something either module states.
+    """
+    from ambassador.contact import ContactPolicy, load_contact_copy
+
+    policy = ContactPolicy(load_contact_copy(), language="en")
+    policy.on_farewell(turn_index=1)
+    policy.observe_reply("Sara, 050 123 4567", turn_index=2)
+
+    policy.set_language("ar", cancel_pending=False, turn_index=3)
+    policy.observe_confirmation("yes", turn_index=4)
+
+    assert policy.state.status == "unconfirmed"
+    assert policy.state.phone is None
+    assert policy.state.contact_permission is False
