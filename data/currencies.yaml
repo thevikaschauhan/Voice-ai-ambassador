@@ -319,9 +319,9 @@ negators:
 contradictions:
   en: ["no", "nope", "nah", "wrong", "incorrect", "mistake", "misheard"]
   ar: []
-  # VERIFY: native-authored.
+  # VERIFY: native-authored. A draft is staged in `draft.contradictions.ar`.
   hi: []
-  # VERIFY: native-authored.
+  # VERIFY: native-authored. A draft is staged in `draft.contradictions.hi`.
 
 # Affirmations: explicit agreement with a read-back. Consent is never
 # inferred from the absence of an objection - "can you repeat that?" is not
@@ -330,6 +330,135 @@ contradictions:
 affirmations:
   en: ["yes", "yeah", "yep", "yup", "correct", "right", "exactly", "indeed", "sure", "ok", "okay", "fine", "perfect", "absolutely"]
   ar: []
-  # VERIFY: native-authored.
+  # VERIFY: native-authored. A draft is staged in `draft.affirmations.ar`.
   hi: []
-  # VERIFY: native-authored.
+  # VERIFY: native-authored. A draft is staged in `draft.affirmations.hi`.
+
+# ---------------------------------------------------------------------------
+# draft: staged copy, read by NOBODY
+# ---------------------------------------------------------------------------
+#
+# Same contract as the `draft:` blocks in farewells.yaml and contact.yaml.
+# `load_currency_vocabulary` reads named top-level keys only, so nothing here
+# is loaded, and a language cannot be switched on by copy arriving in the file.
+# Promotion is a reviewer lifting a list into the live key above it, and that
+# move is the sign-off.
+#
+# AFFIRMATIONS AND CONTRADICTIONS ARE DRAFTED AS A PAIR, and the pair is not
+# optional. `AgreementWords.languages_covered()` counts a language only when
+# BOTH are non-empty, and the rule this file already states - "a contradiction
+# in the same reply wins over any of them" - is a rule about the pair.
+# Promoting affirmations alone would give a language yes-detection with no
+# no-detection, which is the dangerous half on a read-back: the failure it
+# produces is a wrong phone number recorded as confirmed.
+#
+# `negators` is deliberately NOT drafted. In this file a negator denies a
+# CURRENCY ("not dirhams") rather than contradicting a read-back, and that is a
+# distinct judgement I would be guessing at. The "no" a read-back needs is in
+# `contradictions` below, written out in full ("غير صحيح", "सही नहीं") rather
+# than assembled from a negator plus a word.
+#
+# ---------------------------------------------------------------------------
+# BLOCKER FOR PROMOTION, and it is a code defect rather than a review question.
+# ---------------------------------------------------------------------------
+#
+# `contact._agrees()` cannot use these lists safely as it stands. It reuses the
+# DATA from here - its docstring says so, and says why a second list would be
+# wrong - but it reimplements the LOGIC, and gets it wrong in two ways that
+# `projects.read_agreement()` already gets right:
+#
+#   1. it matches with a bare substring test (`word in lowered`) instead of the
+#      word-boundary pattern `projects._token_pattern` uses, and
+#   2. it never reads `contradictions` at all, so nothing can win over an
+#      affirmation.
+#
+# Together those make any affirmation match inside its own negation. This is
+# live in ENGLISH today, on the production read-back path:
+#
+#     _agrees("that is not correct")   -> True   ("correct")
+#     _agrees("absolutely not")        -> True   ("absolutely")
+#     _agrees("sorry, incorrect")      -> True   ("correct" inside "incorrect")
+#     _agrees("I am not sure")         -> True   ("sure")
+#     _agrees("I want to book a viewing") -> True ("ok" inside "book")
+#
+# A buyer who answers a phone-number read-back with "no, that is not correct"
+# has the wrong number recorded as `captured`, `confirmed`, with
+# `contact_permission` true. Someone then calls a stranger.
+#
+# NO CHOICE OF WORDS FIXES THIS, in any language: every affirmation is a
+# substring of "not <affirmation>". The Arabic and Hindi drafts below have the
+# same shape as the English list and would inherit the same defect the day they
+# are promoted - "سعي صحيح" is not the worry, "غير صحيح" is, and in Hindi
+# "सही नहीं" ("not correct") contains the affirmation "सही".
+#
+# The fix is to delete `contact._agrees()` and call
+# `projects.read_agreement(text, agreement_words(...), language).agreed`, which
+# reads contradictions first and matches on word boundaries, and whose
+# docstring records that reading agreement first "recorded a rejection as
+# consent - the defect that blocked the budget half twice". Out of scope here
+# by instruction; it wants its own card, and it should land BEFORE either list
+# below is promoted.
+draft:
+  affirmations:
+    # Explicit agreement with a read-back, MSA plus the colloquial forms a
+    # Dubai buyer actually says. Two spellings are listed where the recogniser
+    # may write either; that is not padding, it is the same reason
+    # farewells.yaml lists both hamza spellings of "الى اللقاء".
+    ar:  # DRAFT, awaiting native review - every entry
+      - "نعم"
+      - "أيوة"
+      - "ايوه"
+      - "صح"
+      - "صحيح"
+      - "تمام"
+      - "بالضبط"
+      - "مضبوط"
+      - "أكيد"
+      - "طبعا"
+      - "زين"
+      - "موافق"
+      - "اوكي"
+      - "أوكي"
+    # Formal register throughout: "जी" and "जी हाँ" are what a buyer says to a
+    # consultant, and they are the entries an English-shaped list would miss.
+    # Both "हाँ" (chandrabindu) and "हां" (anusvara) are listed because the
+    # recogniser may write either and they are the same word.
+    hi:  # DRAFT, awaiting native review - every entry
+      - "हाँ"
+      - "हां"
+      - "जी"
+      - "जी हाँ"
+      - "हाँ जी"
+      - "सही"
+      - "सही है"
+      - "ठीक"
+      - "ठीक है"
+      - "बिल्कुल"
+      - "बराबर"
+      - "एकदम सही"
+      - "ओके"
+
+  contradictions:
+    # The buyer pushing back. The negated forms are written out WHOLE ("غير
+    # صحيح" rather than a negator beside "صحيح") so that a correct
+    # implementation can match them as one contradiction, and so the list does
+    # not depend on `negators` being drafted.
+    ar:  # DRAFT, awaiting native review - every entry
+      - "لا"
+      - "لأ"
+      - "غلط"
+      - "خطأ"
+      - "خطا"
+      - "غير صحيح"
+      - "ليس صحيحا"
+      - "مش صحيح"
+      - "مو صح"
+    hi:  # DRAFT, awaiting native review - every entry
+      - "नहीं"
+      - "नही"
+      - "जी नहीं"
+      - "गलत"
+      - "ग़लत"
+      - "गलती"
+      - "सही नहीं"
+      - "ठीक नहीं"

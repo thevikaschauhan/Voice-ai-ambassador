@@ -591,6 +591,7 @@ def test_a_language_switch_between_the_read_back_and_the_reply_fails_safe() -> N
     assert policy.state.phone is None
     assert policy.state.contact_permission is False
 
+
 def test_staged_draft_copy_exists_and_cannot_enable_a_language() -> None:
     """Same contract as `farewells.yaml`, on the file where it matters more.
 
