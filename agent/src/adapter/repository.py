@@ -479,11 +479,10 @@ class Repository:
         built from lexemes Postgres itself produced, so nothing user-typed is
         ever concatenated into SQL.
 
-        Two filters are the security boundary, and only two. A document must
-        be published, and `prompt_body IS NOT NULL` is the schema's own
-        `only_reviewed_scopes_reach_the_prompt` constraint read from the
-        other side. The caller re-checks scope in code, because a query is a
-        filter and the gate is a rule.
+        Publication, a reviewed prompt body, eligible scope and absence of
+        conflicts are checked before ranking. Project prose must be bound;
+        project_ids is a ranking preference, not an eligibility filter.
+        The caller also re-checks scope in code.
 
         The minimum-match rule is what keeps OR from meaning "everything":
         two distinct query lexemes must hit, so one ordinary noun in common
@@ -520,6 +519,12 @@ class Repository:
             WHERE query.any_of IS NOT NULL
               AND d.status = 'published'
               AND c.prompt_body IS NOT NULL
+              AND c.conflict_code IS NULL
+              AND c.retrieval_scope IN ('general_knowledge', 'project_knowledge')
+              AND (
+                    c.retrieval_scope = 'general_knowledge'
+                    OR c.project_id IS NOT NULL
+                  )
               AND c.search_vector @@ query.any_of
               AND (
                     SELECT count(*) FROM lexeme

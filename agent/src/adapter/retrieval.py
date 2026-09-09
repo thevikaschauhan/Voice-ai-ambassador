@@ -7,11 +7,11 @@ result is frozen for that turn.
 Three properties live here rather than in the agent, because each of them is
 a rule about retrieval and not a rule about conversation:
 
-- **Once.** `llm_node` runs again for the same turn on a tool split or a
-  preemptive generation. The cache is keyed on turn index, and the SECOND
-  call returns the identical object. Recomputing would be the bug: a second
-  search can rank differently or race a revocation, and then the audit
-  records one figure set while the buyer heard another.
+- **Once.** `llm_node` runs again for the same turn on a tool continuation.
+  The cache is keyed on final turn index, and the SECOND call returns the
+  identical object. Recomputing would be the bug: a second search can rank
+  differently or race a revocation, and then the audit records one figure
+  set while the buyer heard another.
 - **Bounded.** At most 250ms is added before `llm_ttft`. A slow or paused
   database costs the turn its budget and nothing more; the turn then proceeds
   with the inventory figures it already had.
@@ -61,7 +61,7 @@ class ChunkSource(Protocol):
     """What retrieval needs from the repository, and nothing else."""
 
     async def search_chunks(
-        self, query: str, *, project_ids: Sequence[str], limit: int
+        self, query: Sequence[str], *, project_ids: Sequence[str], limit: int
     ) -> list[dict[str, Any]]: ...
 
     async def figures_for_chunks(
@@ -219,8 +219,9 @@ class KnowledgeRetriever:
         self._language = language
         self._limit = limit
         self._budget = budget_seconds
-        self._context: KnowledgeContext | None = None
         self._buffered: list[KnowledgeUse] = []
+        self._tasks: dict[int, asyncio.Task[KnowledgeContext]] = {}
+        self._reads: set[asyncio.Task[KnowledgeContext]] = set()
 
     def set_language(self, language: str) -> None:
         """Use the current speech language for subsequent query tokenisation."""
@@ -228,7 +229,7 @@ class KnowledgeRetriever:
 
     def buffered(self) -> list[KnowledgeUse]:
         """The rows persist will write, in turn order."""
-        return list(self._buffered)
+        return sorted(self._buffered, key=lambda use: use.turn_index)
 
     async def for_turn(
         self,
@@ -238,30 +239,44 @@ class KnowledgeRetriever:
         base: AllowedFigures,
         project_ids: Sequence[str],
     ) -> KnowledgeContext:
-        # The whole point of the cache: same turn, same object, no second
-        # search. Identity rather than equality, so a caller cannot be handed
-        # a rebuilt set that merely compares equal today.
-        if self._context is not None and self._context.turn_index == turn_index:
-            return self._context
-
-        started = asyncio.get_running_loop().time()
-        try:
-            context = await asyncio.wait_for(
-                self._retrieve(turn_index, query, base, project_ids),
-                timeout=self._budget,
+        # The framework starts knowledge-enabled generations only after the
+        # final transcript. A tool continuation cannot change that turn's
+        # evidence, even if its context text or language has changed.
+        # Keep each task for the call: overlapping turns and cancelled waiters
+        # must not replace each other's cache or duplicate their audit rows.
+        task = self._tasks.get(turn_index)
+        if task is None:
+            task = asyncio.create_task(
+                self._resolve(turn_index, query, base, tuple(project_ids)),
+                name=f"knowledge-retrieval-{turn_index}",
             )
+            self._tasks[turn_index] = task
+        return await asyncio.shield(task)
+
+    async def _resolve(
+        self,
+        turn_index: int,
+        query: str,
+        base: AllowedFigures,
+        project_ids: Sequence[str],
+    ) -> KnowledgeContext:
+        started = asyncio.get_running_loop().time()
+        read = asyncio.create_task(self._retrieve(turn_index, query, base, project_ids))
+        self._reads.add(read)
+        read.add_done_callback(self._read_finished)
+        try:
+            # wait_for also waits for cancellation cleanup, which a database
+            # driver can extend past the budget. Bound the caller's wait and
+            # discard late results while the driver releases its connection.
+            done, _ = await asyncio.wait({read}, timeout=self._budget)
+            if not done:
+                raise TimeoutError
+            context = read.result()
         except LookupError:
-            # Not an error: a call whose pool has not finished connecting, or
-            # a deployment with no database at all. Named separately from the
-            # generic failure so the event says "not_connected" rather than
-            # the name of an exception class.
             context = self._miss(turn_index, query, base, started, "not_connected")
         except TimeoutError:
             context = self._miss(turn_index, query, base, started, "budget_exceeded")
         except Exception as exc:  # a paused database must not end the call
-            # A CLOSED code, never the class name. `CLEAR_EVENTS` promises
-            # `reason` is a fixed set, and a new dependency's exception class
-            # would otherwise put an unreviewed string on the stream.
             context = self._miss(turn_index, query, base, started, _failure_code(exc))
         else:
             self._log.emit(
@@ -272,10 +287,19 @@ class KnowledgeRetriever:
                 withheld=context.withheld_figure_match,
                 elapsed_ms=context.elapsed_ms,
             )
+        finally:
+            if not read.done():
+                read.cancel()
 
-        self._context = context
         self._buffer(context)
         return context
+
+    def _read_finished(self, read: asyncio.Task[KnowledgeContext]) -> None:
+        self._reads.discard(read)
+        if not read.cancelled():
+            # Observe cleanup errors too, without changing a frozen miss or
+            # exposing a provider's exception text in the event stream.
+            read.exception()
 
     async def _retrieve(
         self,

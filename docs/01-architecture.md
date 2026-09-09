@@ -340,6 +340,17 @@ history. The fixed wrapper treats excerpt text as reference data, never as
 instructions, and an eval proves instruction-shaped document text cannot
 change persona, tools or guardrails.
 
+Knowledge-enabled agents disable LiveKit's preemptive generation through the
+agent's turn-handling options. This makes final transcript adoption precede
+the first retrieval and policy decision. It gives up speculative generation's
+latency head start; the 250ms retrieval budget starts after the final turn is
+available. Each final turn owns one shielded retrieval task, including empty
+and failed results, so cancelled callers and overlapping turns cannot repeat
+a search or erase its audit record. Agents without retrieval keep the
+framework's default scheduling. The deadline bounds the wait for both database
+reads; cancellation cleanup runs separately and late results cannot replace
+the frozen inventory-only miss.
+
 **Figures remain code-gated.** Ingestion extracts each figure occurrence with
 its typed value, currency/unit, source sentence, page, chunk and document
 revision. The admin approves occurrences individually; parsing never approves
