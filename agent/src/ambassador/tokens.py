@@ -75,8 +75,10 @@ _MARK_CATEGORIES = frozenset({"Mn", "Mc", "Me"})
 
 # Arabic short vowels, tanween, shadda and sukun (U+064B-U+065F), the
 # superscript alef, and the Quranic annotation marks. All optional in ordinary
-# text, all Mn, so they are excluded from _MARK_CATEGORIES handling by being
-# checked first.
+# text. All 41 are category Mn, which is why they have to be named rather than
+# derived: the category cannot separate them from a Devanagari matra, and the
+# two want opposite treatment. Checked before _MARK_CATEGORIES for that
+# reason.
 _ARABIC_DIACRITICS = frozenset(
     chr(point)
     for point in [
@@ -90,8 +92,10 @@ _ARABIC_DIACRITICS = frozenset(
     ]
 )
 
-# ZWNJ and ZWJ. They sit inside a single word and control rendering only.
-_JOINERS = frozenset({"‌", "‍"})
+# ZWNJ and ZWJ, written as escapes on purpose: they are invisible, and a
+# reviewer cannot check a character they cannot see. They sit inside a single
+# word and control only how a conjunct renders.
+_JOINERS = frozenset({"\u200c", "\u200d"})
 
 
 def has_content(text: str) -> bool:
