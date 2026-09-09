@@ -35,14 +35,89 @@ en:
   # VERIFY: native-authored, if a reviewer wants the digits spoken as words.
   digit_forms: {}
 
-# VERIFY: native-authored. No Arabic ask is drafted here: this line is native-
-# review data (docs/review-packet-ar.md) and the policy stays disabled without
-# it. Do not translate the English.
+# A `draft:` SUB-MAPPING holds copy the build team has written and NOT
+# certified. `ContactCopy` reads `ask`, `confirm_phone`, `correction_failed`,
+# `thanks` and `digit_forms` and nothing else, so a draft cannot enable a
+# language by being present: `enabled()` still reads the empty `ask` above it.
+# That separation is deliberate. Writing the draft straight into `ask` turns
+# the policy on, and this is the one moment in the call where the buyer is
+# asked to hand something over - not a state to enter by editing a data file.
+# A reviewer promotes a draft by lifting it out of `draft:` into the keys
+# beside it, and that move is the sign-off.
+
+# VERIFY: native-authored. The live `ask` stays empty, so the policy stays
+# disabled; the drafted line is staged below for docs/review-packet-ar.md.
+#
+# REGISTER: Modern Standard Arabic, not Gulf. A Dubai buyer may be Khaleeji,
+# Levantine, Egyptian or a non-native speaker, and MSA is the one register all
+# of them read as correct rather than as somebody else's dialect. The DETECTION
+# phrases drafted in farewells.yaml go the other way and include colloquial
+# closings on purpose: what the brand SAYS and what a buyer says are different
+# problems, and only the first one is brand voice.
+#
+# GENDER: written in the polite PLURAL throughout (رغبتم، معكم، اسمكم) rather
+# than the singular, because Arabic second-person singular forces a guess at
+# the buyer's gender and the plural does not. It is also the more formal
+# register, which suits the one moment the ambassador asks for something. A
+# reviewer who prefers the singular has to answer the gender question first.
 ar:
   ask: ""
   digit_forms: {}
+  draft:
+    # DRAFT, awaiting native review
+    ask: >-
+      إذا رغبتم في أن يتواصل معكم أحد أعضاء الفريق، هل لي أن آخذ اسمكم ورقم
+      هاتف للاتصال أو بريدكم الإلكتروني؟ ولكم كامل الحرية في الرفض.
+    # DRAFT, awaiting native review
+    confirm_phone: "{digits} - هل هذا صحيح؟"
+    # DRAFT, awaiting native review
+    correction_failed: >-
+      لا بأس - سأترك الأمر هنا بدلا من تسجيل رقم خاطئ.
+    # DRAFT, awaiting native review
+    thanks: "شكرا لكم."
+    # Left empty on promotion too, unless a reviewer asks otherwise: the same
+    # fail-towards-digits posture English takes. A guessed Arabic word for a
+    # digit is how a phone number changes on its way back to the buyer.
+    # VERIFY: native-authored, if a reviewer wants the digits spoken as words.
+    digit_forms: {}
 
-# VERIFY: native-authored. No Hindi ask is drafted here, for the same reason.
+# VERIFY: native-authored. Same standing as the Arabic above.
+#
+# REGISTER: formal आप throughout, never तुम - this is a property consultant
+# asking a stranger for their number. Natural spoken business Hindi rather than
+# Sanskritised हिंदी: नंबर and ईमेल are the words a Delhi or a Dubai speaker
+# actually uses, and the शुद्ध हिंदी equivalents would read as a news bulletin.
+# Devanagari rather than romanised Hinglish, because this copy goes to TTS.
+#
+# GRAMMATICAL GENDER, and it is a real coupling rather than a style note:
+# "सकती हूँ" and "छोड़ देती हूँ" are FEMININE first person, chosen because
+# data/ambassadors.yaml names the Hindi ambassador "Maya". If that name is ever
+# changed to a male one, these two lines become wrong Hindi and nothing in the
+# code will notice - the verb agrees with the speaker, and no loader knows the
+# speaker's gender. Written down here, where the copy is, rather than only in a
+# review packet.
+#
+# BLOCKER FOR PROMOTION, and it is not a review question: the read-back below
+# cannot settle. `contact._agrees()` reads affirmations from
+# data/currencies.yaml, where the `ar` and `hi` lists are both EMPTY, so a
+# buyer answering "हाँ" or "نعم" falls through to `unconfirmed` and the number
+# is discarded. Promoting either language without authoring those affirmations
+# would take a phone number from a buyer and then throw it away - worse than
+# not asking, because the buyer has already handed it over.
 hi:
   ask: ""
   digit_forms: {}
+  draft:
+    # DRAFT, awaiting native review
+    ask: >-
+      अगर आप चाहें कि हमारी टीम का कोई सदस्य आपसे संपर्क करे, तो क्या मैं आपका
+      नाम और कॉलबैक नंबर या ईमेल पता ले सकती हूँ? आप मना भी कर सकते हैं।
+    # DRAFT, awaiting native review
+    confirm_phone: "{digits} - क्या यह सही है?"
+    # DRAFT, awaiting native review
+    correction_failed: >-
+      कोई बात नहीं - गलत नंबर दर्ज करने के बजाय मैं इसे यहीं छोड़ देती हूँ।
+    # DRAFT, awaiting native review
+    thanks: "धन्यवाद।"
+    # VERIFY: native-authored, if a reviewer wants the digits spoken as words.
+    digit_forms: {}

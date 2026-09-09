@@ -24,6 +24,7 @@ from ambassador.budget import (
     read_reply,
     to_aed,
 )
+from ambassador.projects import agreement_words
 
 DATA = Path(__file__).resolve().parents[2] / "data"
 
@@ -920,3 +921,33 @@ def test_a_contrast_ends_the_quoted_claim(vocabulary, said, value):
     mention = budget(vocabulary, said)
     assert mention is not None, said
     assert mention.value == value
+
+
+def test_staged_draft_agreement_words_exist_and_cannot_be_loaded(vocabulary):
+    """The `draft:` contract from farewells.yaml and contact.yaml, third file.
+
+    Both directions, and neither is redundant. The EXISTENCE half stops the
+    copy being quietly deleted and the test still passing; the INERTNESS half
+    is the whole reason the copy is allowed to sit in a production data file
+    at all. A reviewer promoting a list will fail this test, which is the
+    intended way to find out the promotion has been noticed.
+
+    Affirmations and contradictions are asserted as a PAIR because
+    `languages_covered()` only counts a language that has both, and because a
+    language with yes-detection and no no-detection is the dangerous half: on
+    a read-back it records a wrong phone number as confirmed.
+    """
+    import yaml
+
+    raw = yaml.safe_load((DATA / "currencies.yaml").read_text(encoding="utf-8"))
+
+    for language in ("ar", "hi"):
+        assert raw["draft"]["affirmations"][language], f"{language} yes-words staged"
+        assert raw["draft"]["contradictions"][language], f"{language} no-words staged"
+
+        assert not vocabulary.affirmations.get(language), "staged copy stays unread"
+        assert not vocabulary.contradictions.get(language), "staged copy stays unread"
+
+    words = agreement_words(vocabulary)
+    assert words.languages_covered() == frozenset({"en"})
+    assert "draft" not in vocabulary.affirmations, "`draft` is not a language"

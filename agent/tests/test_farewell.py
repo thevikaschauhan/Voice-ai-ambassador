@@ -288,3 +288,34 @@ def test_asking_about_questions_is_still_a_question():
         "who do I send further questions to",
     ):
         assert not is_farewell(utterance, FAREWELLS, "en", names=NAMES), utterance
+
+
+def test_staged_draft_copy_exists_and_cannot_arm_the_detector():
+    """The `draft:` block is real copy, and the loader must never read it.
+
+    Two halves, and the test is worth nothing without both. Filling
+    `phrases.ar` directly is not a copy change: `detects()` is what the
+    mid-call switch gate consults, so populating that key turns switching into
+    Arabic ON, with unreviewed phrases, from a data-file edit
+    (`test_language_switch_fixes.test_a_target_with_no_authored_farewell_
+    phrases_is_refused` is the P0 that guards it). Staging the copy where the
+    loader cannot see it is what keeps drafting and shipping separate.
+
+    The first half asserts the copy is THERE, so this cannot pass by the draft
+    having been quietly deleted. The second asserts it is INERT. A reviewer
+    promoting the draft into the live key will fail this test, which is the
+    intended way to find out that a behaviour gate has just moved.
+    """
+    import yaml
+
+    raw = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "data" / "farewells.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert raw["draft"]["phrases"]["ar"], "the drafted Arabic phrases are staged here"
+    assert raw["draft"]["courtesies"]["ar"], "and the courtesies that surround them"
+
+    assert not FAREWELLS.detects("ar"), "staged copy must not reach the detector"
+    assert not FAREWELLS.detects("hi")
+    assert not FAREWELLS.phrases.get("draft"), "`draft` is not a language"
