@@ -242,6 +242,11 @@ CLEAR_EVENTS: Final[dict[str, str]] = {
     ),
     "session_end": "a turn count",
     "response_language_changed": "closed language codes, turn index and certification boolean",
+    # The recogniser NAMED a language, taken where the evidence arrives so
+    # that a language under the switch rule's threshold is still visible.
+    # Two closed codes and a count: the segment buffer beside it holds raw
+    # buyer speech, and none of it is emitted.
+    "transcribed_language_observed": "two closed language codes and a segment count",
     "response_language_switch_skipped": "closed language code and fixed reason",
     # The exception CLASS name only, never `str(exc)` - same rule as
     # `llm_failure`'s `error` field beside its redacted `detail`.

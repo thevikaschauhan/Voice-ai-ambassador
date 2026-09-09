@@ -209,6 +209,7 @@ class AmbassadorAgent(Agent):
         # the call, and the durable stream is not the place to say one thing
         # forty times.
         self._switch_skips: set[tuple[str, str]] = set()
+        self._observed_languages: set[str] = set()
         # The contact ask being out of service is a fact about the CALL, not
         # about each switch, so it is said once.
         self._contact_dormancy_reported = False
@@ -660,12 +661,41 @@ class AmbassadorAgent(Agent):
             # `.language` is the framework's own base-code normalisation (ISO
             # 639-3 to 639-1, cmn to zh included). The adapter may use it; the
             # pure module may not, and keeps its own for the eval harness.
-            self._language_segments.append(
-                (
-                    event.language.language if event.language else "unknown",
-                    event.transcript,
-                )
-            )
+            language = event.language.language if event.language else "unknown"
+            self._language_segments.append((language, event.transcript))
+            self._note_language_observed(language)
+
+    def _note_language_observed(self, language: str) -> None:
+        """Say the recogniser NAMED a language, once per language per call.
+
+        Emitted here rather than after `choose_language` because the rule
+        discards most of what arrives: a short acknowledgement under the
+        letter minimum returns no candidate at all, so it produces neither a
+        change nor a refusal and leaves "heard and rejected" indistinguishable
+        from "never spoken" (Ryan's lsverify gap, 2026-09-09). Same shape as
+        the served-model gap in #177 - the answer has to be taken where the
+        evidence arrives.
+
+        Nothing about switching changes. `unknown` is not emitted: the segment
+        still counts towards the rule's arithmetic, but this event asserts a
+        language was identified and there is no language to name.
+
+        Only closed codes and a count reach the stream, never `event.transcript`
+        - the segment buffer holds raw buyer speech (see language_switch's note
+        to the caller) and free text on the durable stream is redacted by
+        validator 4 because it does not belong there.
+        """
+        if language == "unknown" or language == self._settings.language:
+            return
+        if language in self._observed_languages:
+            return
+        self._observed_languages.add(language)
+        self._log.emit(
+            "transcribed_language_observed",
+            language=language,
+            response_language=self._settings.language,
+            segment_count=len(self._language_segments),
+        )
 
     def _skip_switch(self, language: Language, reason: str) -> None:
         """Say why a switch was refused, once per (language, reason)."""
