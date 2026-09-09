@@ -250,7 +250,7 @@ async def test_retrieval_runs_once_per_final_turn_and_is_reused_by_repeat_llm_no
     agent, _, _, _ = make_agent_with_knowledge(
         repository, [HealthyStream(["Available. "]), HealthyStream(["Available. "])]
     )
-    session = AgentSession()
+    session = AgentSession(turn_handling={"preemptive_generation": {"enabled": True}})
     activity = AgentActivity(agent, session)
     # Exercise the framework's merged options, so a session default cannot
     # silently re-enable generation (and retrieval) from a partial transcript.
