@@ -541,7 +541,7 @@ class ContactPolicy:
         if self._pending_phone is None:
             return ContactOutcome(settled=True)
 
-        if _agrees(text):
+        if _agrees(text, self._language):
             phone, name = self._pending_phone, self._pending_name
             self._pending_phone = self._pending_name = None
             self._state = self._state.model_copy(
@@ -618,23 +618,58 @@ class ContactPolicy:
             self._log.emit(event, **fields)
 
 
-def _agrees(text: str) -> bool:
-    """Yes, in the words the budget policy's reviewer already authored.
+def _agrees(text: str, language: str) -> bool:
+    """Yes, read by the one implementation that already gets this right.
 
-    Imported lazily from `projects`/`budget`'s shared list rather than a second
-    copy here: a second list is a second architecture for the same job, and the
-    one that goes stale is the one nobody is looking at (`projects.py`).
+    This used to share the WORD LISTS with `projects` while reimplementing the
+    MATCHING, which is the same duplication its own docstring warned against,
+    one level up: a second algorithm for the same job, and the one that goes
+    wrong is the one nobody is looking at. It went wrong in two ways, and both
+    were live on the English contact path.
+
+    It matched with a bare substring test, so every affirmation matched inside
+    its own negation, and it never consulted `contradictions` at all, so
+    nothing could outrank a yes:
+
+        "that is not correct"       agreed, on "correct"
+        "absolutely not"            agreed, on "absolutely"
+        "sorry, incorrect"          agreed, on "correct" inside "incorrect"
+        "I am not sure"             agreed, on "sure"
+        "I want to book a viewing"  agreed, on "ok" inside "book"
+
+    A buyer who answered a phone read-back with "no, that is not correct" had
+    the wrong number stored as captured and confirmed, with contact permission
+    granted, and somebody would then have called a stranger.
+
+    `projects.read_agreement` is that implementation. It matches on word
+    boundaries (`projects._token_pattern`) and reads contradictions BEFORE
+    affirmations, and its `Agreement` docstring records why the precedence is
+    not a style choice: reading agreement first "recorded a rejection as
+    consent - the defect that blocked the budget half twice, once for each
+    phrasing". This is the third time, in a module that already imports the
+    module that fixed it.
+
+    THE LANGUAGE IS THE CALL'S OWN, not every language at once. The old sweep
+    read affirmations from all of them, which is harmless only while one
+    language has words: the day ar and hi are promoted it becomes an asymmetry
+    with a direction, since an affirmation could be found in a language the
+    buyer is not speaking while the contradiction that should outrank it is
+    looked for in one they are. Both halves come from one vocabulary now.
+
+    A language with no authored words reads neither yes nor no, so the number
+    is discarded as `unconfirmed` rather than guessed at - the safe direction,
+    and the same one the ask itself takes when a language has no authored copy.
+
+    `read_agreement` also counts a negator as a contradiction, which is what
+    makes "yes, that's right, don't call before six" settle as unconfirmed
+    rather than captured. That loses a capture and keeps a wrong number out of
+    the record, which is the trade this whole read-back exists to make.
+
+    Imported lazily, as before, to keep the module's import surface where
+    ADR-002 wants it.
     """
     from .budget import load_currency_vocabulary
-    from .projects import agreement_words
+    from .projects import agreement_words, read_agreement
 
     words = agreement_words(load_currency_vocabulary())
-    lowered = text.lower()
-    tokens = set(_WORD.findall(lowered))
-    for language_words in words.affirmations.values():
-        for word in language_words:
-            if not word:
-                continue
-            if word in tokens or word in lowered:
-                return True
-    return False
+    return read_agreement(text, words, language).agreed
