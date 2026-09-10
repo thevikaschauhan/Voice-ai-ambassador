@@ -82,9 +82,13 @@ def test_a_real_turn_is_not_a_failed_recognition(noise, utterance):
 
 
 def test_the_empty_half_works_in_every_language(noise):
-    """`\\w` under re.UNICODE covers Arabic and Devanagari, so an empty turn is
-    caught without an authored word list. This is the half of the trigger that
-    is live in ar/hi today."""
+    """An empty turn is caught without an authored word list, in every
+    language. This is the half of the trigger that is live in ar/hi today.
+
+    Note what this does NOT cover, because for a while nothing did: it asks
+    whether any CHARACTER is content, which was true in every script even
+    while the token split was shattering Devanagari into fragments. A test
+    below covers the token half."""
     for language in get_args(Language):
         assert is_failed_recognition("  ", noise, language)
         assert is_failed_recognition("...", noise, language)
@@ -174,3 +178,38 @@ def test_the_caller_can_tell_an_unheard_turn_from_a_silent_policy(noise):
     assert first.action == "none" and first.failed
     heard = m.observe("dirhams")
     assert heard.action == "none" and not heard.failed
+
+
+# --- the same tokeniser defect, on this side of it ---------------------------
+#
+# `is_failed_recognition`'s garbage half asks whether EVERY token is a filler.
+# It shared `[^\W_]+` with `farewell.py`, so in any script whose vowels are
+# combining marks a real word arrived as consonant fragments - and fragments
+# are short, so an authored filler list is far likelier to contain all of them
+# than to contain the word itself.
+#
+# Latent today only because `noise.hi` and `noise.ar` are empty and the loader
+# takes the safe branch. The moment either list is authored, the failure is
+# real speech being thrown away: the buyer is asked to repeat a word the agent
+# heard perfectly well, and three of those hand the call to a human.
+#
+# The word below is the one already in this file's Devanagari test. The filler
+# entries are the fragments the old tokeniser produced from it, standing in for
+# any authored list containing them - no Hindi is authored here.
+
+
+def test_a_real_word_is_not_filler_because_its_fragments_are(tmp_path: Path):
+    source = tmp_path / "recognition.yaml"
+    source.write_text('noise:\n  hi: ["नमस", "त"]\n', encoding="utf-8")
+    words = load_noise_words(source)
+    assert is_failed_recognition("uh", words, "hi") is False
+    assert is_failed_recognition("नमस्ते", words, "hi") is False
+
+
+def test_an_authored_filler_still_counts_as_filler(tmp_path: Path):
+    """The other direction, so the fix above cannot be "nothing is ever
+    filler". A whole authored word must still classify."""
+    source = tmp_path / "recognition.yaml"
+    source.write_text('noise:\n  hi: ["नमस्ते"]\n', encoding="utf-8")
+    words = load_noise_words(source)
+    assert is_failed_recognition("नमस्ते", words, "hi") is True

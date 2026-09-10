@@ -177,6 +177,14 @@ jobs:
       #                           disclosure copy apply for the rest of the
       #                           call - so an untested branch here silently
       #                           re-points every other gate on this list
+      #   ambassador.tokens       what the WORDS in a turn are. Derivation by
+      #                           the same definition, and the narrowest thing
+      #                           on this list that can hang up a live call:
+      #                           the farewell rule closes a call when every
+      #                           leftover token is a courtesy, so a wrong
+      #                           split decides that question. It shipped
+      #                           broken in two scripts precisely because no
+      #                           gate looked at the token half
       # docs/06-'s Phase 2 gates require the first two by name.
       # Widening it (budget.py, confirmation.py, verbalise.py) is a deliberate
       # decision, not an oversight: those are deterministic policy rather than
@@ -205,6 +213,7 @@ jobs:
             --cov=ambassador.knowledge \
             --cov=ambassador.schemas \
             --cov=ambassador.language_switch \
+            --cov=ambassador.tokens \
             --cov-branch \
             --cov-report=term-missing \
             --cov-fail-under=100 \
